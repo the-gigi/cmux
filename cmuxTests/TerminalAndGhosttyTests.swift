@@ -2149,11 +2149,18 @@ final class GhosttySurfaceOverlayTests: XCTestCase {
             return
         }
 
-        surfaceView.enqueueScrollbarUpdate(makeScrollbar(total: 100, offset: 90, len: 10))
-        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        let bottomScrollbar = makeScrollbar(total: 100, offset: 90, len: 10)
+        let scrollbackScrollbar = makeScrollbar(total: 100, offset: 40, len: 10)
+
+        surfaceView.enqueueScrollbarUpdate(bottomScrollbar)
+        guard waitUntil(description: "initial bottom scrollbar packet") {
+            surfaceView.scrollbar == bottomScrollbar
+        } else {
+            return
+        }
         XCTAssertEqual(scrollView.contentView.bounds.origin.y, 0, accuracy: 0.01)
 
-        surfaceView.nextScrollbar = makeScrollbar(total: 100, offset: 40, len: 10)
+        surfaceView.nextScrollbar = scrollbackScrollbar
 
         guard let cgEvent = CGEvent(
             scrollWheelEvent2Source: nil,
@@ -2168,11 +2175,19 @@ final class GhosttySurfaceOverlayTests: XCTestCase {
         }
 
         scrollView.scrollWheel(with: scrollEvent)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        guard waitUntil(description: "wheel-driven scrollback packet") {
+            abs(scrollView.contentView.bounds.origin.y - 500) <= 0.01
+        } else {
+            return
+        }
         XCTAssertEqual(scrollView.contentView.bounds.origin.y, 500, accuracy: 0.01)
 
-        surfaceView.enqueueScrollbarUpdate(makeScrollbar(total: 100, offset: 90, len: 10))
-        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        surfaceView.enqueueScrollbarUpdate(bottomScrollbar)
+        guard waitUntil(description: "later passive bottom packet") {
+            surfaceView.scrollbar == bottomScrollbar
+        } else {
+            return
+        }
 
         XCTAssertEqual(
             scrollView.contentView.bounds.origin.y,
@@ -2180,6 +2195,84 @@ final class GhosttySurfaceOverlayTests: XCTestCase {
             accuracy: 0.01,
             "A passive bottom packet should not yank the viewport after an explicit wheel scroll into scrollback"
         )
+    }
+
+    func testExplicitWheelScrollPreservesFirstScrollbackPacketThroughCoalescedPackets() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 240),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        guard let contentView = window.contentView else {
+            XCTFail("Expected content view")
+            return
+        }
+
+        let surfaceView = ScrollbarPostingSurfaceView(frame: NSRect(x: 0, y: 0, width: 160, height: 120))
+        surfaceView.cellSize = CGSize(width: 10, height: 10)
+        let hostedView = GhosttySurfaceScrollView(surfaceView: surfaceView)
+        hostedView.frame = contentView.bounds
+        hostedView.autoresizingMask = [.width, .height]
+        contentView.addSubview(hostedView)
+
+        window.makeKeyAndOrderFront(nil)
+        window.displayIfNeeded()
+        contentView.layoutSubtreeIfNeeded()
+        hostedView.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        guard let scrollView = hostedView.subviews.first(where: { $0 is NSScrollView }) as? NSScrollView else {
+            XCTFail("Expected hosted terminal scroll view")
+            return
+        }
+
+        let bottomScrollbar = makeScrollbar(total: 100, offset: 90, len: 10)
+        let scrollbackScrollbar = makeScrollbar(total: 100, offset: 40, len: 10)
+
+        surfaceView.enqueueScrollbarUpdate(bottomScrollbar)
+        guard waitUntil(description: "initial bottom scrollbar packet") {
+            surfaceView.scrollbar == bottomScrollbar
+        } else {
+            return
+        }
+        XCTAssertEqual(scrollView.contentView.bounds.origin.y, 0, accuracy: 0.01)
+
+        // The scroll handler emits a duplicate bottom packet first; the later
+        // scrollback packet must still win, and a coalesced passive bottom packet
+        // must not overwrite it before the flush runs.
+        surfaceView.nextScrollbar = bottomScrollbar
+
+        guard let cgEvent = CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 2,
+            wheel1: 0,
+            wheel2: -12,
+            wheel3: 0
+        ), let scrollEvent = NSEvent(cgEvent: cgEvent) else {
+            XCTFail("Expected scroll wheel event")
+            return
+        }
+
+        scrollView.scrollWheel(with: scrollEvent)
+        surfaceView.enqueueScrollbarUpdate(scrollbackScrollbar)
+        surfaceView.enqueueScrollbarUpdate(bottomScrollbar)
+
+        guard waitUntil(description: "first non-duplicate wheel packet to win") {
+            abs(scrollView.contentView.bounds.origin.y - 500) <= 0.01
+        } else {
+            return
+        }
+
+        XCTAssertEqual(
+            surfaceView.scrollbar,
+            scrollbackScrollbar,
+            "Duplicate and later passive packets should not consume the first real wheel-driven scrollback update"
+        )
+        XCTAssertEqual(scrollView.contentView.bounds.origin.y, 500, accuracy: 0.01)
     }
 
     func testInactiveOverlayVisibilityTracksRequestedState() {
