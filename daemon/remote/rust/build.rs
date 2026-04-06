@@ -53,17 +53,22 @@ fn main() {
         install_dir.join("lib").display()
     );
     println!("cargo:rustc-link-lib=dylib=cmux-ghostty-shim");
-    println!("cargo:rustc-link-lib=c++");
     println!(
         "cargo:rustc-link-arg=-Wl,-rpath,{}",
         install_dir.join("lib").display()
     );
+    let cpp_runtime = match rust_target.as_str() {
+        target if target.contains("apple-darwin") => "c++",
+        target if target.contains("linux") => "stdc++",
+        _ => "c++",
+    };
     println!("cargo:rerun-if-env-changed=GHOSTTY_SOURCE_DIR");
     println!("cargo:rerun-if-env-changed=CMUX_GHOSTTY_SHIM_OPTIMIZE");
     println!(
         "cargo:rerun-if-changed={}",
         manifest_dir.join("build.rs").display()
     );
+    println!("cargo:rustc-link-lib={cpp_runtime}");
     println!(
         "cargo:rerun-if-changed={}",
         manifest_dir.join("ghostty-shim/build.zig").display()
