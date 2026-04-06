@@ -451,7 +451,7 @@ type winsize struct {
 
 func makeRaw(fd int) (*terminalState, error) {
 	var termios syscall.Termios
-	if err := ioctlTermios(fd, syscall.TIOCGETA, &termios); err != nil {
+	if err := ioctlTermios(fd, ioctlReadTermiosRequest(), &termios); err != nil {
 		return nil, err
 	}
 	raw := termios
@@ -462,7 +462,7 @@ func makeRaw(fd int) (*terminalState, error) {
 	raw.Cflag |= syscall.CS8
 	raw.Cc[syscall.VMIN] = 1
 	raw.Cc[syscall.VTIME] = 0
-	if err := ioctlTermios(fd, syscall.TIOCSETA, &raw); err != nil {
+	if err := ioctlTermios(fd, ioctlWriteTermiosRequest(), &raw); err != nil {
 		return nil, err
 	}
 	return &terminalState{termios: termios}, nil
@@ -472,7 +472,7 @@ func restoreTerminal(fd int, state *terminalState) error {
 	if state == nil {
 		return nil
 	}
-	return ioctlTermios(fd, syscall.TIOCSETA, &state.termios)
+	return ioctlTermios(fd, ioctlWriteTermiosRequest(), &state.termios)
 }
 
 func ioctlTermios(fd int, request uintptr, value *syscall.Termios) error {
