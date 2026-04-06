@@ -3133,11 +3133,15 @@ final class TerminalSurface: Identifiable, ObservableObject {
     private var backgroundSurfaceStartQueued = false
     private var surfaceCallbackContext: Unmanaged<GhosttySurfaceCallbackContext>?
     /// The desired focus state for the Ghostty C surface. May be set before the
-    /// C surface exists (e.g. during layout restoration); `createSurface` syncs
-    /// it on creation. Also used as a dedup guard to avoid redundant
-    /// `ghostty_surface_set_focus` calls (prevents prompt redraws with P10k).
-    /// Initialized to `true` to match Ghostty's default (Terminal.zig focused=true).
-    private var desiredFocusState: Bool = true
+    /// C surface exists (e.g. during layout restoration); `createSurface`
+    /// reapplies this value once the runtime surface exists, then keeps using it
+    /// as a dedup guard to avoid redundant `ghostty_surface_set_focus` calls
+    /// (prevents prompt redraws with P10k).
+    ///
+    /// Start unfocused and only opt into focus when the workspace/AppKit focus
+    /// path explicitly requests it so background panes do not keep a focused
+    /// state unless the workspace focus path requests it.
+    private var desiredFocusState: Bool = false
 #if DEBUG
     private var needsConfirmCloseOverrideForTesting: Bool?
     private var runtimeSurfaceFreedOutOfBandForTesting = false
@@ -3248,6 +3252,22 @@ final class TerminalSurface: Identifiable, ObservableObject {
             merged[key] = value
         }
         return merged
+    }
+
+    static let managedTerminalType = "xterm-256color"
+    static let managedTerminalProgram = "ghostty"
+    static let managedColorTerm = "truecolor"
+
+    static func applyManagedTerminalIdentityEnvironment(
+        to environment: inout [String: String],
+        protectedKeys: inout Set<String>
+    ) {
+        environment["TERM"] = managedTerminalType
+        protectedKeys.insert("TERM")
+        environment["COLORTERM"] = managedColorTerm
+        protectedKeys.insert("COLORTERM")
+        environment["TERM_PROGRAM"] = managedTerminalProgram
+        protectedKeys.insert("TERM_PROGRAM")
     }
 
     static func mergedStartupEnvironment(
@@ -3784,6 +3804,10 @@ final class TerminalSurface: Identifiable, ObservableObject {
         var env = baseConfig.environmentVariables
 
         var protectedStartupEnvironmentKeys: Set<String> = []
+        Self.applyManagedTerminalIdentityEnvironment(
+            to: &env,
+            protectedKeys: &protectedStartupEnvironmentKeys
+        )
         func setManagedEnvironmentValue(_ key: String, _ value: String) {
             env[key] = value
             protectedStartupEnvironmentKeys.insert(key)
@@ -4027,11 +4051,9 @@ final class TerminalSurface: Identifiable, ObservableObject {
             }
         }
 
-        // Sync the desired focus state to the newly created C surface. Ghostty
-        // surfaces default to focused=true, but this surface may have been
-        // logically unfocused before the C surface existed (e.g. during layout
-        // restoration). Always sync unconditionally so we don't couple to
-        // Ghostty's default.
+        // Re-apply the desired focus state after creation so the live runtime
+        // surface converges with any focus changes that happened while the
+        // surface was being initialized.
         ghostty_surface_set_focus(createdSurface, desiredFocusState)
 
         flushPendingSocketInputIfNeeded()
@@ -5893,6 +5915,22 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         // method can process it normally. Cmd-based shortcuts should still work
         // during composition since Cmd is never part of IME input sequences.
         if hasMarkedText(), !event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) {
+            return false
+        }
+
+        let flags = event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.numericPad, .function, .capsLock])
+
+        // Printable text without Command/Control should stay on the normal keyDown
+        // path. AppKit can still route layout-dependent punctuation through
+        // performKeyEquivalent first, and probing bindings here can misclassify
+        // keys such as ABC-QWERTZ Shift+7 ("/") or Shift+- ("?") as shortcuts.
+        if !flags.contains(.command),
+           !flags.contains(.control),
+           let text = textForKeyEvent(event),
+           shouldSendText(text) {
+            lastPerformKeyEvent = nil
             return false
         }
 
