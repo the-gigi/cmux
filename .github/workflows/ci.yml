@@ -94,6 +94,8 @@ jobs:
 
   tests:
     runs-on: warp-macos-15-arm64-6x
+    env:
+      CMUX_SKIP_ZIG_BUILD: "1"
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -132,6 +134,7 @@ jobs:
           ./scripts/download-prebuilt-ghosttykit.sh
 
       - name: Install zig
+        if: env.CMUX_SKIP_ZIG_BUILD != '1'
         run: |
           ZIG_REQUIRED="0.15.2"
           if command -v zig >/dev/null 2>&1 && zig version 2>/dev/null | grep -q "^${ZIG_REQUIRED}"; then
@@ -258,6 +261,8 @@ jobs:
     # and performance regressions stay isolated. Broader interactive UI suites
     # still run via test-e2e.yml on GitHub-hosted runners.
     runs-on: warp-macos-15-arm64-6x
+    env:
+      CMUX_SKIP_ZIG_BUILD: "1"
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -296,6 +301,7 @@ jobs:
           ./scripts/download-prebuilt-ghosttykit.sh
 
       - name: Install zig
+        if: env.CMUX_SKIP_ZIG_BUILD != '1'
         run: |
           ZIG_REQUIRED="0.15.2"
           if command -v zig >/dev/null 2>&1 && zig version 2>/dev/null | grep -q "^${ZIG_REQUIRED}"; then
@@ -420,6 +426,8 @@ jobs:
 
   ui-regressions:
     runs-on: warp-macos-15-arm64-6x
+    env:
+      CMUX_SKIP_ZIG_BUILD: "1"
     timeout-minutes: 25
     steps:
       - name: Checkout
@@ -450,6 +458,7 @@ jobs:
         run: ./scripts/download-prebuilt-ghosttykit.sh
 
       - name: Install zig
+        if: env.CMUX_SKIP_ZIG_BUILD != '1'
         run: |
           ZIG_REQUIRED="0.15.2"
           if command -v zig >/dev/null 2>&1 && zig version 2>/dev/null | grep -q "^${ZIG_REQUIRED}"; then
