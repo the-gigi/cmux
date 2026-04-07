@@ -771,19 +771,28 @@ _cmux_run_pr_probe_with_timeout() {
     local repo_path="$1"
     local force_probe="${2:-0}"
     local probe_pid=""
+    local status_file=""
     local started_at=""
     local now=""
     started_at="$(_cmux_now)"
     now=$started_at
+
+    status_file="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/cmux-pr-probe-status.XXXXXX" 2>/dev/null || true)"
+    [[ -n "$status_file" ]] || return 1
 
     # Isolated process group: see issue #2105 (Ctrl-Z stopped-job SIGHUP).
     probe_pid=$(
         set -m
         (
             _cmux_report_pr_for_path "$repo_path" "$force_probe"
+            echo $? > "$status_file"
         ) &
         echo $!
     )
+    if [[ -z "$probe_pid" ]]; then
+        /bin/rm -f -- "$status_file" >/dev/null 2>&1 || true
+        return 1
+    fi
 
     while kill -0 "$probe_pid" >/dev/null 2>&1; do
         sleep 1
@@ -795,14 +804,22 @@ _cmux_run_pr_probe_with_timeout() {
                 _cmux_kill_process_tree "$probe_pid" KILL
                 sleep 0.2
             fi
-            if ! kill -0 "$probe_pid" >/dev/null 2>&1; then
-                wait "$probe_pid" >/dev/null 2>&1 || true
-            fi
+            /bin/rm -f -- "$status_file" >/dev/null 2>&1 || true
             return 1
         fi
     done
 
-    wait "$probe_pid"
+    # The probe is no longer a direct child (it was launched in a subshell
+    # for the isolated process group), so `wait` would fail. Read its
+    # exit status from the status file written by the probe itself.
+    sleep 0.05
+    local probe_status=1
+    if [[ -s "$status_file" ]]; then
+        probe_status="$(/bin/cat "$status_file" 2>/dev/null || echo 1)"
+    fi
+    [[ "$probe_status" =~ ^[0-9]+$ ]] || probe_status=1
+    /bin/rm -f -- "$status_file" >/dev/null 2>&1 || true
+    return "$probe_status"
 }
 
 _cmux_halt_pr_poll_loop() {
