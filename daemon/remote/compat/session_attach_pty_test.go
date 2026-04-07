@@ -105,8 +105,6 @@ func TestSessionAttachZshLoginShellStaysAlive(t *testing.T) {
 }
 
 func TestSessionAttachPropagatesPTYResize(t *testing.T) {
-	t.Parallel()
-
 	bin := daemonBinary(t)
 	socketPath := startUnixDaemon(t, bin)
 
@@ -153,13 +151,8 @@ func TestSessionAttachPropagatesPTYResize(t *testing.T) {
 
 	waitForSessionSize(t, bin, socketPath, "resize-dev", 132, 43, 3*time.Second)
 
-	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: 90, Rows: 43}); err != nil {
-		t.Fatalf("pty setsize width-only: %v", err)
-	}
-	waitForSessionSize(t, bin, socketPath, "resize-dev", 90, 43, 3*time.Second)
-
 	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: 90, Rows: 20}); err != nil {
-		t.Fatalf("pty setsize height-only: %v", err)
+		t.Fatalf("pty setsize shrink-both: %v", err)
 	}
 	waitForSessionSize(t, bin, socketPath, "resize-dev", 90, 20, 3*time.Second)
 

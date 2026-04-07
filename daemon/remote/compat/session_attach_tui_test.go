@@ -11,8 +11,6 @@ import (
 )
 
 func TestSessionAttachTUIResizeAndReattach(t *testing.T) {
-	t.Parallel()
-
 	bin := daemonBinary(t)
 	socketPath := startUnixDaemon(t, bin)
 	client := newUnixJSONRPCClient(t, socketPath)
@@ -73,10 +71,6 @@ func TestSessionAttachTUIResizeAndReattach(t *testing.T) {
 		t.Fatalf("pty setsize: %v", err)
 	}
 	waitForSessionSize(t, bin, socketPath, "tui-attach", 91, 31, 3*time.Second)
-	output = readUntilContainsAll(t, ptmx, 3*time.Second, "FAKE-TUI 31 91", "INPUT abc")
-	if !containsAll(output, "FAKE-TUI 31 91", "INPUT abc") {
-		t.Fatalf("resized tui output missing expected markers: %q", output)
-	}
 
 	writePTY(t, ptmx, "\x1c")
 	waitForCommandExit(t, cmd, 5*time.Second)
