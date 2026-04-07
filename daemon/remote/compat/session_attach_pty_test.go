@@ -36,7 +36,7 @@ func TestSessionAttachRoundTripAndReattach(t *testing.T) {
 	}
 
 	writePTY(t, ptmx, "\x1c")
-	_ = cmd.Wait()
+	waitForCommandExit(t, cmd, 5*time.Second)
 
 	second := exec.Command(bin, "session", "attach", "dev", "--socket", socketPath)
 	second.Dir = daemonRemoteRoot()
@@ -98,9 +98,7 @@ func TestSessionAttachZshLoginShellStaysAlive(t *testing.T) {
 	}
 
 	writePTY(t, ptmx, "\x1c")
-	if err := attach.Wait(); err != nil {
-		t.Fatalf("detach attach session: %v\n%s", err, buf.String())
-	}
+	waitForCommandExit(t, attach, 5*time.Second)
 	if strings.Contains(buf.String(), "UnexpectedEndOfInput") {
 		t.Fatalf("attach output contains daemon crash marker: %q", buf.String())
 	}
@@ -159,9 +157,7 @@ func TestSessionAttachPropagatesPTYResize(t *testing.T) {
 	waitForSessionSize(t, bin, socketPath, "resize-dev", 90, 20, 3*time.Second)
 
 	writePTY(t, ptmx, "\x1c")
-	if err := cmd.Wait(); err != nil {
-		t.Fatalf("detach attach session: %v", err)
-	}
+	waitForCommandExit(t, cmd, 5*time.Second)
 }
 
 func TestSessionAttachSmallestLiveClientWinsAcrossMultipleAttachments(t *testing.T) {
