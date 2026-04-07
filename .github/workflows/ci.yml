@@ -93,7 +93,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: "0"
-      CMUX_REMOTE_TEST_ARTIFACT_DIR: ${{ runner.temp }}/remote-daemon-tmux-parity
+      CMUX_REMOTE_TEST_ARTIFACT_DIR: /tmp/remote-daemon-tmux-parity
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -139,14 +139,14 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: remote-daemon-tmux-parity-artifacts
-          path: ${{ runner.temp }}/remote-daemon-tmux-parity
+          path: /tmp/remote-daemon-tmux-parity
           if-no-files-found: ignore
 
   remote-daemon-tui-resize:
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: "0"
-      CMUX_REMOTE_TEST_ARTIFACT_DIR: ${{ runner.temp }}/remote-daemon-tui-resize
+      CMUX_REMOTE_TEST_ARTIFACT_DIR: /tmp/remote-daemon-tui-resize
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -187,7 +187,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: remote-daemon-tui-resize-artifacts
-          path: ${{ runner.temp }}/remote-daemon-tui-resize
+          path: /tmp/remote-daemon-tui-resize
           if-no-files-found: ignore
 
   web-typecheck:
