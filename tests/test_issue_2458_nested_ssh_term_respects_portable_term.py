@@ -12,10 +12,15 @@ run Ghostty shell integration.
 from __future__ import annotations
 
 import os
+import pty
+import select
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
+
+PROMPT_MARKER = b"cmux-ready> "
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -23,14 +28,30 @@ def _write_executable(path: Path, content: str) -> None:
     path.chmod(0o755)
 
 
+def _write_prompting_zshrc(path: Path, extra_content: str = "") -> None:
+    path.write_text(
+        (
+            """
+setopt prompt_percent
+PROMPT='cmux-ready> '
+RPROMPT=''
+"""
+            + extra_content
+        ).lstrip(),
+        encoding="utf-8",
+    )
+
+
 def _run_case(
     *,
     root: Path,
     wrapper_dir: Path,
+    zsh_path: str,
     features: str,
     term: str,
     expect_term: str,
     expect_infocmp: bool,
+    zshrc_extra_content: str = "",
 ) -> tuple[bool, str]:
     base = Path(tempfile.mkdtemp(prefix="cmux_issue_2458_"))
     try:
@@ -44,8 +65,9 @@ def _run_case(
         orig.mkdir(parents=True, exist_ok=True)
         fakebin.mkdir(parents=True, exist_ok=True)
 
-        for filename in (".zshenv", ".zprofile", ".zshrc"):
+        for filename in (".zshenv", ".zprofile"):
             (orig / filename).write_text("", encoding="utf-8")
+        _write_prompting_zshrc(orig / ".zshrc", extra_content=zshrc_extra_content)
 
         _write_executable(
             fakebin / "ssh",
@@ -86,19 +108,84 @@ exit "${CMUX_TEST_INFOCMP_STATUS:-1}"
         env.pop("GHOSTTY_BIN_DIR", None)
         env.pop("TERMINFO", None)
 
-        result = subprocess.run(
-            ["zsh", "-d", "-i", "-c", "ssh nested.example"],
+        # Ghostty installs the live ssh() wrapper during deferred init on the
+        # first prompt, so this regression test must drive a prompted PTY shell.
+        master, slave = pty.openpty()
+        proc = subprocess.Popen(
+            [zsh_path, "-d", "-i"],
+            cwd=str(root),
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
             env=env,
-            capture_output=True,
-            text=True,
-            timeout=8,
+            close_fds=True,
         )
-        if result.returncode != 0:
-            combined = ((result.stdout or "") + (result.stderr or "")).strip()
-            return False, f"zsh exited non-zero rc={result.returncode}: {combined}"
+        os.close(slave)
+
+        output = bytearray()
+        saw_prompt = False
+        ssh_sent = False
+        exit_sent = False
+        timed_out = False
+        try:
+            deadline = time.time() + 8
+            while time.time() < deadline:
+                if proc.poll() is not None:
+                    break
+
+                readable, _, _ = select.select([master], [], [], 0.2)
+                if master in readable:
+                    try:
+                        chunk = os.read(master, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    output.extend(chunk)
+
+                prompt_count = output.count(PROMPT_MARKER)
+                if prompt_count >= 1:
+                    saw_prompt = True
+
+                if saw_prompt and not ssh_sent:
+                    os.write(master, b"ssh nested.example\n")
+                    ssh_sent = True
+                    continue
+
+                if ssh_sent and not exit_sent and term_out.exists() and prompt_count >= 2:
+                    os.write(master, b"exit\n")
+                    exit_sent = True
+                    continue
+            else:
+                timed_out = True
+        finally:
+            try:
+                if proc.poll() is None:
+                    if not exit_sent:
+                        try:
+                            os.write(master, b"exit\n")
+                        except OSError:
+                            pass
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=5)
+            finally:
+                os.close(master)
+
+        combined = output.decode("utf-8", errors="replace").strip()
+        if timed_out:
+            return False, f"interactive zsh session timed out: {combined}"
+        if proc.returncode != 0:
+            return False, f"interactive zsh exited non-zero rc={proc.returncode}: {combined}"
+        if not saw_prompt:
+            return False, f"did not observe first interactive prompt: {combined}"
+        if not ssh_sent:
+            return False, f"did not invoke ssh after first interactive prompt: {combined}"
 
         if not term_out.exists():
-            return False, "fake ssh did not record TERM"
+            return False, f"fake ssh did not record TERM: {combined}"
 
         recorded_term = term_out.read_text(encoding="utf-8").strip()
         if recorded_term != expect_term:
@@ -120,13 +207,15 @@ def main() -> int:
         print(f"SKIP: missing wrapper .zshenv at {wrapper_dir}")
         return 0
 
-    if shutil.which("zsh") is None:
+    zsh_path = shutil.which("zsh")
+    if zsh_path is None:
         print("SKIP: zsh not installed")
         return 0
 
     ok, detail = _run_case(
         root=root,
         wrapper_dir=wrapper_dir,
+        zsh_path=zsh_path,
         features="ssh-env,ssh-terminfo",
         term="xterm-256color",
         expect_term="xterm-256color",
@@ -139,6 +228,7 @@ def main() -> int:
     ok, detail = _run_case(
         root=root,
         wrapper_dir=wrapper_dir,
+        zsh_path=zsh_path,
         features="ssh-env",
         term="xterm-ghostty",
         expect_term="xterm-256color",
@@ -151,6 +241,7 @@ def main() -> int:
     ok, detail = _run_case(
         root=root,
         wrapper_dir=wrapper_dir,
+        zsh_path=zsh_path,
         features="ssh-env,ssh-terminfo",
         term="tmux-256color",
         expect_term="xterm-256color",
@@ -163,6 +254,7 @@ def main() -> int:
     ok, detail = _run_case(
         root=root,
         wrapper_dir=wrapper_dir,
+        zsh_path=zsh_path,
         features="ssh-env,ssh-terminfo",
         term="xterm-ghostty",
         expect_term="xterm-256color",
@@ -172,7 +264,26 @@ def main() -> int:
         print(f"FAIL: xterm-ghostty fallback case failed: {detail}")
         return 1
 
-    print("PASS: Ghostty zsh SSH wrapper preserves portable TERM and still falls back from xterm-ghostty")
+    ok, detail = _run_case(
+        root=root,
+        wrapper_dir=wrapper_dir,
+        zsh_path=zsh_path,
+        features="ssh-env,ssh-terminfo",
+        term="xterm-ghostty",
+        expect_term="xterm-ghostty",
+        expect_infocmp=False,
+        zshrc_extra_content="""
+export GHOSTTY_SHELL_FEATURES='title,cursor'
+""",
+    )
+    if not ok:
+        print(f"FAIL: user opt-out case failed: {detail}")
+        return 1
+
+    print(
+        "PASS: Ghostty zsh SSH wrapper preserves portable TERM, falls back from xterm-ghostty, "
+        "and respects interactive-shell opt-outs"
+    )
     return 0
 
 

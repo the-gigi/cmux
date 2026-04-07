@@ -5,7 +5,9 @@
 # xterm-ghostty on the first hop, because deeper non-integrated hops will then
 # inherit a TERM that may not exist on downstream servers.
 
-if [[ "${GHOSTTY_SHELL_FEATURES:-}" == *ssh-* ]]; then
+_cmux_patch_ghostty_ssh() {
+  [[ "${GHOSTTY_SHELL_FEATURES:-}" == *ssh-* ]] || return 0
+
   ssh() {
     emulate -L zsh
     setopt local_options no_glob_subst
@@ -81,4 +83,49 @@ if [[ "${GHOSTTY_SHELL_FEATURES:-}" == *ssh-* ]]; then
 
     TERM="$ssh_term" command ssh "${ssh_opts[@]}" "$@"
   }
-fi
+}
+
+_cmux_patch_ghostty_ssh_deferred_init() {
+  (( $+functions[_ghostty_deferred_init] )) || return 0
+  [[ "${functions[_ghostty_deferred_init]}" == *"_cmux_patch_ghostty_ssh"* ]] && return 0
+
+  # Ghostty installs its ssh() wrapper during deferred init on the first prompt.
+  # Reapply the cmux wrapper there so prompted interactive shells keep the patch.
+  functions[_ghostty_deferred_init]+=$'
+  _cmux_patch_ghostty_ssh'
+}
+
+_cmux_patch_ghostty_ssh_exec_string_init() {
+  [[ -n "${ZSH_EXECUTION_STRING:-}" ]] || return 0
+
+  # zsh -i -c runs user startup files but never draws a prompt, so Ghostty's
+  # deferred init does not fire. Install the wrapper from a one-shot DEBUG trap
+  # right before the command string executes, after .zprofile/.zshrc had a
+  # chance to reconfigure GHOSTTY_SHELL_FEATURES.
+  if (( $+functions[TRAPDEBUG] )) &&
+     [[ "${functions[TRAPDEBUG]}" != *"_cmux_patch_ghostty_ssh_debug_trap"* ]]; then
+    functions[_cmux_patch_ghostty_ssh_original_trapdebug]="${functions[TRAPDEBUG]}"
+  fi
+
+  _cmux_patch_ghostty_ssh_debug_trap() {
+    emulate -L zsh
+    [[ ":${ZSH_EVAL_CONTEXT:-}:" == *":cmdarg:"* ]] || return 0
+
+    builtin unfunction TRAPDEBUG 2>/dev/null || true
+    _cmux_patch_ghostty_ssh
+
+    if (( $+functions[_cmux_patch_ghostty_ssh_original_trapdebug] )); then
+      functions[TRAPDEBUG]="${functions[_cmux_patch_ghostty_ssh_original_trapdebug]}"
+      _cmux_patch_ghostty_ssh_original_trapdebug "$@"
+      builtin unfunction _cmux_patch_ghostty_ssh_original_trapdebug 2>/dev/null || true
+    fi
+  }
+
+  functions[TRAPDEBUG]="${functions[_cmux_patch_ghostty_ssh_debug_trap]}"
+}
+
+# Patch both init paths:
+# - one-shot DEBUG trap for zsh -i -c flows that never draw a prompt
+# - Ghostty deferred init for normal prompted interactive shells
+_cmux_patch_ghostty_ssh_deferred_init
+_cmux_patch_ghostty_ssh_exec_string_init
