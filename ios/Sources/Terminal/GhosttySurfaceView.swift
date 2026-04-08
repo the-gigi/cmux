@@ -1270,8 +1270,6 @@ final class TerminalInputTextView: UITextView {
             self?.onEscapeSequence?(data)
         }
         nub.translatesAutoresizingMaskIntoConstraints = false
-        nub.backgroundColor = UIColor(white: 0.35, alpha: 1)
-        nub.layer.cornerRadius = 6
 
         container.addSubview(dismissButton)
         container.addSubview(nub)
@@ -1284,8 +1282,8 @@ final class TerminalInputTextView: UITextView {
 
             nub.leadingAnchor.constraint(equalTo: dismissButton.trailingAnchor, constant: 6),
             nub.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            nub.widthAnchor.constraint(equalToConstant: 36),
-            nub.heightAnchor.constraint(equalToConstant: 36),
+            nub.widthAnchor.constraint(equalToConstant: 34),
+            nub.heightAnchor.constraint(equalToConstant: 34),
 
             scrollView.leadingAnchor.constraint(equalTo: nub.trailingAnchor, constant: 6),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -1670,7 +1668,7 @@ private class DisplayLinkProxy {
 final class TerminalArrowNubView: UIView {
     var onArrowKey: ((Data) -> Void)?
 
-    private let nubSize: CGFloat = 44
+    private let nubSize: CGFloat = 34
     private let deadZone: CGFloat = 8
     private let repeatInterval: TimeInterval = 0.08
     private let innerDot = UIView()
@@ -1699,8 +1697,8 @@ final class TerminalArrowNubView: UIView {
         layer.borderColor = UIColor(white: 0.55, alpha: 0.7).cgColor
 
         innerDot.backgroundColor = UIColor(white: 0.85, alpha: 1)
-        innerDot.layer.cornerRadius = 8
-        innerDot.frame = CGRect(x: 0, y: 0, width: 16, height: 16)
+        innerDot.layer.cornerRadius = 6
+        innerDot.frame = CGRect(x: 0, y: 0, width: 12, height: 12)
         innerDot.layer.shadowColor = UIColor.white.cgColor
         innerDot.layer.shadowOpacity = 0.3
         innerDot.layer.shadowRadius = 3
