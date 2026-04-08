@@ -44,10 +44,10 @@ enum Environment {
         CMUXAuthConfig.resolve(
             environment: currentAuthEnvironment,
             overrides: localConfigStringOverrides,
-            developmentProjectId: "1467bed0-8522-45ee-a8d8-055de324118c",
-            productionProjectId: "8a877114-b905-47c5-8b64-3a2d90679577",
-            developmentPublishableClientKey: "pck_pt4nwry6sdskews2pxk4g2fbe861ak2zvaf3mqendspa0",
-            productionPublishableClientKey: "pck_8761mjjmyqc84e1e8ga3rn0k1nkggmggwa3pyzzgntv70"
+            developmentProjectId: "454ecd03-1db2-4050-845e-4ce5b0cd9895",
+            productionProjectId: "9790718f-14cd-4f7e-824d-eaf527a82b82",
+            developmentPublishableClientKey: "pck_xb63160bwe9699vtxfzfj6emmxpafg5mkjrtp6ehzxv5g",
+            productionPublishableClientKey: "pck_kzj80gx4mh2jrzn1cx6y5e8jk0kwa01vkevh2p9zd4twr"
         )
     }
 
