@@ -509,8 +509,9 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
         guard let surface else { return }
         if gesture.state == .changed {
             let translation = gesture.translation(in: self)
-            // Convert points to scroll units. Negative y = scroll up (show history).
-            let scrollY = -translation.y / 10.0
+            // iOS natural scrolling: swipe down (positive translation) = scroll up (show history).
+            // Ghostty: positive y = scroll down. So pass translation.y directly for natural feel.
+            let scrollY = translation.y / 10.0
             ghostty_surface_mouse_scroll(surface, 0, Double(scrollY), 0)
             gesture.setTranslation(.zero, in: self)
             needsDraw = true
@@ -885,7 +886,8 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
         ghostty_surface_set_content_scale(surface, scale, scale)
 
         let width = UInt32(max(1, Int((bounds.width * scale).rounded(.down))))
-        let effectiveHeight = max(1, bounds.height - keyboardHeight)
+        let accessoryHeight: CGFloat = inputProxy.inputAccessoryView?.frame.height ?? 44
+        let effectiveHeight = max(1, bounds.height - keyboardHeight - accessoryHeight)
         let height = UInt32(max(1, Int((effectiveHeight * scale).rounded(.down))))
         ghostty_surface_set_size(surface, width, height)
 
