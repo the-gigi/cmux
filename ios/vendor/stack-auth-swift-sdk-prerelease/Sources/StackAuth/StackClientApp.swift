@@ -305,7 +305,7 @@ public actor StackClientApp {
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let errorCode = json["code"] as? String {
                 if errorCode == "INVALID_APPLE_CREDENTIALS" {
-                    fatalError("Invalid Apple credentials")
+                    throw OAuthError(code: errorCode, message: "Apple Sign In configuration error. Please try again later.")
                 }
                 let message = json["error"] as? String ?? "Apple Sign In failed"
                 throw OAuthError(code: errorCode, message: message)
