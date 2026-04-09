@@ -164,6 +164,7 @@ final class TerminalWebSocketTransport: @unchecked Sendable, TerminalTransport {
             TerminalRemoteDaemonSessionTransport(
                 client: TerminalRemoteDaemonClient(transport: transport),
                 command: command,
+                sharedSessionID: sessionName,
                 resumeState: resumeState
             )
         }

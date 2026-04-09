@@ -62,6 +62,7 @@ final class ScannerLog: @unchecked Sendable {
 final class ServerScanner: ObservableObject {
     @Published var servers: [DiscoveredServer] = []
     @Published var isScanning = false
+    private(set) var currentSecret: String = ""
     private var scanTask: Task<Void, Never>?
     private let log = ScannerLog.shared
 
@@ -84,6 +85,7 @@ final class ServerScanner: ObservableObject {
 
     private func scanAll() async {
         let secret = loadWsSecret()
+        self.currentSecret = secret
         let relayHost = loadRelayHost()
 
         log.log("scan.start secret=\(secret.isEmpty ? "empty" : "\(secret.prefix(8))...") relay=\(relayHost ?? "none")")
@@ -167,7 +169,7 @@ final class ServerScanner: ObservableObject {
         return found
     }
 
-    private static func probeAndIdentify(hostname: String, port: Int, secret: String, isTailscale: Bool = false) async -> DiscoveredServer? {
+    static func probeAndIdentify(hostname: String, port: Int, secret: String, isTailscale: Bool = false) async -> DiscoveredServer? {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 let result = Self.probeSync(hostname: hostname, port: port, secret: secret, isTailscale: isTailscale)
@@ -312,6 +314,9 @@ struct ServerScannerView: View {
     @StateObject private var scanner = ServerScanner()
     @State private var connectedPorts: Set<Int>
     @State private var showingLogs = false
+    @State private var manualIP = ""
+    @State private var manualPort = "52100"
+    @State private var isProbing = false
     let onSelect: (DiscoveredServer) -> Void
     let onRemove: (DiscoveredServer) -> Void
     let onDismiss: () -> Void
@@ -331,42 +336,61 @@ struct ServerScannerView: View {
     var body: some View {
         NavigationStack {
             List {
-                if scanner.isScanning {
+                Section {
                     HStack {
-                        ProgressView()
-                            .padding(.trailing, 8)
-                        Text(String(localized: "server.scan.scanning", defaultValue: "Scanning..."))
+                        TextField(String(localized: "server.scan.manual.ip", defaultValue: "IP address"), text: $manualIP)
+                            .keyboardType(.decimalPad)
+                            .textContentType(.none)
+                            .autocorrectionDisabled()
+                        Text(":")
                             .foregroundStyle(.secondary)
+                        TextField(String(localized: "server.scan.manual.port", defaultValue: "Port"), text: $manualPort)
+                            .keyboardType(.numberPad)
+                            .frame(width: 60)
                     }
-                }
-
-                if scanner.servers.isEmpty && !scanner.isScanning {
-                    ContentUnavailableView {
-                        Label(
-                            String(localized: "server.scan.empty_title", defaultValue: "No Servers Found"),
-                            systemImage: "magnifyingglass"
-                        )
-                    } description: {
-                        Text(String(localized: "server.scan.empty_description", defaultValue: "Make sure cmux is running on your Mac."))
-                    } actions: {
-                        Button(String(localized: "server.scan.rescan", defaultValue: "Scan Again")) {
-                            scanner.startScan()
-                        }
-                    }
-                }
-
-                ForEach(scanner.servers) { server in
-                    let isConnected = connectedPorts.contains(server.port)
                     Button {
-                        if isConnected {
-                            connectedPorts.remove(server.port)
-                            onRemove(server)
-                        } else {
-                            connectedPorts.insert(server.port)
-                            onSelect(server)
-                        }
+                        probeManualServer()
                     } label: {
-                        ServerScanRow(server: server, isConnected: isConnected)
+                        HStack {
+                            if isProbing {
+                                ProgressView()
+                                    .padding(.trailing, 4)
+                            }
+                            Text(String(localized: "server.scan.manual.connect", defaultValue: "Connect"))
+                        }
+                    }
+                    .disabled(manualIP.isEmpty || isProbing)
+                } header: {
+                    Text(String(localized: "server.scan.manual.header", defaultValue: "Add Server"))
+                }
+
+                if !scanner.servers.isEmpty || scanner.isScanning {
+                    Section {
+                        if scanner.isScanning {
+                            HStack {
+                                ProgressView()
+                                    .padding(.trailing, 8)
+                                Text(String(localized: "server.scan.scanning", defaultValue: "Scanning..."))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        ForEach(scanner.servers) { server in
+                            let isConnected = connectedPorts.contains(server.port)
+                            Button {
+                                if isConnected {
+                                    connectedPorts.remove(server.port)
+                                    onRemove(server)
+                                } else {
+                                    connectedPorts.insert(server.port)
+                                    onSelect(server)
+                                }
+                            } label: {
+                                ServerScanRow(server: server, isConnected: isConnected)
+                            }
+                        }
+                    } header: {
+                        Text(String(localized: "server.scan.discovered.header", defaultValue: "Discovered"))
                     }
                 }
 
@@ -408,6 +432,26 @@ struct ServerScannerView: View {
         }
     }
 
+    private func probeManualServer() {
+        let ip = manualIP.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !ip.isEmpty, let port = Int(manualPort) else { return }
+        isProbing = true
+        let secret = scanner.currentSecret
+
+        Task {
+            let result = await ServerScanner.probeAndIdentify(hostname: ip, port: port, secret: secret)
+            await MainActor.run {
+                isProbing = false
+                if let server = result {
+                    connectedPorts.insert(server.port)
+                    onSelect(server)
+                    ScannerLog.shared.log("manual.connect \(ip):\(port) name=\(server.name)")
+                } else {
+                    ScannerLog.shared.log("manual.connect.failed \(ip):\(port)")
+                }
+            }
+        }
+    }
 }
 
 struct ScannerLogView: View {

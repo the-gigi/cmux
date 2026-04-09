@@ -315,15 +315,20 @@ actor TerminalRemoteDaemonClient {
     func terminalOpen(
         command: String,
         cols: Int,
-        rows: Int
+        rows: Int,
+        sessionID: String? = nil
     ) async throws -> TerminalRemoteDaemonTerminalOpenResult {
-        try await sendRequest(
+        var params: [String: Any] = [
+            "command": command,
+            "cols": cols,
+            "rows": rows,
+        ]
+        if let sessionID {
+            params["session_id"] = sessionID
+        }
+        return try await sendRequest(
             method: "terminal.open",
-            params: [
-                "command": command,
-                "cols": cols,
-                "rows": rows,
-            ],
+            params: params,
             as: TerminalRemoteDaemonTerminalOpenResult.self
         )
     }

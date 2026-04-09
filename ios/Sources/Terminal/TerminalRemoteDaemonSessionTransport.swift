@@ -12,7 +12,7 @@ protocol TerminalRemoteDaemonSessionClient: Sendable {
         cols: Int,
         rows: Int
     ) async throws -> TerminalRemoteDaemonSessionStatus
-    func terminalOpen(command: String, cols: Int, rows: Int) async throws -> TerminalRemoteDaemonTerminalOpenResult
+    func terminalOpen(command: String, cols: Int, rows: Int, sessionID: String?) async throws -> TerminalRemoteDaemonTerminalOpenResult
     func terminalWrite(sessionID: String, data: Data) async throws
     func terminalRead(
         sessionID: String,
@@ -50,6 +50,7 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
 
     private let client: any TerminalRemoteDaemonSessionClient
     private let command: String
+    private let sharedSessionID: String?
     private let resumeState: TerminalRemoteDaemonResumeState?
     private let readTimeoutMilliseconds: Int
     private let maxReadBytes: Int
@@ -64,12 +65,14 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
     init(
         client: any TerminalRemoteDaemonSessionClient,
         command: String,
+        sharedSessionID: String? = nil,
         resumeState: TerminalRemoteDaemonResumeState? = nil,
         readTimeoutMilliseconds: Int = 250,
         maxReadBytes: Int = 64 * 1024
     ) {
         self.client = client
         self.command = command
+        self.sharedSessionID = sharedSessionID
         self.resumeState = resumeState
         self.readTimeoutMilliseconds = readTimeoutMilliseconds
         self.maxReadBytes = maxReadBytes
@@ -107,13 +110,21 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
     }
 
     func disconnect() async {
-        let sessionID = lockedSessionID()
+        let state = lockedSessionState()
         let readTask = takeReadTask(markClosed: false)
         readTask?.cancel()
         await readTask?.value
 
-        if let sessionID {
-            try? await client.sessionClose(sessionID: sessionID)
+        if let state {
+            if sharedSessionID != nil {
+                // Detach instead of close so other clients keep the session
+                _ = try? await client.sessionDetach(
+                    sessionID: state.sessionID,
+                    attachmentID: state.attachmentID
+                )
+            } else {
+                try? await client.sessionClose(sessionID: state.sessionID)
+            }
         }
         clearSessionState()
         finishDisconnect(error: nil)
@@ -137,7 +148,36 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
         let cols = max(1, initialSize.columns)
         let rows = max(1, initialSize.rows)
 
-        if let resumeState {
+        // For shared sessions, always use the shared session ID.
+        // This ensures all clients for the same workspace share one PTY.
+        if let sharedSessionID {
+            let newAttachmentID = UUID().uuidString.lowercased()
+            do {
+                _ = try await client.sessionAttach(
+                    sessionID: sharedSessionID,
+                    attachmentID: newAttachmentID,
+                    cols: cols,
+                    rows: rows
+                )
+                NSLog("📱 SessionTransport: attached to shared session %@", sharedSessionID)
+                withLockedState {
+                    sessionID = sharedSessionID
+                    attachmentID = newAttachmentID
+                    nextOffset = 0
+                    closed = false
+                }
+                return
+            } catch let error as TerminalRemoteDaemonClientError {
+                if case .rpc(let code, _) = error, code == "not_found" {
+                    NSLog("📱 SessionTransport: shared session %@ not found, creating", sharedSessionID)
+                } else {
+                    throw error
+                }
+            }
+        }
+
+        // Try resuming a previously saved session (non-shared only)
+        if let resumeState, sharedSessionID == nil {
             do {
                 _ = try await client.sessionAttach(
                     sessionID: resumeState.sessionID,
@@ -164,7 +204,8 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
         let openResult = try await client.terminalOpen(
             command: command,
             cols: cols,
-            rows: rows
+            rows: rows,
+            sessionID: sharedSessionID
         )
 
         withLockedState {

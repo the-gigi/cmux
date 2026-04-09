@@ -84,11 +84,13 @@ struct TerminalSidebarRootView: View {
             return true
         }
 
-        // Remote workspaces are already in tab order from the server.
-        // Only sort non-remote workspaces by connection status and activity.
+        // Remote workspaces preserve server tab order, but pinned
+        // workspaces always float to the top of each group.
         let hasRemote = visible.contains { $0.remoteWorkspaceID != nil }
         if hasRemote {
-            return visible // preserve server order
+            let pinned = visible.filter { $0.pinned }
+            let unpinned = visible.filter { !$0.pinned }
+            return pinned + unpinned
         }
 
         let sortKeys = Dictionary(
