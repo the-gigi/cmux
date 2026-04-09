@@ -5153,10 +5153,15 @@ struct ContentView: View {
         for contribution: CommandPaletteCommandContribution,
         context: CommandPaletteContextSnapshot
     ) -> String? {
-        // Preserve browser reload semantics for Cmd+R when a browser tab is focused.
+        // When reload and rename intentionally share a binding, prefer showing the
+        // browser-focused reload hint instead of a duplicate rename entry.
         if contribution.commandId == "palette.renameTab",
            context.bool(CommandPaletteContextKeys.panelIsBrowser) {
-            return nil
+            let renameTabShortcut = KeyboardShortcutSettings.shortcut(for: .renameTab)
+            let browserReloadShortcut = KeyboardShortcutSettings.shortcut(for: .browserReload)
+            if renameTabShortcut.conflicts(with: browserReloadShortcut) {
+                return nil
+            }
         }
         if let action = commandPaletteShortcutAction(for: contribution.commandId) {
             let shortcut = KeyboardShortcutSettings.shortcut(for: action)

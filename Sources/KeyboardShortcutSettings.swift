@@ -154,7 +154,7 @@ enum KeyboardShortcutSettings {
             case .prevSidebarTab:
                 return StoredShortcut(key: "[", command: true, shift: false, option: false, control: true)
             case .renameTab:
-                return StoredShortcut(key: "r", command: true, shift: false, option: false, control: false)
+                return StoredShortcut(key: "r", command: true, shift: false, option: true, control: false)
             case .renameWorkspace:
                 return StoredShortcut(key: "r", command: true, shift: true, option: false, control: false)
             case .closeWorkspace:
@@ -429,6 +429,12 @@ struct StoredShortcut: Codable, Equatable {
             modifiers.insert(.control)
         }
         return modifiers
+    }
+
+    func conflicts(with other: StoredShortcut) -> Bool {
+        guard !isDisabled, !other.isDisabled else { return false }
+        return key.lowercased() == other.key.lowercased()
+            && modifierFlags == other.modifierFlags
     }
 
     var menuItemKeyEquivalent: String? {

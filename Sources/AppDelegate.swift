@@ -9981,9 +9981,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return true
         }
 
-        if matchShortcut(event: event, shortcut: KeyboardShortcutSettings.shortcut(for: .renameTab)) {
-            // Keep Cmd+R browser reload behavior when a browser panel is focused.
-            if tabManager?.focusedBrowserPanel != nil {
+        let renameTabShortcut = KeyboardShortcutSettings.shortcut(for: .renameTab)
+        let browserReloadShortcut = KeyboardShortcutSettings.shortcut(for: .browserReload)
+        if matchShortcut(event: event, shortcut: renameTabShortcut) {
+            // When users intentionally bind both actions to the same shortcut, let the
+            // focused browser keep reload precedence and leave rename available elsewhere.
+            if tabManager?.focusedBrowserPanel != nil,
+               renameTabShortcut.conflicts(with: browserReloadShortcut),
+               matchShortcut(event: event, shortcut: browserReloadShortcut) {
                 return false
             }
             let targetWindow = commandPaletteTargetWindow ?? event.window ?? NSApp.keyWindow ?? NSApp.mainWindow
