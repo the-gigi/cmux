@@ -392,6 +392,35 @@ final class GhosttyConfigTests: XCTestCase {
         }
     }
 
+    func testLoadedCJKScanPathsIncludeStandaloneGhosttyAppSupportBeforeCmuxOverrides() throws {
+        try withTemporaryAppSupportDirectory { appSupportDirectory in
+            let ghosttyConfigURL = try writeAppSupportConfig(
+                appSupportDirectory: appSupportDirectory,
+                bundleIdentifier: "com.mitchellh.ghostty",
+                filename: "config.ghostty",
+                contents: "font-feature = calt\n"
+            )
+            let cmuxConfigURL = try writeAppSupportConfig(
+                appSupportDirectory: appSupportDirectory,
+                bundleIdentifier: "com.cmuxterm.app",
+                filename: "config.ghostty",
+                contents: "font-family = JetBrains Mono\n"
+            )
+
+            let paths = GhosttyApp.loadedCJKScanPaths(
+                currentBundleIdentifier: "com.cmuxterm.app.debug",
+                appSupportDirectory: appSupportDirectory
+            )
+
+            XCTAssertTrue(paths.contains(ghosttyConfigURL.path))
+            XCTAssertTrue(paths.contains(cmuxConfigURL.path))
+
+            let ghosttyIndex = try XCTUnwrap(paths.firstIndex(of: ghosttyConfigURL.path))
+            let cmuxIndex = try XCTUnwrap(paths.firstIndex(of: cmuxConfigURL.path))
+            XCTAssertLessThan(ghosttyIndex, cmuxIndex)
+        }
+    }
+
     func testDefaultBackgroundUpdateScopePrioritizesSurfaceOverAppAndUnscoped() {
         XCTAssertTrue(
             GhosttyApp.shouldApplyDefaultBackgroundUpdate(
