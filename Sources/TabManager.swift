@@ -170,6 +170,19 @@ private struct WorkspaceGitRepositoryInfo: Hashable, Sendable {
     let repoRoot: String
     let gitDirectory: String
     let gitCommonDirectory: String
+    let additionalGitConfigPaths: [String]
+
+    init(
+        repoRoot: String,
+        gitDirectory: String,
+        gitCommonDirectory: String,
+        additionalGitConfigPaths: [String] = []
+    ) {
+        self.repoRoot = repoRoot
+        self.gitDirectory = gitDirectory
+        self.gitCommonDirectory = gitCommonDirectory
+        self.additionalGitConfigPaths = additionalGitConfigPaths.sorted()
+    }
 
     var gitConfigPaths: [String] {
         var paths: [String] = []
@@ -185,15 +198,41 @@ private struct WorkspaceGitRepositoryInfo: Hashable, Sendable {
             paths.append(worktreeConfigPath)
         }
 
+        for path in additionalGitConfigPaths where seen.insert(path).inserted {
+            paths.append(path)
+        }
+
         return paths
     }
 
-    var gitWatcherRoots: [String] {
+    var primaryGitWatcherRoots: [String] {
         var roots: [String] = []
         var seen: Set<String> = []
         for path in [repoRoot, gitDirectory, gitCommonDirectory] where seen.insert(path).inserted {
             roots.append(path)
         }
+        return roots
+    }
+
+    var gitWatcherRoots: [String] {
+        var roots = primaryGitWatcherRoots
+        var seen = Set(roots)
+
+        for configPath in additionalGitConfigPaths {
+            let isCoveredByPrimaryRoot = primaryGitWatcherRoots.contains { root in
+                configPath == root || configPath.hasPrefix(root + "/")
+            }
+            guard !isCoveredByPrimaryRoot else { continue }
+
+            let parentPath = URL(fileURLWithPath: configPath)
+                .deletingLastPathComponent()
+                .standardizedFileURL
+                .path
+            if seen.insert(parentPath).inserted {
+                roots.append(parentPath)
+            }
+        }
+
         return roots
     }
 
@@ -330,6 +369,10 @@ private final class WorkspaceGitEventWatcher {
 
     private func isRelevant(path: String) -> Bool {
         if path == repositoryInfo.cmuxIgnorePath {
+            return true
+        }
+
+        if repositoryInfo.gitConfigPaths.contains(path) {
             return true
         }
 
@@ -1397,6 +1440,7 @@ class TabManager: ObservableObject {
         if GitMetadataWatcherSettings.isDisabled() {
             for workspace in tabs {
                 clearWorkspaceGitProbes(workspaceId: workspace.id)
+                clearWorkspaceSidebarGitMetadata(workspaceId: workspace.id)
             }
             resetWorkspacePullRequestRefreshState()
             return
@@ -1412,6 +1456,32 @@ class TabManager: ObservableObject {
 
     private func isWorkspaceGitMetadataWatcherEnabled(for workspace: Workspace) -> Bool {
         GitMetadataWatcherSettings.isEnabled() && !workspace.gitMetadataWatcherDisabled
+    }
+
+    private func clearWorkspaceSidebarGitMetadata(for key: WorkspaceGitProbeKey) {
+        guard let workspace = tabs.first(where: { $0.id == key.workspaceId }),
+              workspace.panels[key.panelId] != nil else {
+            return
+        }
+
+        if workspace.panelGitBranches[key.panelId] != nil {
+            workspace.clearPanelGitBranch(panelId: key.panelId)
+        } else if workspace.panelPullRequests[key.panelId] != nil {
+            workspace.clearPanelPullRequest(panelId: key.panelId)
+        }
+    }
+
+    private func clearWorkspaceSidebarGitMetadata(workspaceId: UUID) {
+        guard let workspace = tabs.first(where: { $0.id == workspaceId }) else {
+            return
+        }
+
+        let panelIds = Set(workspace.panelGitBranches.keys).union(workspace.panelPullRequests.keys)
+        for panelId in panelIds {
+            clearWorkspaceSidebarGitMetadata(
+                for: WorkspaceGitProbeKey(workspaceId: workspaceId, panelId: panelId)
+            )
+        }
     }
 
     private func scheduleWorkspaceGitMetadataRefreshForAllPanelsIfPossible(
@@ -1531,7 +1601,7 @@ class TabManager: ObservableObject {
         return changedPaths.contains { path in
             path == repositoryInfo.cmuxIgnorePath
                 || repositoryInfo.gitConfigPaths.contains(path)
-                || repositoryInfo.gitWatcherRoots.contains(path)
+                || repositoryInfo.primaryGitWatcherRoots.contains(path)
                 || path == gitMarkerPath
         }
     }
@@ -1545,7 +1615,7 @@ class TabManager: ObservableObject {
             .path
         return changedPaths.contains { path in
             if repositoryInfo.gitConfigPaths.contains(path)
-                || repositoryInfo.gitWatcherRoots.contains(path)
+                || repositoryInfo.primaryGitWatcherRoots.contains(path)
                 || path == gitMarkerPath {
                 return true
             }
@@ -2154,7 +2224,9 @@ class TabManager: ObservableObject {
         guard isWorkspaceGitMetadataWatcherEnabled(for: workspace) else {
             clearWorkspaceGitProbe(key)
             detachWorkspaceGitEventWatcher(for: key)
+            workspaceGitTrackedDirectoryByKey.removeValue(forKey: key)
             clearWorkspacePullRequestTracking(for: key)
+            clearWorkspaceSidebarGitMetadata(for: key)
             return
         }
 
@@ -2923,10 +2995,16 @@ class TabManager: ObservableObject {
         let resolvedGitCommonDirectory = resolvedGitCommonDirectoryPath(
             fromGitDirectory: resolvedGitDirectory
         )
-        return WorkspaceGitRepositoryInfo(
+        let baseRepositoryInfo = WorkspaceGitRepositoryInfo(
             repoRoot: resolvedRepoRoot,
             gitDirectory: resolvedGitDirectory.path,
             gitCommonDirectory: resolvedGitCommonDirectory
+        )
+        return WorkspaceGitRepositoryInfo(
+            repoRoot: resolvedRepoRoot,
+            gitDirectory: resolvedGitDirectory.path,
+            gitCommonDirectory: resolvedGitCommonDirectory,
+            additionalGitConfigPaths: resolvedIncludedGitConfigPaths(for: baseRepositoryInfo)
         )
     }
 
@@ -3026,6 +3104,51 @@ class TabManager: ObservableObject {
         )
     }
 
+    private nonisolated static func resolvedIncludedGitConfigPaths(
+        for repositoryInfo: WorkspaceGitRepositoryInfo
+    ) -> [String] {
+        var paths: [String] = []
+        var seen = Set(repositoryInfo.gitConfigPaths)
+        let environment = [
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+        ]
+
+        for arguments in [
+            [
+                "--no-optional-locks",
+                "config",
+                "--local",
+                "--includes",
+                "--show-origin",
+                "--list",
+                "-z",
+            ],
+            [
+                "--no-optional-locks",
+                "config",
+                "--worktree",
+                "--includes",
+                "--show-origin",
+                "--list",
+                "-z",
+            ],
+        ] {
+            guard let originPaths = gitConfigOriginPaths(
+                directory: repositoryInfo.repoRoot,
+                arguments: arguments,
+                environment: environment
+            ) else {
+                continue
+            }
+            for path in originPaths where seen.insert(path).inserted {
+                paths.append(path)
+            }
+        }
+
+        return paths
+    }
+
     private nonisolated static func gitConfigEntries(
         for repositoryInfo: WorkspaceGitRepositoryInfo
     ) -> [(String, String)]? {
@@ -3069,6 +3192,62 @@ class TabManager: ObservableObject {
         }
 
         return parsedAny ? entries : nil
+    }
+
+    private nonisolated static func gitConfigOriginPaths(
+        directory: String,
+        arguments: [String],
+        environment: [String: String]
+    ) -> [String]? {
+        guard let output = runCommand(
+            directory: directory,
+            executable: "git",
+            arguments: arguments,
+            environment: environment,
+            timeout: 2
+        ) else {
+            return nil
+        }
+
+        let records = output.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
+        guard !records.isEmpty else { return [] }
+
+        var paths: [String] = []
+        var seen: Set<String> = []
+        var index = 0
+        while index + 1 < records.count {
+            if let path = resolvedGitConfigOriginPath(
+                records[index],
+                relativeTo: directory
+            ), seen.insert(path).inserted {
+                paths.append(path)
+            }
+            index += 2
+        }
+        return paths
+    }
+
+    private nonisolated static func resolvedGitConfigOriginPath(
+        _ origin: String,
+        relativeTo directory: String
+    ) -> String? {
+        guard origin.hasPrefix("file:") else { return nil }
+        let rawPath = String(origin.dropFirst("file:".count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawPath.isEmpty else { return nil }
+
+        let url: URL
+        if rawPath.hasPrefix("/") {
+            url = URL(fileURLWithPath: rawPath, isDirectory: false)
+        } else {
+            url = URL(fileURLWithPath: directory, isDirectory: true)
+                .appendingPathComponent(rawPath, isDirectory: false)
+        }
+
+        return url
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
     }
 
     private nonisolated static func gitConfigEntries(
@@ -4490,6 +4669,9 @@ class TabManager: ObservableObject {
 
             workspace.gitMetadataWatcherDisabled = disabled
             clearWorkspaceGitProbes(workspaceId: workspaceId)
+            if disabled {
+                clearWorkspaceSidebarGitMetadata(workspaceId: workspaceId)
+            }
 
             if !disabled {
                 scheduleWorkspaceGitMetadataRefreshForAllPanelsIfPossible(
