@@ -533,7 +533,15 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
                 let actionStr = delta > 0 ? "increase_font_size:1" : "decrease_font_size:1"
                 _ = ghostty_surface_binding_action(surface, actionStr, UInt(actionStr.utf8.count))
                 pinchAccumulatedScale = gesture.scale
+                // Font size change recalculates the grid internally. Re-sync
+                // geometry so the new cols/rows are propagated to the daemon
+                // session via session.resize. Without this, the shell keeps
+                // the old dimensions and the rendered grid doesn't match.
+                syncSurfaceGeometry()
             }
+        case .ended, .cancelled:
+            // Final sync to make sure the last font change is applied.
+            syncSurfaceGeometry()
         default:
             break
         }
