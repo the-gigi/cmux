@@ -889,6 +889,37 @@ final class TabManagerCloseWorkspacesWithConfirmationTests: XCTestCase {
 
 @MainActor
 final class TabManagerCloseCurrentPanelTests: XCTestCase {
+    private let warnBeforeClosingTabDefaultsKey = "warnBeforeClosingTabShortcut"
+    private var originalWarnBeforeClosingTabPreference: Any?
+
+    override func setUp() {
+        super.setUp()
+        originalWarnBeforeClosingTabPreference = UserDefaults.standard.object(forKey: warnBeforeClosingTabDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: warnBeforeClosingTabDefaultsKey)
+    }
+
+    override func tearDown() {
+        if let originalWarnBeforeClosingTabPreference {
+            UserDefaults.standard.set(originalWarnBeforeClosingTabPreference, forKey: warnBeforeClosingTabDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: warnBeforeClosingTabDefaultsKey)
+        }
+        super.tearDown()
+    }
+
+    private func makeRuntimeCloseWarningTestSubject() -> (manager: TabManager, workspace: Workspace, panelId: UUID) {
+        let manager = TabManager()
+        guard let workspace = manager.selectedWorkspace,
+              let panelId = workspace.focusedPanelId,
+              let terminalPanel = workspace.terminalPanel(for: panelId) else {
+            fatalError("Expected selected workspace and focused terminal panel")
+        }
+
+        terminalPanel.surface.setNeedsConfirmCloseOverrideForTesting(true)
+        workspace.updatePanelShellActivityState(panelId: panelId, state: .unknown)
+        return (manager, workspace, panelId)
+    }
+
     func testRuntimeCloseSkipsConfirmationWhenShellReportsPromptIdle() {
         let manager = TabManager()
         guard let workspace = manager.selectedWorkspace,
@@ -938,6 +969,54 @@ final class TabManagerCloseCurrentPanelTests: XCTestCase {
 
         XCTAssertEqual(promptCount, 1, "Running commands should still require confirmation")
         XCTAssertNotNil(workspace.panels[panelId], "Prompt rejection should keep the original panel open")
+    }
+
+    func testRuntimeClosePromptsWhenWarnBeforeClosingTabIsUnset() {
+        let subject = makeRuntimeCloseWarningTestSubject()
+        var promptCount = 0
+        subject.manager.confirmCloseHandler = { _, _, _ in
+            promptCount += 1
+            return false
+        }
+
+        UserDefaults.standard.removeObject(forKey: warnBeforeClosingTabDefaultsKey)
+        subject.manager.closeRuntimeSurfaceWithConfirmation(tabId: subject.workspace.id, surfaceId: subject.panelId)
+
+        XCTAssertEqual(promptCount, 1, "The close-tab warning should default to enabled when unset")
+        XCTAssertNotNil(subject.workspace.panels[subject.panelId], "Rejecting the prompt should keep the panel open")
+    }
+
+    func testRuntimeCloseSkipsConfirmationWhenWarnBeforeClosingTabIsDisabled() {
+        let subject = makeRuntimeCloseWarningTestSubject()
+        var promptCount = 0
+        subject.manager.confirmCloseHandler = { _, _, _ in
+            promptCount += 1
+            return false
+        }
+
+        UserDefaults.standard.set(false, forKey: warnBeforeClosingTabDefaultsKey)
+        subject.manager.closeRuntimeSurfaceWithConfirmation(tabId: subject.workspace.id, surfaceId: subject.panelId)
+        drainMainQueue()
+        drainMainQueue()
+
+        XCTAssertEqual(promptCount, 0, "Disabling the warning should skip the close-tab confirmation dialog")
+        XCTAssertNil(subject.workspace.panels[subject.panelId], "The panel should close immediately when the warning is disabled")
+        XCTAssertEqual(subject.workspace.panels.count, 1, "Closing the last panel should still leave a replacement surface")
+    }
+
+    func testRuntimeClosePromptsAgainWhenWarnBeforeClosingTabIsReenabled() {
+        let subject = makeRuntimeCloseWarningTestSubject()
+        var promptCount = 0
+        subject.manager.confirmCloseHandler = { _, _, _ in
+            promptCount += 1
+            return false
+        }
+
+        UserDefaults.standard.set(true, forKey: warnBeforeClosingTabDefaultsKey)
+        subject.manager.closeRuntimeSurfaceWithConfirmation(tabId: subject.workspace.id, surfaceId: subject.panelId)
+
+        XCTAssertEqual(promptCount, 1, "Re-enabling the warning should restore the close-tab confirmation dialog")
+        XCTAssertNotNil(subject.workspace.panels[subject.panelId], "Rejecting the restored prompt should keep the panel open")
     }
 
     func testCloseCurrentPanelClosesWorkspaceWhenItOwnsTheLastSurface() {
