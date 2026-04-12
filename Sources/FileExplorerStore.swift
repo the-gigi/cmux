@@ -4,6 +4,12 @@ import Foundation
 import QuartzCore
 import SwiftUI
 
+extension UserDefaults {
+    @objc dynamic var fileExplorerFeatureEnabled: Bool {
+        bool(forKey: FileExplorerFeatureSettings.enabledKey)
+    }
+}
+
 // MARK: - Explorer Visual Style
 
 enum FileExplorerStyle: Int, CaseIterable {
@@ -425,6 +431,9 @@ final class FileExplorerState: ObservableObject {
     @Published var isVisible: Bool {
         didSet { UserDefaults.standard.set(isVisible, forKey: "fileExplorer.isVisible") }
     }
+    @Published var isFeatureEnabled: Bool {
+        didSet { UserDefaults.standard.set(isFeatureEnabled, forKey: FileExplorerFeatureSettings.enabledKey) }
+    }
     @Published var width: CGFloat {
         didSet { UserDefaults.standard.set(Double(width), forKey: "fileExplorer.width") }
     }
@@ -440,15 +449,36 @@ final class FileExplorerState: ObservableObject {
         didSet { UserDefaults.standard.set(showHiddenFiles, forKey: "fileExplorer.showHidden") }
     }
 
+    private var defaultsObserver: NSKeyValueObservation?
+
     init() {
         let defaults = UserDefaults.standard
         self.isVisible = defaults.bool(forKey: "fileExplorer.isVisible")
+        self.isFeatureEnabled = FileExplorerFeatureSettings.isEnabled(defaults: defaults)
         let storedWidth = defaults.double(forKey: "fileExplorer.width")
         self.width = storedWidth > 0 ? CGFloat(storedWidth) : 220
         let storedPosition = defaults.double(forKey: "fileExplorer.dividerPosition")
         self.dividerPosition = storedPosition > 0 ? CGFloat(storedPosition) : 0.6
         let storedShowHidden = defaults.object(forKey: "fileExplorer.showHidden")
         self.showHiddenFiles = storedShowHidden == nil ? true : defaults.bool(forKey: "fileExplorer.showHidden")
+
+        // KVO on the specific UserDefaults key for reliable cross-window observation
+        defaultsObserver = UserDefaults.standard.observe(
+            \.fileExplorerFeatureEnabled,
+            options: [.new]
+        ) { [weak self] _, change in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let enabled = FileExplorerFeatureSettings.isEnabled()
+                if self.isFeatureEnabled != enabled {
+                    self.isFeatureEnabled = enabled
+                }
+            }
+        }
+    }
+
+    deinit {
+        defaultsObserver?.invalidate()
     }
 
     func toggle() {

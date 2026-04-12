@@ -1210,9 +1210,19 @@ final class UpdateTitlebarAccessoryController {
     private let fileExplorerIdentifier = NSUserInterfaceItemIdentifier("cmux.fileExplorerToggle")
     private let controlsControllers = NSHashTable<TitlebarControlsAccessoryViewController>.weakObjects()
     private var lastKnownPresentationMode: WorkspacePresentationModeSettings.Mode = WorkspacePresentationModeSettings.mode()
+    private var lastKnownFileExplorerEnabled: Bool = FileExplorerFeatureSettings.isEnabled()
+    private var fileExplorerKVO: NSKeyValueObservation?
 
     init(viewModel: UpdateViewModel) {
         self.updateViewModel = viewModel
+        fileExplorerKVO = UserDefaults.standard.observe(
+            \.fileExplorerFeatureEnabled,
+            options: [.new]
+        ) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.reattachIfFileExplorerFlagChanged()
+            }
+        }
     }
 
     deinit {
@@ -1273,7 +1283,16 @@ final class UpdateTitlebarAccessoryController {
         // AppKit does not provide a stable cross-SDK API for this. Startup scans handle this case.
     }
 
+    private func reattachIfFileExplorerFlagChanged() {
+        let enabled = FileExplorerFeatureSettings.isEnabled()
+        guard enabled != lastKnownFileExplorerEnabled else { return }
+        lastKnownFileExplorerEnabled = enabled
+        attachToExistingWindows()
+    }
+
     private func reattachIfPresentationModeChanged() {
+        reattachIfFileExplorerFlagChanged()
+
         let currentMode = WorkspacePresentationModeSettings.mode()
         guard currentMode != lastKnownPresentationMode else { return }
         lastKnownPresentationMode = currentMode
@@ -1367,13 +1386,20 @@ final class UpdateTitlebarAccessoryController {
             controlsControllers.add(controls)
         }
 
-        if !window.titlebarAccessoryViewControllers.contains(where: { $0.view.identifier == fileExplorerIdentifier }) {
-            let toggle = FileExplorerTitlebarAccessoryViewController(onToggle: {
-                AppDelegate.shared?.fileExplorerState?.toggle()
-            })
-            toggle.layoutAttribute = .trailing
-            toggle.view.identifier = fileExplorerIdentifier
-            window.addTitlebarAccessoryViewController(toggle)
+        if FileExplorerFeatureSettings.isEnabled() {
+            if !window.titlebarAccessoryViewControllers.contains(where: { $0.view.identifier == fileExplorerIdentifier }) {
+                let toggle = FileExplorerTitlebarAccessoryViewController(onToggle: {
+                    AppDelegate.shared?.fileExplorerState?.toggle()
+                })
+                toggle.layoutAttribute = .trailing
+                toggle.view.identifier = fileExplorerIdentifier
+                window.addTitlebarAccessoryViewController(toggle)
+            }
+        } else {
+            // Remove the button if the feature was disabled
+            if let index = window.titlebarAccessoryViewControllers.firstIndex(where: { $0.view.identifier == fileExplorerIdentifier }) {
+                window.removeTitlebarAccessoryViewController(at: index)
+            }
         }
 
         attachedWindows.add(window)
