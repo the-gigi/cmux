@@ -14718,11 +14718,27 @@ final class MobileDaemonBridgeInline {
             return tag.isEmpty ? "\(appSupport)/cmuxd.sock" : "\(appSupport)/cmuxd-dev-\(tag).sock"
         }()
 
-        // Kill any existing daemon on this socket so we get exactly one per DEV instance
-        killDaemonOnSocket(socketPath: daemonSocket)
-
         let port = resolvePort(env)
         let secret = loadOrGenerateSecret()
+
+        // If an existing daemon is already listening on this socket, reuse
+        // it. This preserves PTY sessions across macOS app restarts (the
+        // daemon intentionally survives quit so iOS clients keep their
+        // terminals). Only start a new daemon if nothing is listening.
+        if isReachableSocket(daemonSocket) {
+            self.wsPort = port
+            self.daemonSocketPath = daemonSocket
+            self.wsSecret = secret
+            let debugSocketPath = SocketControlSettings.socketPath()
+            let wsportPath = debugSocketPath.replacingOccurrences(of: ".sock", with: ".wsport")
+            try? String(port).write(toFile: wsportPath, atomically: true, encoding: .utf8)
+            wsPortFilePath = wsportPath
+            NSLog("📱 MobileBridge: reusing existing daemon on %@", daemonSocket)
+            return
+        }
+
+        // No existing daemon — start fresh.
+        killDaemonOnSocket(socketPath: daemonSocket)
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
@@ -14802,6 +14818,25 @@ final class MobileDaemonBridgeInline {
     }
 
     /// Kill any cmuxd-remote process listening on the given socket path.
+    private func isReachableSocket(_ path: String) -> Bool {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { Darwin.close(fd) }
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let pathSize = MemoryLayout.size(ofValue: addr.sun_path)
+        path.withCString { cstr in
+            _ = memcpy(&addr.sun_path, cstr, min(Int(strlen(cstr)), pathSize - 1))
+        }
+        let addrLen = socklen_t(MemoryLayout<sockaddr_un>.size)
+        return withUnsafePointer(to: &addr) { addrPtr in
+            addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+                Darwin.connect(fd, sockaddrPtr, addrLen)
+            }
+        } == 0
+    }
+
     private func killDaemonOnSocket(socketPath: String) {
         // Use pgrep to find processes with this socket path in their args
         let pipe = Pipe()
