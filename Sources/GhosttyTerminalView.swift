@@ -10280,15 +10280,13 @@ final class GhosttySurfaceScrollView: NSView {
                 logDropZoneOverlay(event: "update", zone: zone, frame: targetFrame)
             }
 #endif
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.18
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                if needsFrameUpdate {
-                    dropZoneOverlayView.animator().frame = targetFrame
-                }
-                if dropZoneOverlayView.alphaValue < 1 {
-                    dropZoneOverlayView.animator().alphaValue = 1
-                }
+            // During an active drag, applying frame updates immediately keeps the
+            // overlay locked to the latest drop zone instead of "chasing" it.
+            if needsFrameUpdate {
+                applyDropZoneOverlayFrame(targetFrame)
+            }
+            if dropZoneOverlayView.alphaValue < 1 {
+                dropZoneOverlayView.alphaValue = 1
             }
         } else {
             guard !dropZoneOverlayView.isHidden else { return }

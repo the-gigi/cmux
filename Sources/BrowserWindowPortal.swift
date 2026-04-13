@@ -2021,15 +2021,13 @@ final class WindowBrowserSlotView: NSView {
         }
 
         bringInteractionLayersToFrontIfNeeded()
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.18
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            if needsFrameUpdate {
-                dropZoneOverlayView.animator().frame = targetFrame
-            }
-            if dropZoneOverlayView.alphaValue < 1 {
-                dropZoneOverlayView.animator().alphaValue = 1
-            }
+        // Keep drag-follow updates immediate so the overlay stays anchored to the
+        // current drop zone without animation lag.
+        if needsFrameUpdate {
+            applyDropZoneOverlayFrame(targetFrame)
+        }
+        if dropZoneOverlayView.alphaValue < 1 {
+            dropZoneOverlayView.alphaValue = 1
         }
     }
 

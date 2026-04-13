@@ -1,5 +1,4 @@
 import AppKit
-import Bonsplit
 import Combine
 import SwiftUI
 
@@ -665,6 +664,5 @@ final class FileExplorerRowView: NSTableRowView {
         isSelected ? .emphasized : .normal
     }
 }
-
 
 
