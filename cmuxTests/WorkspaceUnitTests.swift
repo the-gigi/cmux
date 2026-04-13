@@ -889,6 +889,53 @@ final class KeyboardShortcutSettingsFileStoreTests: XCTestCase {
         XCTAssertNil(defaults.data(forKey: settingsFileBackupsDefaultsKey))
     }
 
+    func testWarnBeforeQuitSettingOverridesLegacyWarnBeforeClosingTab() throws {
+        let defaults = UserDefaults.standard
+        let managedKey = QuitWarningSettings.warnBeforeQuitKey
+        let previousValue = defaults.object(forKey: managedKey)
+        let previousBackups = defaults.data(forKey: settingsFileBackupsDefaultsKey)
+        defer {
+            if let previousValue {
+                defaults.set(previousValue, forKey: managedKey)
+            } else {
+                defaults.removeObject(forKey: managedKey)
+            }
+
+            if let previousBackups {
+                defaults.set(previousBackups, forKey: settingsFileBackupsDefaultsKey)
+            } else {
+                defaults.removeObject(forKey: settingsFileBackupsDefaultsKey)
+            }
+        }
+
+        defaults.removeObject(forKey: managedKey)
+        defaults.removeObject(forKey: settingsFileBackupsDefaultsKey)
+
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let settingsFileURL = directoryURL.appendingPathComponent("settings.json", isDirectory: false)
+        try writeSettingsFile(
+            """
+            {
+              "app": {
+                "warnBeforeQuit": false,
+                "warnBeforeClosingTab": true
+              }
+            }
+            """,
+            to: settingsFileURL
+        )
+
+        _ = KeyboardShortcutSettingsFileStore(
+            primaryPath: settingsFileURL.path,
+            fallbackPath: nil,
+            startWatching: false
+        )
+
+        XCTAssertEqual(defaults.object(forKey: managedKey) as? Bool, false)
+    }
+
     func testSettingsFileStoreAppliesWorkspaceColorDictionaryAndAllowsRemovingDefaults() throws {
         let defaults = UserDefaults.standard
         let previousPalette = defaults.dictionary(forKey: WorkspaceTabColorSettings.paletteKey) as? [String: String]

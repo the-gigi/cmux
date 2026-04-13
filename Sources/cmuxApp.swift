@@ -3774,19 +3774,18 @@ enum QuitWarningSettings {
     }
 }
 
+// CloseTabWarningSettings is now unified with QuitWarningSettings — a single
+// toggle controls all quit/close confirmation dialogs.
 enum CloseTabWarningSettings {
-    static let warnBeforeClosingTabKey = "warnBeforeClosingTabShortcut"
-    static let defaultWarnBeforeClosingTab = true
+    static let warnBeforeClosingTabKey = QuitWarningSettings.warnBeforeQuitKey
+    static let defaultWarnBeforeClosingTab = QuitWarningSettings.defaultWarnBeforeQuit
 
     static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
-        if defaults.object(forKey: warnBeforeClosingTabKey) == nil {
-            return defaultWarnBeforeClosingTab
-        }
-        return defaults.bool(forKey: warnBeforeClosingTabKey)
+        QuitWarningSettings.isEnabled(defaults: defaults)
     }
 
     static func setEnabled(_ isEnabled: Bool, defaults: UserDefaults = .standard) {
-        defaults.set(isEnabled, forKey: warnBeforeClosingTabKey)
+        QuitWarningSettings.setEnabled(isEnabled, defaults: defaults)
     }
 }
 
@@ -4135,8 +4134,6 @@ struct SettingsView: View {
     @AppStorage(NotificationPaneFlashSettings.enabledKey) private var notificationPaneFlashEnabled = NotificationPaneFlashSettings.defaultEnabled
     @AppStorage(MenuBarExtraSettings.showInMenuBarKey) private var showMenuBarExtra = MenuBarExtraSettings.defaultShowInMenuBar
     @AppStorage(QuitWarningSettings.warnBeforeQuitKey) private var warnBeforeQuitShortcut = QuitWarningSettings.defaultWarnBeforeQuit
-    @AppStorage(CloseTabWarningSettings.warnBeforeClosingTabKey)
-    private var warnBeforeClosingTabShortcut = CloseTabWarningSettings.defaultWarnBeforeClosingTab
     @AppStorage(CommandPaletteRenameSelectionSettings.selectAllOnFocusKey)
     private var commandPaletteRenameSelectAllOnFocus = CommandPaletteRenameSelectionSettings.defaultSelectAllOnFocus
     @AppStorage(CommandPaletteSwitcherSearchSettings.searchAllSurfacesKey)
@@ -4998,29 +4995,12 @@ struct SettingsView: View {
                             configurationReview: .json("app.warnBeforeQuit"),
                             String(localized: "settings.app.warnBeforeQuit", defaultValue: "Warn Before Quit"),
                             subtitle: warnBeforeQuitShortcut
-                                ? String(localized: "settings.app.warnBeforeQuit.subtitleOn", defaultValue: "Show a confirmation before quitting with Cmd+Q.")
-                                : String(localized: "settings.app.warnBeforeQuit.subtitleOff", defaultValue: "Cmd+Q quits immediately without confirmation.")
+                                ? String(localized: "settings.app.warnBeforeQuit.subtitleOn", defaultValue: "Show a confirmation before quitting or closing tabs and workspaces.")
+                                : String(localized: "settings.app.warnBeforeQuit.subtitleOff", defaultValue: "Quit and close without confirmation.")
                         ) {
                             Toggle("", isOn: $warnBeforeQuitShortcut)
                                 .labelsHidden()
                                 .controlSize(.small)
-                        }
-
-                        SettingsCardDivider()
-
-                        SettingsCardRow(
-                            configurationReview: .json("app.warnBeforeClosingTab"),
-                            String(localized: "settings.app.warnBeforeClosingTab", defaultValue: "Warn Before Closing Tab"),
-                            subtitle: warnBeforeClosingTabShortcut
-                                ? String(localized: "settings.app.warnBeforeClosingTab.subtitleOn", defaultValue: "Show a confirmation before closing a tab with Cmd+W.")
-                                : String(localized: "settings.app.warnBeforeClosingTab.subtitleOff", defaultValue: "Cmd+W closes the current tab immediately without confirmation.")
-                        ) {
-                            Toggle("", isOn: $warnBeforeClosingTabShortcut)
-                                .labelsHidden()
-                                .controlSize(.small)
-                                .accessibilityLabel(
-                                    String(localized: "settings.app.warnBeforeClosingTab", defaultValue: "Warn Before Closing Tab")
-                                )
                         }
 
                         SettingsCardDivider()
@@ -6238,7 +6218,6 @@ struct SettingsView: View {
         notificationPaneFlashEnabled = NotificationPaneFlashSettings.defaultEnabled
         showMenuBarExtra = MenuBarExtraSettings.defaultShowInMenuBar
         warnBeforeQuitShortcut = QuitWarningSettings.defaultWarnBeforeQuit
-        warnBeforeClosingTabShortcut = CloseTabWarningSettings.defaultWarnBeforeClosingTab
         commandPaletteRenameSelectAllOnFocus = CommandPaletteRenameSelectionSettings.defaultSelectAllOnFocus
         commandPaletteSearchAllSurfaces = CommandPaletteSwitcherSearchSettings.defaultSearchAllSurfaces
         ShortcutHintDebugSettings.resetVisibilityDefaults()

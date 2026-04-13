@@ -281,6 +281,21 @@ fi
 
 "$PWD/scripts/ensure-ghosttykit.sh"
 
+# Install the cmux clang wrapper toolchain. This works around a SwiftBuild
+# spec-discovery deadlock (clang -v -E -dM probe filling the pipe buffer)
+# that wedges xcodebuild before any compile starts on macOS 26.3 + Xcode
+# 26.4. The installer is idempotent and fast on subsequent runs. We export
+# TOOLCHAINS so every subsequent xcodebuild in this script picks it up.
+# Setting CMUX_DISABLE_CLANG_WRAPPER=1 skips the workaround.
+if [[ "${CMUX_DISABLE_CLANG_WRAPPER:-}" != "1" ]]; then
+  if CMUX_CLANG_TOOLCHAIN_ID="$("$PWD/scripts/install-clang-wrapper.sh" 2>/dev/null)" \
+     && [[ -n "$CMUX_CLANG_TOOLCHAIN_ID" ]]; then
+    export TOOLCHAINS="$CMUX_CLANG_TOOLCHAIN_ID"
+  else
+    echo "warning: scripts/install-clang-wrapper.sh failed; xcodebuild may hang on the spec-discovery clang probe" >&2
+  fi
+fi
+
 if should_skip_ghostty_cli_helper_zig_build; then
   if [[ "${CMUX_SKIP_ZIG_BUILD:-}" != "1" ]]; then
     echo "Auto-enabling CMUX_SKIP_ZIG_BUILD=1 for Ghostty CLI helper (${AUTO_SKIP_ZIG_BUILD_REASON})"

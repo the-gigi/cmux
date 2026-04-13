@@ -81,12 +81,7 @@
         "warnBeforeQuit": {
           "type": "boolean",
           "default": true,
-          "description": "Show a confirmation before quitting cmux."
-        },
-        "warnBeforeClosingTab": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show a confirmation before closing a tab."
+          "description": "Show a confirmation before quitting, closing tabs, or closing workspaces."
         },
         "renameSelectsExistingName": {
           "type": "boolean",
