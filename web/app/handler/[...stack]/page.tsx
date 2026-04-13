@@ -5,7 +5,7 @@ import { stackServerApp } from "../../lib/stack";
 export default function StackHandlerPage(props: { params: Promise<{ stack: string[] }> }) {
   return (
     <Suspense>
-      <StackHandler app={stackServerApp} params={props.params} />
+      <StackHandler fullPage app={stackServerApp} params={props.params} />
     </Suspense>
   );
 }
