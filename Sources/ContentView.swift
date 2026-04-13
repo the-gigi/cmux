@@ -2764,7 +2764,7 @@ struct ContentView: View {
         // File explorer is always in the view tree. Visibility is controlled by
         // frame width (0 when hidden), avoiding SwiftUI view insertion/removal
         // and all associated transition animations.
-        let explorerVisible = fileExplorerState.isVisible && fileExplorerState.isFeatureEnabled
+        let explorerVisible = fileExplorerState.isVisible
         return HStack(spacing: 0) {
             terminalContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -11234,24 +11234,6 @@ private struct SidebarFooterButtons: View {
     var body: some View {
         HStack(spacing: 4) {
             SidebarHelpMenuButton(onSendFeedback: onSendFeedback)
-
-            if fileExplorerState.isFeatureEnabled {
-                Button(action: { fileExplorerState.toggle() }) {
-                    Image(systemName: fileExplorerState.isVisible ? "folder.fill" : "folder")
-                        .font(.system(size: 12))
-                        .foregroundStyle(fileExplorerState.isVisible ? Color.accentColor : Color(nsColor: .secondaryLabelColor))
-                }
-                .buttonStyle(SidebarFooterIconButtonStyle())
-                .frame(width: 22, height: 22, alignment: .center)
-                .help(fileExplorerState.isVisible
-                    ? String(localized: "sidebar.fileExplorer.hide", defaultValue: "Hide File Explorer")
-                    : String(localized: "sidebar.fileExplorer.show", defaultValue: "Show File Explorer"))
-                .accessibilityLabel(fileExplorerState.isVisible
-                    ? String(localized: "sidebar.fileExplorer.hide", defaultValue: "Hide File Explorer")
-                    : String(localized: "sidebar.fileExplorer.show", defaultValue: "Show File Explorer"))
-                .accessibilityIdentifier("sidebarFooter.toggleFileExplorer")
-            }
-
             UpdatePill(model: updateViewModel)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

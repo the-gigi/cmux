@@ -87,15 +87,6 @@ enum WorkspaceButtonFadeSettings {
     }
 }
 
-enum FileExplorerFeatureSettings {
-    static let enabledKey = "fileExplorer.featureEnabled"
-    static let defaultEnabled = false
-
-    static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
-        defaults.object(forKey: enabledKey) as? Bool ?? defaultEnabled
-    }
-}
-
 enum PaneFirstClickFocusSettings {
     static let enabledKey = "paneFirstClickFocus.enabled"
     static let defaultEnabled = false
@@ -2724,7 +2715,6 @@ private struct FileExplorerStyleDebugView: View {
 
 extension Notification.Name {
     static let fileExplorerStyleDidChange = Notification.Name("fileExplorerStyleDidChange")
-    static let fileExplorerFeatureToggled = Notification.Name("fileExplorerFeatureToggled")
     static let titlebarShortcutHintsVisibilityChanged = Notification.Name("titlebarShortcutHintsVisibilityChanged")
 }
 
@@ -4257,8 +4247,6 @@ struct SettingsView: View {
     private var closeWorkspaceOnLastSurfaceShortcut = LastSurfaceCloseShortcutSettings.defaultValue
     @AppStorage(PaneFirstClickFocusSettings.enabledKey)
     private var paneFirstClickFocusEnabled = PaneFirstClickFocusSettings.defaultEnabled
-    @AppStorage(FileExplorerFeatureSettings.enabledKey)
-    private var fileExplorerFeatureEnabled = FileExplorerFeatureSettings.defaultEnabled
     @AppStorage(WorkspaceAutoReorderSettings.key) private var workspaceAutoReorder = WorkspaceAutoReorderSettings.defaultValue
     @AppStorage(SidebarWorkspaceDetailSettings.hideAllDetailsKey)
     private var sidebarHideAllDetails = SidebarWorkspaceDetailSettings.defaultHideAllDetails
@@ -4356,32 +4344,6 @@ struct SettingsView: View {
             localized: "settings.app.closeWorkspaceOnLastSurfaceShortcut.subtitleOff",
             defaultValue: "When the focused surface is the last one in its workspace, the close-surface shortcut also closes the workspace."
         )
-    }
-
-    @ViewBuilder
-    private var fileExplorerSettingsRow: some View {
-        SettingsCardRow(
-            configurationReview: .settingsOnly,
-            String(localized: "settings.app.fileExplorer", defaultValue: "File Explorer"),
-            subtitle: String(localized: "settings.app.fileExplorer.subtitle", defaultValue: "Show a file explorer panel on the right side of the terminal (Cmd+Option+B).")
-        ) {
-            Toggle("", isOn: Binding(
-                get: { fileExplorerFeatureEnabled },
-                set: { newValue in
-                    fileExplorerFeatureEnabled = newValue
-                    NotificationCenter.default.post(
-                        name: .fileExplorerFeatureToggled,
-                        object: nil,
-                        userInfo: ["enabled": newValue]
-                    )
-                }
-            ))
-            .labelsHidden()
-            .controlSize(.small)
-            .accessibilityLabel(
-                String(localized: "settings.app.fileExplorer", defaultValue: "File Explorer")
-            )
-        }
     }
 
     private var paneFirstClickFocusSubtitle: String {
@@ -4924,10 +4886,6 @@ struct SettingsView: View {
                                     String(localized: "settings.app.paneFirstClickFocus", defaultValue: "Focus Pane on First Click")
                                 )
                         }
-
-                        SettingsCardDivider()
-
-                        fileExplorerSettingsRow
 
                         SettingsCardDivider()
 
@@ -6375,7 +6333,6 @@ struct SettingsView: View {
         defaults.removeObject(forKey: WorkspaceButtonFadeSettings.legacyPaneTabBarControlsVisibilityModeKey)
         closeWorkspaceOnLastSurfaceShortcut = LastSurfaceCloseShortcutSettings.defaultValue
         paneFirstClickFocusEnabled = PaneFirstClickFocusSettings.defaultEnabled
-        fileExplorerFeatureEnabled = FileExplorerFeatureSettings.defaultEnabled
         workspaceAutoReorder = WorkspaceAutoReorderSettings.defaultValue
         sidebarHideAllDetails = SidebarWorkspaceDetailSettings.defaultHideAllDetails
         sidebarShowNotificationMessage = SidebarWorkspaceDetailSettings.defaultShowNotificationMessage

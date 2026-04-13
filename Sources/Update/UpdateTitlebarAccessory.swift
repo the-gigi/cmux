@@ -1207,29 +1207,16 @@ final class UpdateTitlebarAccessoryController {
     private var pendingAttachRetries: [ObjectIdentifier: Int] = [:]
     private var startupScanWorkItems: [DispatchWorkItem] = []
     private let controlsIdentifier = NSUserInterfaceItemIdentifier("cmux.titlebarControls")
-    private let fileExplorerIdentifier = NSUserInterfaceItemIdentifier("cmux.fileExplorerToggle")
     private let controlsControllers = NSHashTable<TitlebarControlsAccessoryViewController>.weakObjects()
     private var lastKnownPresentationMode: WorkspacePresentationModeSettings.Mode = WorkspacePresentationModeSettings.mode()
-    private var lastKnownFileExplorerEnabled: Bool = FileExplorerFeatureSettings.isEnabled()
-    private var fileExplorerObserver: NSObjectProtocol?
 
     init(viewModel: UpdateViewModel) {
         self.updateViewModel = viewModel
-        fileExplorerObserver = NotificationCenter.default.addObserver(
-            forName: .fileExplorerFeatureToggled,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.reattachIfFileExplorerFlagChanged()
-        }
     }
 
     deinit {
         for observer in observers {
             NotificationCenter.default.removeObserver(observer)
-        }
-        if let fileExplorerObserver {
-            NotificationCenter.default.removeObserver(fileExplorerObserver)
         }
     }
 
@@ -1285,15 +1272,7 @@ final class UpdateTitlebarAccessoryController {
         // AppKit does not provide a stable cross-SDK API for this. Startup scans handle this case.
     }
 
-    private func reattachIfFileExplorerFlagChanged() {
-        let enabled = FileExplorerFeatureSettings.isEnabled()
-        guard enabled != lastKnownFileExplorerEnabled else { return }
-        lastKnownFileExplorerEnabled = enabled
-        attachToExistingWindows()
-    }
-
     private func reattachIfPresentationModeChanged() {
-        reattachIfFileExplorerFlagChanged()
 
         let currentMode = WorkspacePresentationModeSettings.mode()
         guard currentMode != lastKnownPresentationMode else { return }
@@ -1372,10 +1351,7 @@ final class UpdateTitlebarAccessoryController {
 
         pendingAttachRetries.removeValue(forKey: ObjectIdentifier(window))
 
-        // Don't remove accessories in minimal mode. TitlebarControlsAccessoryViewController
-        // hides itself and zeros its frame via its own UserDefaults observer. Keeping it
-        // attached avoids fragile remove/re-add cycles on mode toggle.
-
+        // Don't re-attach controls if already attached.
         guard !attachedWindows.contains(window) else { return }
 
         if !window.titlebarAccessoryViewControllers.contains(where: { $0.view.identifier == controlsIdentifier }) {
@@ -1386,22 +1362,6 @@ final class UpdateTitlebarAccessoryController {
             controls.view.identifier = controlsIdentifier
             window.addTitlebarAccessoryViewController(controls)
             controlsControllers.add(controls)
-        }
-
-        if FileExplorerFeatureSettings.isEnabled() {
-            if !window.titlebarAccessoryViewControllers.contains(where: { $0.view.identifier == fileExplorerIdentifier }) {
-                let toggle = FileExplorerTitlebarAccessoryViewController(onToggle: {
-                    AppDelegate.shared?.fileExplorerState?.toggle()
-                })
-                toggle.layoutAttribute = .trailing
-                toggle.view.identifier = fileExplorerIdentifier
-                window.addTitlebarAccessoryViewController(toggle)
-            }
-        } else {
-            // Remove the button if the feature was disabled
-            if let index = window.titlebarAccessoryViewControllers.firstIndex(where: { $0.view.identifier == fileExplorerIdentifier }) {
-                window.removeTitlebarAccessoryViewController(at: index)
-            }
         }
 
         attachedWindows.add(window)
@@ -1418,7 +1378,7 @@ final class UpdateTitlebarAccessoryController {
     private func removeAccessoryIfPresent(from window: NSWindow) {
         let matchingIndices = window.titlebarAccessoryViewControllers.indices.reversed().filter { index in
             let id = window.titlebarAccessoryViewControllers[index].view.identifier
-            return id == controlsIdentifier || id == fileExplorerIdentifier
+            return id == controlsIdentifier
         }
         guard !matchingIndices.isEmpty || attachedWindows.contains(window) else { return }
 
