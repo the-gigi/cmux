@@ -11285,6 +11285,75 @@ extension Workspace: BonsplitDelegate {
     }
 
     @MainActor
+    enum EditorCloseDecision {
+        case save
+        case discard
+        case cancel
+    }
+
+    private func confirmCloseEditorPanel(editorPanel: EditorPanel, tabId: TabID) async -> EditorCloseDecision {
+        let alert = NSAlert()
+        let filename = (editorPanel.filePath as NSString).lastPathComponent
+        alert.messageText = String(
+            localized: "editor.closeConfirm.title",
+            defaultValue: "Save changes to \"\(filename)\" before closing?"
+        )
+        alert.informativeText = String(
+            localized: "editor.closeConfirm.message",
+            defaultValue: "Your changes will be lost if you don't save them."
+        )
+        alert.alertStyle = .warning
+
+        let saveButton = alert.addButton(withTitle: String(localized: "editor.closeConfirm.save", defaultValue: "Save"))
+        let cancelButton = alert.addButton(withTitle: String(localized: "editor.closeConfirm.cancel", defaultValue: "Cancel"))
+        let discardButton = alert.addButton(withTitle: String(localized: "editor.closeConfirm.discard", defaultValue: "Don't Save"))
+
+        saveButton.keyEquivalent = "\r"
+        cancelButton.keyEquivalent = "\u{1b}"
+        discardButton.keyEquivalent = "d"
+        discardButton.keyEquivalentModifierMask = [.command]
+
+        let response: NSApplication.ModalResponse
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            response = await withCheckedContinuation { continuation in
+                alert.beginSheetModal(for: window) { r in
+                    continuation.resume(returning: r)
+                }
+            }
+        } else {
+            response = alert.runModal()
+        }
+
+        switch response {
+        case .alertFirstButtonReturn:
+            return .save
+        case .alertThirdButtonReturn:
+            return .discard
+        default:
+            return .cancel
+        }
+    }
+
+    private func showEditorSaveFailureAlert(for editorPanel: EditorPanel) {
+        let alert = NSAlert()
+        let filename = (editorPanel.filePath as NSString).lastPathComponent
+        alert.messageText = String(
+            localized: "editor.saveFailed.title",
+            defaultValue: "Could not save \"\(filename)\""
+        )
+        alert.informativeText = String(
+            localized: "editor.saveFailed.message",
+            defaultValue: "The file may be read-only or the disk may be full. Your changes remain in the editor."
+        )
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: String(localized: "editor.saveFailed.ok", defaultValue: "OK"))
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            alert.beginSheetModal(for: window, completionHandler: nil)
+        } else {
+            alert.runModal()
+        }
+    }
+
     private func confirmClosePanel(for tabId: TabID) async -> Bool {
         let alert = NSAlert()
 
@@ -11751,6 +11820,42 @@ extension Workspace: BonsplitDelegate {
         if explicitUserClose && shouldCloseWorkspaceOnLastSurface(for: tab.id) {
             clearStagedClosedBrowserRestoreSnapshot(for: tab.id)
             owningTabManager?.closeWorkspaceWithConfirmation(self)
+            return false
+        }
+
+        // Editor panels need their own save/discard/cancel dialog when the buffer
+        // is dirty. Handle this branch before the terminal-specific path below.
+        if let panelId = panelIdFromSurfaceId(tab.id),
+           let editorPanel = editorPanel(for: panelId),
+           editorPanel.isDirty {
+            if pendingCloseConfirmTabIds.contains(tab.id) {
+                return false
+            }
+            pendingCloseConfirmTabIds.insert(tab.id)
+            let tabId = tab.id
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                Task { @MainActor in
+                    defer { self.pendingCloseConfirmTabIds.remove(tabId) }
+                    guard let stillPanelId = self.panelIdFromSurfaceId(tabId),
+                          let stillEditor = self.editorPanel(for: stillPanelId) else { return }
+                    let decision = await self.confirmCloseEditorPanel(editorPanel: stillEditor, tabId: tabId)
+                    switch decision {
+                    case .cancel:
+                        return
+                    case .discard:
+                        self.forceCloseTabIds.insert(tabId)
+                        self.bonsplitController.closeTab(tabId)
+                    case .save:
+                        if stillEditor.save() {
+                            self.forceCloseTabIds.insert(tabId)
+                            self.bonsplitController.closeTab(tabId)
+                        } else {
+                            self.showEditorSaveFailureAlert(for: stillEditor)
+                        }
+                    }
+                }
+            }
             return false
         }
 

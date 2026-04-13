@@ -86,10 +86,9 @@ final class EditorPanel: Panel, ObservableObject {
     }
 
     func close() {
-        if isDirty {
-            // If save fails, keep the panel alive and preserve the dirty buffer.
-            guard save() else { return }
-        }
+        // The dirty-buffer save/discard decision is made by the workspace's
+        // `shouldCloseTab` confirmation path before `close()` is ever called;
+        // this hook only tears down the file watcher.
         isClosed = true
         stopFileWatcher()
     }
