@@ -2102,6 +2102,8 @@ class TerminalController {
             return v2Result(id: id, self.v2WorkspaceLast(params: params))
         case "workspace.equalize_splits":
             return v2Result(id: id, self.v2WorkspaceEqualizeSplits(params: params))
+        case "workspace.ensure_surfaces":
+            return v2Result(id: id, self.v2WorkspaceEnsureSurfaces(params: params))
         case "workspace.remote.configure":
             return v2Result(id: id, self.v2WorkspaceRemoteConfigure(params: params))
         case "workspace.remote.foreground_auth_ready":
@@ -3831,6 +3833,54 @@ class TerminalController {
             ])
         }
         return result
+    }
+
+    /// Force-create all Ghostty surfaces for a workspace's terminal panels.
+    /// Normally surfaces are created lazily when the view appears in a window.
+    /// This command bypasses that for headless testing (SSH, CI) so the
+    /// DaemonTerminalBridge starts and attaches to saved sessions.
+    private func v2WorkspaceEnsureSurfaces(params: [String: Any]) -> V2CallResult {
+        guard let tabManager = v2ResolveTabManager(params: params) else {
+            return .err(code: "unavailable", message: "TabManager not available", data: nil)
+        }
+
+        var created = 0
+        var total = 0
+        v2MainSync {
+            guard let ws = v2ResolveWorkspace(params: params, tabManager: tabManager) else { return }
+            let terminalPanels = ws.panels.values.compactMap { $0 as? TerminalPanel }
+            total = terminalPanels.count
+            for panel in terminalPanels {
+                let surface = panel.surface
+                if surface.daemonBridge != nil {
+                    created += 1
+                    continue
+                }
+                // The DaemonTerminalBridge normally starts inside
+                // createSurface() which is triggered by the SwiftUI
+                // view lifecycle. For headless testing, start the
+                // bridge directly if the daemon is running.
+                guard let daemonSocket = MobileDaemonBridgeInline.shared.daemonSocketPath,
+                      MobileDaemonBridgeInline.shared.isRunning else { continue }
+                let sessionID = surface.savedDaemonSessionID
+                    ?? DaemonTerminalBridge.computeSessionID(
+                        workspaceID: ws.id,
+                        surfaceID: surface.id
+                    )
+                let bridge = DaemonTerminalBridge(
+                    socketPath: daemonSocket,
+                    sessionID: sessionID,
+                    shellCommand: "/bin/zsh -l"
+                )
+                surface.daemonBridge = bridge
+                bridge.start(cols: 80, rows: 24)
+                created += 1
+            }
+        }
+        return .ok([
+            "total": total,
+            "created": created,
+        ])
     }
 
     private func v2WorkspaceEqualizeSplits(params: [String: Any]) -> V2CallResult {
