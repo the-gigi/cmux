@@ -1215,7 +1215,7 @@ final class WorkspaceNotificationPresentationStoreTests: XCTestCase {
         super.tearDown()
     }
 
-    func testWorkspacePresentationStoreIgnoresUnrelatedWorkspaceNotifications() {
+    func testWorkspacePresentationStoreIgnoresUnrelatedWorkspaceNotifications() throws {
         let store = TerminalNotificationStore.shared
         let workspaceId = UUID()
         let otherWorkspaceId = UUID()

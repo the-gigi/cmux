@@ -980,15 +980,35 @@ final class TerminalNotificationStore: ObservableObject {
     }
 
     func workspaceSnapshot(forTabId tabId: UUID) -> TerminalNotificationWorkspaceSnapshot {
+        Self.workspaceSnapshot(
+            forTabId: tabId,
+            notifications: notifications,
+            focusedReadIndicatorByTabId: focusedReadIndicatorByTabId
+        )
+    }
+
+    private static func workspaceSnapshot(
+        forTabId tabId: UUID,
+        notifications: [TerminalNotification],
+        focusedReadIndicatorByTabId: [UUID: UUID]
+    ) -> TerminalNotificationWorkspaceSnapshot {
+        var unreadCount = 0
         var hasRead = false
         var visibleSurfaceIds = Set<UUID>()
         let focusedReadIndicatorSurfaceId = focusedReadIndicatorByTabId[tabId]
+        var latestNotification: TerminalNotification?
 
         for notification in notifications where notification.tabId == tabId {
+            if latestNotification == nil {
+                latestNotification = notification
+            }
             if notification.isRead {
                 hasRead = true
             } else if let surfaceId = notification.surfaceId {
+                unreadCount += 1
                 visibleSurfaceIds.insert(surfaceId)
+            } else {
+                unreadCount += 1
             }
         }
 
@@ -998,10 +1018,10 @@ final class TerminalNotificationStore: ObservableObject {
 
         return TerminalNotificationWorkspaceSnapshot(
             tabId: tabId,
-            unreadCount: unreadCount(forTabId: tabId),
+            unreadCount: unreadCount,
             hasRead: hasRead,
             visibleSurfaceIds: visibleSurfaceIds,
-            latestNotification: latestNotification(forTabId: tabId),
+            latestNotification: latestNotification,
             focusedReadIndicatorSurfaceId: focusedReadIndicatorSurfaceId
         )
     }
@@ -1012,8 +1032,12 @@ final class TerminalNotificationStore: ObservableObject {
 
     func workspaceSnapshotPublisher(forTabId tabId: UUID) -> AnyPublisher<TerminalNotificationWorkspaceSnapshot, Never> {
         Publishers.CombineLatest($notifications, $focusedReadIndicatorByTabId)
-            .map { [weak self] _, _ in
-                self?.workspaceSnapshot(forTabId: tabId) ?? .empty
+            .map { notifications, focusedReadIndicatorByTabId in
+                Self.workspaceSnapshot(
+                    forTabId: tabId,
+                    notifications: notifications,
+                    focusedReadIndicatorByTabId: focusedReadIndicatorByTabId
+                )
             }
             .removeDuplicates()
             .eraseToAnyPublisher()
