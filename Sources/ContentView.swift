@@ -2051,7 +2051,7 @@ struct ContentView: View {
         case let browser as BrowserPanel:
             targetView = browser.webView
         case let vnc as VncPanel:
-            targetView = vnc.webView
+            targetView = vnc.nativeSessionHostView ?? vnc.webView
         default:
             targetView = nil
         }

@@ -239,7 +239,7 @@ struct SessionBrowserPanelSnapshot: Codable, Sendable {
 struct SessionVncPanelSnapshot: Codable, Sendable {
     var endpointInput: String?
     var usernameInput: String?
-    var autoConnect: Bool
+    var autoConnect: Bool = false
 }
 
 struct SessionMarkdownPanelSnapshot: Codable, Sendable {

@@ -441,8 +441,7 @@ struct VncPanelView: View {
                 !panel.passwordInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             return !(usernameReady && passwordReady)
         }
-        return panel.connectionState == .connecting ||
-            panel.endpointInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return panel.endpointInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var hostPickerTitle: String {
@@ -547,7 +546,7 @@ struct VncPanelView: View {
             focusedField = .password
         }
         .onChange(of: panel.connectionState) { state in
-            if state == .connected {
+            if state == .connected, isFocused {
                 panel.focus()
             }
         }

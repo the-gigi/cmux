@@ -305,7 +305,15 @@ private enum VncRecentTargetsStore {
 }
 
 private enum VncSSHHostAliasResolver {
-    static func resolve(host: String) -> String? {
+    static func resolve(host: String) async -> String? {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            resolveBlocking(host: trimmed)
+        }.value
+    }
+
+    private static func resolveBlocking(host: String) -> String? {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/ssh") else {
@@ -500,7 +508,12 @@ final class VncWebSocketProxyBridge {
             throw NSError(
                 domain: "cmux.vnc.proxy",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid remote VNC port."]
+                userInfo: [
+                    NSLocalizedDescriptionKey: String(
+                        localized: "vnc.error.invalidRemotePort",
+                        defaultValue: "Invalid remote VNC port."
+                    )
+                ]
             )
         }
 
@@ -524,7 +537,14 @@ final class VncWebSocketProxyBridge {
             switch state {
             case .ready:
                 guard let listenerPort = listener?.port?.rawValue else {
-                    self.emit(.failed("VNC local proxy did not expose a loopback port."))
+                    self.emit(
+                        .failed(
+                            String(
+                                localized: "vnc.error.loopbackProxyPortUnavailable",
+                                defaultValue: "VNC local proxy did not expose a loopback port."
+                            )
+                        )
+                    )
                     return
                 }
                 self.emit(.listenerReady(port: listenerPort))
@@ -588,7 +608,14 @@ final class VncWebSocketProxyBridge {
     private func connectRemote() {
         guard remoteConnection == nil else { return }
         guard let nwPort = NWEndpoint.Port(rawValue: remotePort) else {
-            emit(.failed("Invalid remote VNC port."))
+            emit(
+                .failed(
+                    String(
+                        localized: "vnc.error.invalidRemotePort",
+                        defaultValue: "Invalid remote VNC port."
+                    )
+                )
+            )
             stopLocked()
             return
         }
@@ -1490,6 +1517,7 @@ final class VncPanel: Panel, ObservableObject {
     private var bonjourDiscovery: VncBonjourDiscovery?
     private var nativeSessionController: VncNativeSessionController?
     private var inputTelemetry = InputTelemetry()
+    private var connectAttemptID = UUID()
 
     init(
         workspaceId: UUID,
@@ -1523,27 +1551,12 @@ final class VncPanel: Panel, ObservableObject {
             configuration.defaultWebpagePreferences.allowsContentJavaScript = true
             configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
 
-            let userContentController = WKUserContentController()
-            configuration.userContentController = userContentController
             let webView = CmuxWebView(frame: .zero, configuration: configuration)
             webView.underPageBackgroundColor = NSColor.black
             webView.allowsBackForwardNavigationGestures = false
             webView.allowsLinkPreview = false
             webView.setValue(false, forKey: "drawsBackground")
             self.webView = webView
-
-            let navigationDelegate = VncPanelNavigationDelegate()
-            navigationDelegate.didFailNavigation = { [weak self] detail in
-                Task { @MainActor [weak self] in
-                    self?.setError(detail)
-                }
-            }
-            self.navigationDelegate = navigationDelegate
-            webView.navigationDelegate = navigationDelegate
-
-            let handler = VncPanelScriptMessageHandler(panel: self)
-            self.messageHandler = handler
-            userContentController.add(handler, name: Self.scriptMessageHandlerName)
 
             loadViewer()
         }
@@ -1605,31 +1618,58 @@ final class VncPanel: Panel, ObservableObject {
         requiredCredentialFields = []
         endpointInput = target.displayString
         refreshDisplayTitle()
+        let attemptID = UUID()
+        connectAttemptID = attemptID
 
-        if let nativeSessionController {
-            let resolvedHost = VncSSHHostAliasResolver.resolve(host: target.host) ?? target.host
-            nativeSessionController.connect(
-                targetHost: resolvedHost,
-                port: target.port,
-                username: usernameInput,
-                password: passwordInput
+        guard nativeSessionController != nil else {
+            setError(
+                String(
+                    localized: "vnc.error.nativeRendererUnavailable",
+                    defaultValue: "Native VNC is unavailable on this macOS build."
+                )
             )
             return
         }
 
-        let bridge = VncWebSocketProxyBridge()
-        proxyBridge = bridge
-        let resolvedHost = VncSSHHostAliasResolver.resolve(host: target.host) ?? target.host
-
-        do {
-            try bridge.start(remoteHost: resolvedHost, remotePort: target.port) { [weak self] event in
-                DispatchQueue.main.async { [weak self] in
-                    self?.handleProxyEvent(event)
-                }
+        let username = usernameInput
+        let password = passwordInput
+        Task { [weak self] in
+            let resolvedHost = await VncSSHHostAliasResolver.resolve(host: target.host) ?? target.host
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                guard self.connectAttemptID == attemptID else { return }
+                guard self.activeTarget == target else { return }
+                self.startNativeConnection(
+                    targetHost: resolvedHost,
+                    port: target.port,
+                    username: username,
+                    password: password
+                )
             }
-        } catch {
-            setError(error.localizedDescription)
         }
+    }
+
+    private func startNativeConnection(
+        targetHost: String,
+        port: Int,
+        username: String,
+        password: String
+    ) {
+        guard let nativeSessionController else {
+            setError(
+                String(
+                    localized: "vnc.error.nativeRendererUnavailable",
+                    defaultValue: "Native VNC is unavailable on this macOS build."
+                )
+            )
+            return
+        }
+        nativeSessionController.connect(
+            targetHost: targetHost,
+            port: port,
+            username: username,
+            password: password
+        )
     }
 
     func disconnect() {
@@ -1666,11 +1706,11 @@ final class VncPanel: Panel, ObservableObject {
             connect()
             return
         }
-
-        let usernameLiteral = Self.javaScriptStringLiteral(usernameInput)
-        let passwordLiteral = Self.javaScriptStringLiteral(passwordInput)
-        evaluateViewerScript(
-            "window.cmuxVncSendCredentials && window.cmuxVncSendCredentials(\(usernameLiteral), \(passwordLiteral));"
+        setError(
+            String(
+                localized: "vnc.error.nativeRendererUnavailable",
+                defaultValue: "Native VNC is unavailable on this macOS build."
+            )
         )
     }
 
@@ -1696,11 +1736,13 @@ final class VncPanel: Panel, ObservableObject {
             return
         }
 
-        guard let webView, let window = webView.window else { return }
-        if !window.makeFirstResponder(webView) {
-            requestEndpointFieldFocus()
+        if let webView, let window = webView.window {
+            if !window.makeFirstResponder(webView) {
+                requestEndpointFieldFocus()
+            }
+            return
         }
-        evaluateViewerScript("window.cmuxVncFocus && window.cmuxVncFocus();")
+        requestEndpointFieldFocus()
     }
 
     func unfocus() {
@@ -1806,6 +1848,7 @@ final class VncPanel: Panel, ObservableObject {
     }
 
     private func disconnectFromCurrentSession(notifyViewer: Bool) {
+        connectAttemptID = UUID()
         nativeSessionController?.disconnect(suppressUpdate: true)
 
         proxyBridge?.stop()
@@ -1825,11 +1868,17 @@ final class VncPanel: Panel, ObservableObject {
             let usernameLiteral = Self.javaScriptStringLiteral(usernameInput)
             let passwordLiteral = Self.javaScriptStringLiteral(passwordInput)
             let websocketLiteral = Self.javaScriptStringLiteral(websocketURL)
+            let runtimeUnavailableDetailLiteral = Self.javaScriptStringLiteral(
+                String(
+                    localized: "vnc.error.viewerRuntimeUnavailable",
+                    defaultValue: "VNC viewer runtime unavailable."
+                )
+            )
             evaluateViewerScript(
                 """
                 (() => {
                   if (typeof window.cmuxVncConnect !== "function") {
-                    throw new Error("VNC viewer runtime unavailable.");
+                    throw new Error(\(runtimeUnavailableDetailLiteral));
                   }
                   window.cmuxVncConnect(\(websocketLiteral), \(usernameLiteral), \(passwordLiteral));
                   return true;
@@ -1959,6 +2008,7 @@ final class VncPanel: Panel, ObservableObject {
         let escaped = value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\0", with: "\\0")
             .replacingOccurrences(of: "\n", with: "\\n")
             .replacingOccurrences(of: "\r", with: "\\r")
         return "\"\(escaped)\""
@@ -2023,202 +2073,6 @@ final class VncPanel: Panel, ObservableObject {
         </head>
         <body>
           <div id="screen" tabindex="0"></div>
-          <script type="module" crossorigin="anonymous">
-          import RFB from "https://novnc.com/noVNC/core/rfb.js";
-          (() => {
-            const handler = (() => {
-              try {
-                return window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.\(scriptMessageHandlerName)
-                  ? window.webkit.messageHandlers.\(scriptMessageHandlerName)
-                  : null;
-              } catch (_) {
-                return null;
-              }
-            })();
-
-            const post = (type, payload = {}) => {
-              try {
-                if (!handler) return;
-                const message = Object.assign({ type }, payload);
-                handler.postMessage(message);
-              } catch (_) {}
-            };
-
-            const screen = document.getElementById("screen");
-            let rfb = null;
-            const LATENCY_REMOTE_RESIZE_FACTOR = 0.82;
-            const LATENCY_REMOTE_MIN_WIDTH = 960;
-            const LATENCY_REMOTE_MIN_HEIGHT = 600;
-
-            function installLowLatencyRemoteResize(rfbInstance) {
-              if (!rfbInstance ||
-                  typeof rfbInstance._requestRemoteResize !== "function" ||
-                  typeof rfbInstance._screenSize !== "function") {
-                return;
-              }
-
-              const originalRequestRemoteResize = rfbInstance._requestRemoteResize;
-              rfbInstance._requestRemoteResize = function () {
-                const originalScreenSize = this._screenSize;
-                this._screenSize = () => {
-                  const base = originalScreenSize.call(this);
-                  return {
-                    w: Math.max(
-                      LATENCY_REMOTE_MIN_WIDTH,
-                      Math.floor(base.w * LATENCY_REMOTE_RESIZE_FACTOR)
-                    ),
-                    h: Math.max(
-                      LATENCY_REMOTE_MIN_HEIGHT,
-                      Math.floor(base.h * LATENCY_REMOTE_RESIZE_FACTOR)
-                    ),
-                  };
-                };
-                try {
-                  return originalRequestRemoteResize.call(this);
-                } finally {
-                  this._screenSize = originalScreenSize;
-                }
-              };
-            }
-
-            let requestRemoteResize = () => {
-              if (!rfb || !rfb.resizeSession) {
-                return;
-              }
-              try {
-                if (typeof rfb._requestRemoteResize === "function") {
-                  rfb._requestRemoteResize();
-                } else {
-                  window.dispatchEvent(new Event("resize"));
-                }
-              } catch (_) {}
-            };
-            const resizeObserver = new ResizeObserver(() => {
-              requestRemoteResize();
-            });
-            resizeObserver.observe(screen);
-
-            function normalizeMessage(error) {
-              if (!error) return "";
-              if (typeof error === "string") return error;
-              if (error && typeof error.message === "string") return error.message;
-              try {
-                return JSON.stringify(error);
-              } catch (_) {
-                return String(error);
-              }
-            }
-
-            window.addEventListener("error", (event) => {
-              const message = normalizeMessage(
-                event && event.error ? event.error : (event ? event.message : "Viewer JavaScript error")
-              );
-              post("state", { state: "error", message });
-            });
-
-            window.addEventListener("unhandledrejection", (event) => {
-              const message = normalizeMessage(event ? event.reason : "Unhandled promise rejection");
-              post("state", { state: "error", message });
-            });
-
-            function disconnectCurrentRFB() {
-              if (!rfb) return;
-              try {
-                rfb.disconnect();
-              } catch (_) {}
-              rfb = null;
-            }
-
-            function resolvedCredentials(username, password) {
-              const credentials = {};
-              if (username) {
-                credentials.username = username;
-              }
-              if (password) {
-                credentials.password = password;
-              }
-              return Object.keys(credentials).length > 0 ? credentials : null;
-            }
-
-            window.cmuxVncConnect = function (wsURL, username, password) {
-              try {
-                disconnectCurrentRFB();
-                post("state", { state: "connecting" });
-                const options = { shared: false };
-                const credentials = resolvedCredentials(username, password);
-                if (credentials) {
-                  options.credentials = credentials;
-                }
-                rfb = new RFB(screen, wsURL, options);
-                installLowLatencyRemoteResize(rfb);
-                rfb.scaleViewport = true;
-                rfb.resizeSession = true;
-                rfb.clipViewport = false;
-                rfb.showDotCursor = false;
-                // Favor interaction latency for remote desktop chrome (menus, transitions).
-                rfb.qualityLevel = 3;
-                rfb.compressionLevel = 1;
-                requestRemoteResize();
-
-                rfb.addEventListener("connect", () => {
-                  post("state", { state: "connected" });
-                });
-
-                rfb.addEventListener("disconnect", (event) => {
-                  const clean = !!(event && event.detail && event.detail.clean);
-                  if (clean) {
-                    post("state", { state: "disconnected" });
-                  } else {
-                    const detail = normalizeMessage(event && event.detail ? event.detail.reason : null);
-                    post("state", { state: "error", message: detail });
-                  }
-                });
-
-                rfb.addEventListener("securityfailure", (event) => {
-                  const detail = normalizeMessage(event && event.detail ? event.detail.reason : null);
-                  post("state", { state: "error", message: detail });
-                });
-
-                rfb.addEventListener("credentialsrequired", (event) => {
-                  const rawTypes = event && event.detail && Array.isArray(event.detail.types)
-                    ? event.detail.types
-                    : [];
-                  const types = rawTypes
-                    .map((value) => (typeof value === "string" ? value.toLowerCase() : ""))
-                    .filter((value) => value.length > 0);
-                  post("credentialsRequired", { types });
-                });
-              } catch (error) {
-                post("state", { state: "error", message: normalizeMessage(error) });
-              }
-            };
-
-            window.cmuxVncSendCredentials = function (username, password) {
-              if (!rfb || typeof rfb.sendCredentials !== "function") {
-                return;
-              }
-              const credentials = resolvedCredentials(username, password) || {};
-              try {
-                rfb.sendCredentials(credentials);
-              } catch (error) {
-                post("state", { state: "error", message: normalizeMessage(error) });
-              }
-            };
-
-            window.cmuxVncDisconnect = function () {
-              disconnectCurrentRFB();
-              post("state", { state: "disconnected" });
-            };
-
-            window.cmuxVncFocus = function () {
-              try {
-                screen.focus();
-              } catch (_) {}
-            };
-
-            post("ready");
-          })();
-          </script>
         </body>
         </html>
         """

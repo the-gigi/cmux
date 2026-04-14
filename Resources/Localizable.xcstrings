@@ -87647,6 +87647,74 @@
         }
       }
     },
+    "vnc.error.invalidRemotePort": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid remote VNC port."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VNC のリモートポートが無効です。"
+          }
+        }
+      }
+    },
+    "vnc.error.loopbackProxyPortUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VNC local proxy did not expose a loopback port."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VNC ローカルプロキシがループバックポートを公開しませんでした。"
+          }
+        }
+      }
+    },
+    "vnc.error.nativeRendererUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Native VNC is unavailable on this macOS build."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この macOS ビルドではネイティブ VNC を利用できません。"
+          }
+        }
+      }
+    },
+    "vnc.error.viewerRuntimeUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VNC viewer runtime unavailable."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VNC ビューアランタイムを利用できません。"
+          }
+        }
+      }
+    },
     "vnc.panel.connecting": {
       "extractionState": "manual",
       "localizations": {
