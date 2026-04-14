@@ -599,7 +599,7 @@ final class FileExplorerStore: ObservableObject {
         guard !rootPath.isEmpty, provider != nil else { return }
         isRootLoading = true
         let path = rootPath
-        let task = Task { [weak self] in
+        let task = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.loadChildren(for: nil, at: path)
         }
@@ -614,7 +614,7 @@ final class FileExplorerStore: ObservableObject {
             node.error = nil
             objectWillChange.send()
             let nodePath = node.path
-            let task = Task { [weak self] in
+            let task = Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.loadChildren(for: node, at: nodePath)
             }
@@ -702,7 +702,7 @@ final class FileExplorerStore: ObservableObject {
                 child.isLoading = true
                 objectWillChange.send()
                 let childPath = child.path
-                let childTask = Task { [weak self] in
+                let childTask = Task { @MainActor [weak self] in
                     guard let self else { return }
                     await self.loadChildren(for: child, at: childPath)
                 }
