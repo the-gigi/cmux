@@ -43,6 +43,11 @@ final class EditorPanel: Panel, ObservableObject {
     /// `changed` message and lose the newest edits.
     var backendFlush: (() async -> Void)?
 
+    /// Optional hook invoked after a successful `save()` so the backend can
+    /// snapshot its "clean" baseline. Monaco uses this to reset its internal
+    /// savedVersionId so the next edit emits a fresh dirty transition.
+    var backendAfterSave: (() async -> Void)?
+
     /// Last known cursor/selection state. Persisted via session snapshot and
     /// restored into the text view when it is created.
     var cursorLocation: Int = 0

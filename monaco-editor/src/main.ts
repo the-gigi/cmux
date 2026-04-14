@@ -187,11 +187,11 @@ editor.onDidChangeCursorPosition(scheduleViewStateSnapshot);
 editor.onDidChangeCursorSelection(scheduleViewStateSnapshot);
 editor.onDidScrollChange(scheduleViewStateSnapshot);
 
-// Cmd+S → flush pending edits, then ask Swift to save.
-editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-  flushChanged();
-  postToSwift({ type: "saveRequested" });
-});
+// Save shortcut is owned by the Swift host (`KeyboardShortcutSettings.saveEditorFile`)
+// so users can rebind or disable it. `MonacoHostingWebView.performKeyEquivalent`
+// intercepts the keystroke and tells Swift to do the save. We deliberately do
+// NOT register a Monaco command here — that would hardcode Cmd+S and compete
+// with the configured binding.
 
 // --- Inbound command router --------------------------------------------------
 
@@ -307,6 +307,20 @@ window.cmuxMonaco = {
   // Returns "" when model is somehow gone.
   getValue(): string {
     return editor.getModel()?.getValue() ?? "";
+  },
+  // Called from Swift AFTER a successful disk save so Monaco's dirty
+  // detection treats the current model version as the new clean baseline.
+  // Without this, the buffer stays "dirty" from Monaco's perspective even
+  // though disk matches, and subsequent edits don't emit a fresh dirty=true
+  // transition.
+  markSaved(): void {
+    const model = editor.getModel();
+    if (!model) return;
+    savedVersionId = model.getVersionId();
+    if (lastNotifiedDirty !== false) {
+      lastNotifiedDirty = false;
+      postToSwift({ type: "dirty", isDirty: false, versionId: savedVersionId });
+    }
   },
 };
 

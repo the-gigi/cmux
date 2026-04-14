@@ -148,6 +148,9 @@ private struct MonacoWebViewRepresentable: NSViewRepresentable {
         webView.onClickRequestFocus = { [weak coordinator = context.coordinator] in
             coordinator?.requestExternalFocusAcknowledgement()
         }
+        webView.onSaveRequested = { [weak coordinator = context.coordinator] in
+            coordinator?.handleHostSaveShortcut()
+        }
         // Keep the webview opaque so WindowServer can composite it direct-to-
         // screen. Transparent WKWebViews fall back to an alpha-blended path
         // that adds perceptible input lag during typing. Ghostty-themed
@@ -199,6 +202,9 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         panel.backendFlush = { [weak self] in
             await self?.flushBufferFromMonaco()
         }
+        panel.backendAfterSave = { [weak self] in
+            self?.markMonacoClean()
+        }
         // Only observe content changes that were NOT originated by Monaco
         // itself. When Monaco posts a `changed` message and we set
         // `panel.content = value`, this sink would fire and push the same
@@ -249,14 +255,7 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             }
         case "saveRequested":
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                // Flush the live buffer over the bridge first; flushChanged()
-                // is already queued but we want the disk write to be the
-                // post-flush value, not the previous debounced snapshot.
-                await self.flushBufferFromMonaco()
-                if self.panel.isDirty, !self.panel.save() {
-                    EditorSaveAlert.show(for: self.panel)
-                }
+                await self?.performSaveAfterFlush()
             }
         case "viewState":
             handleViewState(payload: dict)
@@ -299,6 +298,39 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     func requestExternalFocusAcknowledgement() {
         onRequestPanelFocus()
         focusEditor()
+    }
+
+    /// Triggered by the configured `saveEditorFile` keyboard shortcut via
+    /// `MonacoHostingWebView.performKeyEquivalent`. Routes through the same
+    /// flush-then-save path that `saveRequested` uses so both paths stay
+    /// consistent.
+    func handleHostSaveShortcut() {
+        Task { @MainActor [weak self] in
+            await self?.performSaveAfterFlush()
+        }
+    }
+
+    private func performSaveAfterFlush() async {
+        // Flush the live buffer over the bridge first so the disk write
+        // includes the last keystroke, not the last debounced snapshot.
+        await flushBufferFromMonaco()
+        guard panel.isDirty else { return }
+        if panel.save() {
+            // Tell Monaco the current version is now the clean baseline so
+            // the next keystroke emits a fresh dirty=true transition; without
+            // this the dirty-ping short-circuit would keep Monaco reporting
+            // clean until the debounced `changed` re-establishes dirt.
+            markMonacoClean()
+        } else {
+            EditorSaveAlert.show(for: panel)
+        }
+    }
+
+    private func markMonacoClean() {
+        webView?.evaluateJavaScript(
+            "window.cmuxMonaco && window.cmuxMonaco.markSaved && window.cmuxMonaco.markSaved()",
+            completionHandler: nil
+        )
     }
 
     /// Pull the live buffer from Monaco over the JS bridge and write it into
@@ -422,6 +454,11 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 /// for panel-focus bookkeeping.
 final class MonacoHostingWebView: WKWebView {
     var onClickRequestFocus: (() -> Void)?
+    /// Invoked when the user triggers the configured
+    /// `KeyboardShortcutSettings.saveEditorFile` binding. The Monaco backend
+    /// does not register its own Cmd+S command so users can rebind or
+    /// disable save via settings.
+    var onSaveRequested: (() -> Void)?
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -433,6 +470,14 @@ final class MonacoHostingWebView: WKWebView {
         }
         onClickRequestFocus?()
         super.mouseDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if KeyboardShortcutSettings.shortcut(for: .saveEditorFile).matches(event: event) {
+            onSaveRequested?()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 }
 

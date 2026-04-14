@@ -75,6 +75,7 @@ declare global {
       apply(command: OutboundCommand): void;
       flushPendingEdits(): void;
       getValue(): string;
+      markSaved(): void;
     };
   }
 }

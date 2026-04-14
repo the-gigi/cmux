@@ -11874,6 +11874,7 @@ extension Workspace: BonsplitDelegate {
                         // the last debounced snapshot.
                         await stillEditor.backendFlush?()
                         if stillEditor.save() {
+                            await stillEditor.backendAfterSave?()
                             self.finalizeEditorCloseAfterDialog(tabId: tabId)
                         } else {
                             self.showEditorSaveFailureAlert(for: stillEditor)
