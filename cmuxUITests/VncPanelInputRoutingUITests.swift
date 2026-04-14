@@ -91,9 +91,9 @@ final class VncPanelInputRoutingUITests: XCTestCase {
         XCTAssertTrue(
             waitForVncState(surfaceId: surfaceId, timeout: 8.0) { state in
                 let textEvents = self.intValue(state["input_text_event_count"]) ?? 0
-                let lastText = self.stringValue(state["input_last_text"]) ?? ""
-                let hasNonASCII = lastText.unicodeScalars.contains { $0.value > 127 }
-                return textEvents >= 1 && hasNonASCII
+                let lastTextLength = self.intValue(state["input_last_text_length"]) ?? 0
+                let hasNonASCII = self.boolValue(state["input_last_text_contains_non_ascii"]) ?? false
+                return textEvents >= 1 && lastTextLength > 0 && hasNonASCII
             },
             "Expected VNC surface to capture Unicode/IME-style text input. state=\(vncState(surfaceId: surfaceId) ?? [:])"
         )
@@ -214,6 +214,26 @@ final class VncPanelInputRoutingUITests: XCTestCase {
     private func stringValue(_ value: Any?) -> String? {
         if value is NSNull { return nil }
         return value as? String
+    }
+
+    private func boolValue(_ value: Any?) -> Bool? {
+        if let boolValue = value as? Bool {
+            return boolValue
+        }
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+        if let string = value as? String {
+            switch string.lowercased() {
+            case "1", "true", "yes":
+                return true
+            case "0", "false", "no":
+                return false
+            default:
+                return nil
+            }
+        }
+        return nil
     }
 
     private final class ControlSocketClient {

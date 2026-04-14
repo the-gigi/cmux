@@ -6208,7 +6208,8 @@ class TerminalController {
                 "input_mouse_up_count": vncPanel.inputMouseUpCountForAutomation,
                 "input_mouse_dragged_count": vncPanel.inputMouseDraggedCountForAutomation,
                 "input_scroll_count": vncPanel.inputScrollCountForAutomation,
-                "input_last_text": v2OrNull(vncPanel.inputLastTextForAutomation)
+                "input_last_text_length": vncPanel.inputLastTextLengthForAutomation,
+                "input_last_text_contains_non_ascii": vncPanel.inputLastTextContainsNonASCIIForAutomation
             ])
         }
         return result
@@ -12724,7 +12725,8 @@ class TerminalController {
             let inputMouseUpCount = vncPanel.inputMouseUpCountForAutomation
             let inputMouseDraggedCount = vncPanel.inputMouseDraggedCountForAutomation
             let inputScrollCount = vncPanel.inputScrollCountForAutomation
-            let inputLastText = vncPanel.inputLastTextForAutomation ?? "none"
+            let inputLastTextLength = vncPanel.inputLastTextLengthForAutomation
+            let inputLastTextContainsNonASCII = vncPanel.inputLastTextContainsNonASCIIForAutomation ? "1" : "0"
 
             result = """
             panel=\(panelId.uuidString)
@@ -12745,7 +12747,8 @@ class TerminalController {
             input_mouse_up_count=\(inputMouseUpCount)
             input_mouse_dragged_count=\(inputMouseDraggedCount)
             input_scroll_count=\(inputScrollCount)
-            input_last_text=\(inputLastText)
+            input_last_text_length=\(inputLastTextLength)
+            input_last_text_contains_non_ascii=\(inputLastTextContainsNonASCII)
             """
         }
         return result

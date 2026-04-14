@@ -331,6 +331,10 @@ private enum VncSSHHostAliasResolver {
         let outputPipe = Pipe()
         process.standardOutput = outputPipe
         process.standardError = Pipe()
+        let exitSignal = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in
+            exitSignal.signal()
+        }
 
         do {
             try process.run()
@@ -338,7 +342,14 @@ private enum VncSSHHostAliasResolver {
             return nil
         }
 
-        process.waitUntilExit()
+        let waitResult = exitSignal.wait(timeout: .now() + 3.0)
+        if waitResult == .timedOut {
+            if process.isRunning {
+                process.terminate()
+            }
+            _ = exitSignal.wait(timeout: .now() + 0.2)
+            return nil
+        }
         guard process.terminationStatus == 0 else { return nil }
 
         let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
@@ -1366,11 +1377,11 @@ final class VncPanel: Panel, ObservableObject {
         var mouseUpCount: Int = 0
         var mouseDraggedCount: Int = 0
         var scrollCount: Int = 0
-        var lastText: String = ""
+        var lastTextLength: Int = 0
+        var lastTextContainsNonASCII: Bool = false
     }
 
     private static let scriptMessageHandlerName = "cmuxVncPanelState"
-    private static let fakeNativeUITestEnvKey = "CMUX_UI_TEST_VNC_FAKE_NATIVE"
 
     let id: UUID
     let panelType: PanelType = .vnc
@@ -1498,9 +1509,12 @@ final class VncPanel: Panel, ObservableObject {
         inputTelemetry.scrollCount
     }
 
-    var inputLastTextForAutomation: String? {
-        guard Self.shouldExposeRawInputTextForAutomation else { return nil }
-        return inputTelemetry.lastText.isEmpty ? nil : inputTelemetry.lastText
+    var inputLastTextLengthForAutomation: Int {
+        inputTelemetry.lastTextLength
+    }
+
+    var inputLastTextContainsNonASCIIForAutomation: Bool {
+        inputTelemetry.lastTextContainsNonASCII
     }
 
     var activationWindow: NSWindow? {
@@ -1520,10 +1534,6 @@ final class VncPanel: Panel, ObservableObject {
     private var nativeSessionController: VncNativeSessionController?
     private var inputTelemetry = InputTelemetry()
     private var connectAttemptID = UUID()
-
-    private static var shouldExposeRawInputTextForAutomation: Bool {
-        ProcessInfo.processInfo.environment[fakeNativeUITestEnvKey] == "1"
-    }
 
     init(
         workspaceId: UUID,
@@ -1996,8 +2006,9 @@ final class VncPanel: Panel, ObservableObject {
             }
         case .text(let text):
             inputTelemetry.textInputCount += 1
-            if Self.shouldExposeRawInputTextForAutomation, !text.isEmpty {
-                inputTelemetry.lastText = text
+            if !text.isEmpty {
+                inputTelemetry.lastTextLength = text.count
+                inputTelemetry.lastTextContainsNonASCII = text.unicodeScalars.contains { $0.value > 127 }
             }
         case .mouseDown:
             inputTelemetry.mouseDownCount += 1
