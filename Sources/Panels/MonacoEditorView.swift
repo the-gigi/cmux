@@ -196,6 +196,9 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         self.panel = panel
         self.onRequestPanelFocus = onRequestPanelFocus
         super.init()
+        panel.backendFlush = { [weak self] in
+            await self?.flushBufferFromMonaco()
+        }
         // Only observe content changes that were NOT originated by Monaco
         // itself. When Monaco posts a `changed` message and we set
         // `panel.content = value`, this sink would fire and push the same
@@ -237,9 +240,23 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             handleReady()
         case "changed":
             handleChanged(payload: dict)
+        case "dirty":
+            if let isDirty = dict["isDirty"] as? Bool {
+                // Flip the panel's dirty flag immediately so Cmd+W or
+                // workspace-close see the correct state even when the
+                // debounced `changed` hasn't landed yet.
+                panel.setBackendDirty(isDirty)
+            }
         case "saveRequested":
-            if panel.isDirty, !panel.save() {
-                EditorSaveAlert.show(for: panel)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                // Flush the live buffer over the bridge first; flushChanged()
+                // is already queued but we want the disk write to be the
+                // post-flush value, not the previous debounced snapshot.
+                await self.flushBufferFromMonaco()
+                if self.panel.isDirty, !self.panel.save() {
+                    EditorSaveAlert.show(for: self.panel)
+                }
             }
         case "viewState":
             handleViewState(payload: dict)
@@ -282,6 +299,21 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     func requestExternalFocusAcknowledgement() {
         onRequestPanelFocus()
         focusEditor()
+    }
+
+    /// Pull the live buffer from Monaco over the JS bridge and write it into
+    /// `panel.content`. Used by the save path so a Cmd+S right after a
+    /// keystroke (before the 120ms debounced `changed` lands) still saves
+    /// the correct text.
+    func flushBufferFromMonaco() async {
+        guard let webView else { return }
+        let result = try? await webView.evaluateJavaScript(
+            "window.cmuxMonaco && window.cmuxMonaco.getValue ? window.cmuxMonaco.getValue() : ''"
+        )
+        guard let value = result as? String, panel.content != value else { return }
+        lastSyncedContent = value
+        panel.content = value
+        panel.markDirty()
     }
 
     private func handleViewState(payload: [String: Any]) {

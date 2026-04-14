@@ -114,12 +114,37 @@ function scheduleChangedFlush(): void {
   }, 120);
 }
 
+// Track whether the buffer is currently dirty (differs from the version at
+// last save or last host-initiated setText) so we can send a sync `dirty`
+// ping on every keystroke without doing the full buffer roundtrip.
+let lastNotifiedDirty: boolean | null = null;
+let savedVersionId = editor.getModel()?.getVersionId() ?? 1;
+
 editor.onDidChangeModelContent(() => {
   if (ignoreNextChange) {
     ignoreNextChange = false;
     return;
   }
   scheduleChangedFlush();
+  const model = editor.getModel();
+  if (!model) return;
+  const isDirty = model.getVersionId() !== savedVersionId;
+  if (isDirty !== lastNotifiedDirty) {
+    lastNotifiedDirty = isDirty;
+    postToSwift({ type: "dirty", isDirty, versionId: model.getVersionId() });
+  }
+});
+
+// Any time the editor or window loses focus, immediately flush any pending
+// debounced content so Swift's close / save-on-close logic sees the latest
+// buffer. Without this, Cmd+W right after a keystroke can beat the 120ms
+// debounce and drop the user's edits without prompting.
+editor.onDidBlurEditorWidget(flushChanged);
+editor.onDidBlurEditorText(flushChanged);
+window.addEventListener("blur", flushChanged);
+window.addEventListener("pagehide", flushChanged);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushChanged();
 });
 
 // Debounced snapshot of cursor + scroll + Monaco view state.
@@ -186,6 +211,13 @@ function setModelText(value: string, languageId: string, preserveViewState: bool
     if (model) model.dispose();
   }
   if (state) editor.restoreViewState(state);
+  // Host just pushed the canonical value: mark this versionId as the
+  // saved/clean baseline so the next keystroke transitions to dirty.
+  savedVersionId = editor.getModel()?.getVersionId() ?? 1;
+  if (lastNotifiedDirty !== false) {
+    lastNotifiedDirty = false;
+    postToSwift({ type: "dirty", isDirty: false, versionId: savedVersionId });
+  }
 }
 
 function setCursorFromOffset(offset: number, length: number): void {
@@ -264,7 +296,19 @@ function apply(cmd: OutboundCommand): void {
   }
 }
 
-window.cmuxMonaco = { apply };
+window.cmuxMonaco = {
+  apply,
+  // Force-flush any debounced changed message. Invoked from Swift via
+  // evaluateJavaScript right before a close decision so the host always
+  // sees the latest buffer before running the dirty check.
+  flushPendingEdits: flushChanged,
+  // Synchronous current buffer read. Used by the save path: Swift pulls the
+  // live contents, writes them to panel.content, then performs disk save.
+  // Returns "" when model is somehow gone.
+  getValue(): string {
+    return editor.getModel()?.getValue() ?? "";
+  },
+};
 
 function quoteFontFamily(name: string): string {
   if (/^[A-Za-z0-9_-]+$/.test(name)) return name;

@@ -12,6 +12,10 @@ export type InboundMessage =
       cursor: { offset: number; length: number };
       versionId: number;
     }
+  // Lightweight dirty ping. Fires synchronously on every keystroke so Swift
+  // can decide whether the tab has pending edits before the buffer-carrying
+  // `changed` message catches up. Also fires on undo-returns-to-saved.
+  | { type: "dirty"; isDirty: boolean; versionId: number }
   | { type: "saveRequested" }
   | {
       type: "viewState";
@@ -69,6 +73,8 @@ declare global {
     webkit?: { messageHandlers?: WebKitMessageHandlers };
     cmuxMonaco?: {
       apply(command: OutboundCommand): void;
+      flushPendingEdits(): void;
+      getValue(): string;
     };
   }
 }

@@ -36,6 +36,13 @@ final class EditorPanel: Panel, ObservableObject {
     /// Weak reference to the AppKit text view so focus() can make it first responder.
     weak var textView: NSTextView?
 
+    /// Optional hook set by a backend view (currently Monaco) that lets callers
+    /// synchronously force the live buffer out of the underlying editor into
+    /// `content` before a save or close decision runs. Without this, a fast
+    /// Cmd+W or Cmd+S right after a keystroke can race the Monaco debounced
+    /// `changed` message and lose the newest edits.
+    var backendFlush: (() async -> Void)?
+
     /// Last known cursor/selection state. Persisted via session snapshot and
     /// restored into the text view when it is created.
     var cursorLocation: Int = 0
@@ -127,6 +134,17 @@ final class EditorPanel: Panel, ObservableObject {
             isDirty = dirty
             updateDisplayTitle()
         }
+    }
+
+    /// Synchronous dirty ping pushed from the Monaco backend on every
+    /// keystroke (via the JS `dirty` bridge message) so close/save-on-close
+    /// gating can see the correct state before the debounced full-buffer
+    /// `changed` message catches up. Keep this cheap: just flip the flag
+    /// and refresh the title.
+    func setBackendDirty(_ value: Bool) {
+        guard isDirty != value else { return }
+        isDirty = value
+        updateDisplayTitle()
     }
 
     // MARK: - Save

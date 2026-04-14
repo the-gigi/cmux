@@ -11868,6 +11868,11 @@ extension Workspace: BonsplitDelegate {
                     case .discard:
                         self.finalizeEditorCloseAfterDialog(tabId: tabId)
                     case .save:
+                        // Pull the live buffer from the backend (Monaco) before
+                        // writing to disk so a user who typed immediately before
+                        // closing still saves the newest characters rather than
+                        // the last debounced snapshot.
+                        await stillEditor.backendFlush?()
                         if stillEditor.save() {
                             self.finalizeEditorCloseAfterDialog(tabId: tabId)
                         } else {
