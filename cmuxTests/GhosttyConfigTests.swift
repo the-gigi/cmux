@@ -2705,9 +2705,9 @@ final class GhosttyMouseFocusTests: XCTestCase {
         try "font-family = JetBrains Mono\n"
             .write(to: taggedConfig, atomically: true, encoding: .utf8)
 
-        let releaseDir = appSupport.appendingPathComponent("com.mitchellh.ghostty", isDirectory: true)
-        try FileManager.default.createDirectory(at: releaseDir, withIntermediateDirectories: true)
-        let releaseConfig = releaseDir.appendingPathComponent("config", isDirectory: false)
+        let cmuxReleaseDir = appSupport.appendingPathComponent("com.cmuxterm.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: cmuxReleaseDir, withIntermediateDirectories: true)
+        let releaseConfig = cmuxReleaseDir.appendingPathComponent("config", isDirectory: false)
         try "font-family = LXGW WenKai Mono TC\n"
             .write(to: releaseConfig, atomically: true, encoding: .utf8)
 
