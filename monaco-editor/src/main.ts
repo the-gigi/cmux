@@ -75,15 +75,23 @@ function flushChanged(): void {
   }
   const model = editor.getModel();
   if (!model) return;
+  const t0 = performance.now();
   const sel = editor.getSelection();
   const offset = sel ? model.getOffsetAt(sel.getStartPosition()) : 0;
   const end = sel ? model.getOffsetAt(sel.getEndPosition()) : offset;
+  const value = model.getValue();
+  const t1 = performance.now();
   postToSwift({
     type: "changed",
-    value: model.getValue(),
+    value,
     cursor: { offset, length: Math.max(0, end - offset) },
     versionId: model.getVersionId(),
   });
+  const t2 = performance.now();
+  // eslint-disable-next-line no-console
+  console.log(
+    `cmux.monaco.flush getValue=${(t1 - t0).toFixed(1)}ms post=${(t2 - t1).toFixed(1)}ms bytes=${value.length} version=${model.getVersionId()}`,
+  );
 }
 
 function scheduleChangedFlush(): void {
@@ -96,13 +104,41 @@ function scheduleChangedFlush(): void {
   }, 120);
 }
 
+let keystrokeCount = 0;
+let keystrokeStart = 0;
 editor.onDidChangeModelContent(() => {
   if (ignoreNextChange) {
     ignoreNextChange = false;
     return;
   }
+  if (keystrokeCount === 0) keystrokeStart = performance.now();
+  keystrokeCount += 1;
   scheduleChangedFlush();
 });
+
+// Measure input lag: how long between keydown and the first model change.
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const t = performance.now();
+    requestAnimationFrame(() => {
+      // eslint-disable-next-line no-console
+      console.log(
+        `cmux.monaco.keydown key=${event.key} rafLag=${(performance.now() - t).toFixed(1)}ms keystrokesInWindow=${keystrokeCount}`,
+      );
+      if (keystrokeCount > 0) {
+        const elapsed = performance.now() - keystrokeStart;
+        // eslint-disable-next-line no-console
+        console.log(
+          `cmux.monaco.window ${keystrokeCount} keystrokes in ${elapsed.toFixed(1)}ms (${(keystrokeCount / elapsed * 1000).toFixed(0)}/s)`,
+        );
+        keystrokeCount = 0;
+      }
+    });
+  },
+  { passive: true, capture: true },
+);
 
 // Debounced snapshot of cursor + scroll + Monaco view state.
 let snapshotHandle: number | null = null;

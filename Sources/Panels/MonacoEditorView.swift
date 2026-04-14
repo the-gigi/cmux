@@ -169,6 +169,9 @@ private struct MonacoWebViewRepresentable: NSViewRepresentable {
         if isFocused {
             context.coordinator.focusEditor()
         }
+        #if DEBUG
+        context.coordinator.noteUpdateNSView()
+        #endif
     }
 }
 
@@ -241,7 +244,15 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
     private func handleChanged(payload: [String: Any]) {
         guard let value = payload["value"] as? String else { return }
+        #if DEBUG
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let valueBytes = value.utf8.count
+        var diffed = false
+        #endif
         if panel.content != value {
+            #if DEBUG
+            diffed = true
+            #endif
             lastSyncedContent = value
             panel.content = value
             panel.markDirty()
@@ -250,6 +261,10 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             if let offset = cursor["offset"] as? Int { panel.cursorLocation = offset }
             if let length = cursor["length"] as? Int { panel.cursorLength = length }
         }
+        #if DEBUG
+        let elapsedMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        dlog("monaco.changed bytes=\(valueBytes) diffed=\(diffed) isDirty=\(panel.isDirty) elapsed=\(String(format: "%.2f", elapsedMs))ms")
+        #endif
     }
 
     func requestExternalFocusAcknowledgement() {
@@ -285,14 +300,28 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // Make the WKWebView the AppKit first responder so Cmd+A, Cmd+C, arrow
         // navigation, etc. reach Monaco. Without this the webview receives no
         // key events even though it is mounted and visible.
-        if webView.window?.firstResponder !== webView {
-            webView.window?.makeFirstResponder(webView)
-        }
+        guard webView.window?.firstResponder !== webView else { return }
+        webView.window?.makeFirstResponder(webView)
         guard isReady else { return }
         send(command: [
             "kind": "focus",
         ])
     }
+
+    #if DEBUG
+    private var updateNSViewCount = 0
+    private var lastUpdateNSViewLogAt: CFAbsoluteTime = 0
+
+    func noteUpdateNSView() {
+        updateNSViewCount += 1
+        let now = CFAbsoluteTimeGetCurrent()
+        if now - lastUpdateNSViewLogAt >= 1.0 {
+            dlog("monaco.updateNSView count=\(updateNSViewCount) window=1s")
+            updateNSViewCount = 0
+            lastUpdateNSViewLogAt = now
+        }
+    }
+    #endif
 
     private func sendInitialState() {
         sendSetText(preserveViewState: false)
