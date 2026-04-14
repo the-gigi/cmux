@@ -20,6 +20,11 @@ pub const SessionStatus = struct {
     }
 };
 
+pub const EffectiveSize = struct {
+    cols: u16,
+    rows: u16,
+};
+
 pub const SessionListEntry = struct {
     session_id: []const u8,
     attachment_count: usize,
@@ -180,6 +185,18 @@ pub const Registry = struct {
             .effective_rows = session.effective_rows,
             .last_known_cols = session.last_known_cols,
             .last_known_rows = session.last_known_rows,
+        };
+    }
+
+    /// Snapshot of the current effective size for a session, or null when
+    /// the session is unknown. Callers pair this with a subsequent mutation
+    /// (attach/resize/detach → status) to detect when `recompute` produced
+    /// a new value and needs to be broadcast to subscribers.
+    pub fn effectiveSize(self: *Registry, session_id: []const u8) ?EffectiveSize {
+        const session = self.sessions.getPtr(session_id) orelse return null;
+        return .{
+            .cols = session.effective_cols,
+            .rows = session.effective_rows,
         };
     }
 

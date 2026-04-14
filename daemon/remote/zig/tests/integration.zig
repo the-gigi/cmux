@@ -680,6 +680,127 @@ test "integration: multi-subscriber delivery" {
 }
 
 // ---------------------------------------------------------------------------
+// Test: session.size_changed fan-out — when a new attachment arrives with a
+// smaller grid than the current effective size, every subscribed client
+// receives a session.size_changed push carrying the new min. When that
+// smaller attachment detaches, they receive another with the larger size.
+// ---------------------------------------------------------------------------
+
+test "integration: size_changed broadcasts min-across-attachments to all subscribers" {
+    if (!pty_pump.supported) return error.SkipZigTest;
+
+    const alloc = std.testing.allocator;
+    var fx = try Fixture.init(alloc, "sizechg");
+    defer fx.deinit();
+
+    // Open the session wide (bootstrap attachment is detached below so it
+    // does not drag effective size around).
+    var opened = try fx.service.openTerminal("s-size", "sleep 60", 100, 30);
+    defer opened.status.deinit(alloc);
+    defer alloc.free(opened.attachment_id);
+    defer fx.service.closeSession("s-size") catch {};
+    _ = fx.service.detachSession("s-size", opened.attachment_id) catch {};
+
+    // Client A attaches at 100x30 and subscribes. Observer of broadcasts.
+    var client_a = try test_util.Client.connect(alloc, fx.socket_path);
+    defer client_a.deinit();
+    {
+        const id = client_a.allocId();
+        try client_a.sendRequest(id, "session.attach", .{
+            .session_id = "s-size",
+            .attachment_id = "att-A",
+            .cols = @as(u16, 100),
+            .rows = @as(u16, 30),
+        });
+        var resp = try client_a.awaitResponse(id, deadlineIn(2000));
+        defer resp.deinit();
+        try std.testing.expect(resp.value.object.get("ok").?.bool);
+    }
+    {
+        const id = client_a.allocId();
+        try client_a.sendRequest(id, "terminal.subscribe", .{
+            .session_id = "s-size",
+            .offset = @as(u64, 0),
+        });
+        var resp = try client_a.awaitResponse(id, deadlineIn(2000));
+        defer resp.deinit();
+    }
+
+    // Client B attaches at a smaller grid. This should shrink effective size
+    // and produce a session.size_changed push that lands on A's socket.
+    var client_b = try test_util.Client.connect(alloc, fx.socket_path);
+    defer client_b.deinit();
+    {
+        const id = client_b.allocId();
+        try client_b.sendRequest(id, "session.attach", .{
+            .session_id = "s-size",
+            .attachment_id = "att-B",
+            .cols = @as(u16, 40),
+            .rows = @as(u16, 20),
+        });
+        var resp = try client_b.awaitResponse(id, deadlineIn(2000));
+        defer resp.deinit();
+        const result = resp.value.object.get("result").?.object;
+        try std.testing.expectEqual(@as(i64, 40), result.get("effective_cols").?.integer);
+        try std.testing.expectEqual(@as(i64, 20), result.get("effective_rows").?.integer);
+    }
+
+    // Poll A for the size_changed push (may be interleaved with unrelated
+    // terminal.output frames from the `sleep 60` process).
+    const shrink_cols: i64 = try expectSizeChanged(alloc, &client_a, deadlineIn(2000));
+    try std.testing.expectEqual(@as(i64, 40), shrink_cols);
+
+    // Now detach B. Effective size should grow back to A's 100x30 and both
+    // A and a fresh subscriber C should observe the grow event.
+    var client_c = try test_util.Client.connect(alloc, fx.socket_path);
+    defer client_c.deinit();
+    {
+        const id = client_c.allocId();
+        try client_c.sendRequest(id, "terminal.subscribe", .{
+            .session_id = "s-size",
+            .offset = @as(u64, 0),
+        });
+        var resp = try client_c.awaitResponse(id, deadlineIn(2000));
+        defer resp.deinit();
+    }
+
+    {
+        const id = client_b.allocId();
+        try client_b.sendRequest(id, "session.detach", .{
+            .session_id = "s-size",
+            .attachment_id = "att-B",
+        });
+        var resp = try client_b.awaitResponse(id, deadlineIn(2000));
+        defer resp.deinit();
+    }
+
+    const grow_a: i64 = try expectSizeChanged(alloc, &client_a, deadlineIn(2000));
+    try std.testing.expectEqual(@as(i64, 100), grow_a);
+    const grow_c: i64 = try expectSizeChanged(alloc, &client_c, deadlineIn(2000));
+    try std.testing.expectEqual(@as(i64, 100), grow_c);
+}
+
+/// Read frames from `client` until a `session.size_changed` event arrives;
+/// return its `effective_cols`. Other event frames (terminal.output etc.)
+/// are discarded. Times out via `deadline` with `error.Timeout`.
+fn expectSizeChanged(alloc: std.mem.Allocator, client: *test_util.Client, deadline: i64) !i64 {
+    _ = alloc;
+    while (std.time.milliTimestamp() < deadline) {
+        var parsed = client.readFrame(deadline) catch |err| switch (err) {
+            error.Timeout => return error.Timeout,
+            else => return err,
+        };
+        defer parsed.deinit();
+        if (parsed.value != .object) continue;
+        const ev = parsed.value.object.get("event") orelse continue;
+        if (ev != .string) continue;
+        if (!std.mem.eql(u8, ev.string, "session.size_changed")) continue;
+        return parsed.value.object.get("effective_cols").?.integer;
+    }
+    return error.Timeout;
+}
+
+// ---------------------------------------------------------------------------
 // Test 7: subscribe race — subscribe while output is actively streaming,
 // verify `snapshot_offset + len(snapshot_data)` exactly equals the first
 // push's `offset - len(push_data)` (no gap, no overlap)

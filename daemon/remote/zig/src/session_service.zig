@@ -401,27 +401,51 @@ pub const Service = struct {
     }
 
     pub fn attachSession(self: *Service, session_id: []const u8, attachment_id: []const u8, cols: u16, rows: u16) !session_registry.SessionStatus {
+        const prev = self.registry.effectiveSize(session_id);
         try self.registry.attach(session_id, attachment_id, cols, rows);
         var status = try self.registry.status(session_id);
         errdefer status.deinit(self.alloc);
         try self.resizeRuntimeIfPresent(&status);
+        self.maybeBroadcastSize(prev, &status);
         return status;
     }
 
     pub fn resizeSession(self: *Service, session_id: []const u8, attachment_id: []const u8, cols: u16, rows: u16) !session_registry.SessionStatus {
+        const prev = self.registry.effectiveSize(session_id);
         try self.registry.resize(session_id, attachment_id, cols, rows);
         var status = try self.registry.status(session_id);
         errdefer status.deinit(self.alloc);
         try self.resizeRuntimeIfPresent(&status);
+        self.maybeBroadcastSize(prev, &status);
         return status;
     }
 
     pub fn detachSession(self: *Service, session_id: []const u8, attachment_id: []const u8) !session_registry.SessionStatus {
+        const prev = self.registry.effectiveSize(session_id);
         try self.registry.detach(session_id, attachment_id);
         var status = try self.registry.status(session_id);
         errdefer status.deinit(self.alloc);
         try self.resizeRuntimeIfPresent(&status);
+        self.maybeBroadcastSize(prev, &status);
         return status;
+    }
+
+    /// Compare pre/post effective size; broadcast `session.size_changed` to
+    /// every live subscriber of the session if either axis changed. A null
+    /// `prev` means the session was newly created by the mutation, in which
+    /// case we don't broadcast (no prior subscribers could be waiting on it).
+    fn maybeBroadcastSize(
+        self: *Service,
+        prev: ?session_registry.EffectiveSize,
+        status: *const session_registry.SessionStatus,
+    ) void {
+        const p = prev orelse return;
+        if (p.cols == status.effective_cols and p.rows == status.effective_rows) return;
+        self.broadcastSessionSizeChanged(
+            status.session_id,
+            status.effective_cols,
+            status.effective_rows,
+        );
     }
 
     pub fn sessionStatus(self: *Service, session_id: []const u8) !session_registry.SessionStatus {
@@ -751,6 +775,81 @@ pub const Service = struct {
         while (sub.in_flight.load(.seq_cst) > 0) {
             std.atomic.spinLoopHint();
         }
+    }
+
+    /// Fan out a `session.size_changed` event to every live subscriber of
+    /// `session_id`. Uses the same in_flight + snapshot pattern as
+    /// `deliverTerminalPushes` so an unsubscribe racing with this broadcast
+    /// cannot free a sub we're still writing to. Callers invoke this after
+    /// a registry mutation (attach/resize/detach) whose `recompute` produced
+    /// a new effective_cols or effective_rows. Wire format matches the
+    /// existing top-level-fields contract used by `terminal.output`:
+    ///   {"event":"session.size_changed","session_id":"...",
+    ///    "effective_cols":N,"effective_rows":M}
+    fn broadcastSessionSizeChanged(
+        self: *Service,
+        session_id: []const u8,
+        effective_cols: u16,
+        effective_rows: u16,
+    ) void {
+        var matching: std.ArrayListUnmanaged(*TerminalSubscription) = .empty;
+        defer matching.deinit(self.alloc);
+
+        self.sub_mutex.lock();
+        for (self.terminal_subs.items) |sub| {
+            if (sub.dead.load(.seq_cst)) continue;
+            if (std.mem.eql(u8, sub.session_id, session_id)) {
+                matching.append(self.alloc, sub) catch break;
+                _ = sub.in_flight.fetchAdd(1, .seq_cst);
+            }
+        }
+        self.sub_mutex.unlock();
+
+        if (matching.items.len == 0) return;
+
+        const event = json_rpc.encodeResponse(self.alloc, .{
+            .event = "session.size_changed",
+            .session_id = session_id,
+            .effective_cols = effective_cols,
+            .effective_rows = effective_rows,
+        }) catch {
+            for (matching.items) |sub| _ = sub.in_flight.fetchSub(1, .seq_cst);
+            return;
+        };
+        defer self.alloc.free(event);
+
+        for (matching.items) |sub| {
+            defer _ = sub.in_flight.fetchSub(1, .seq_cst);
+            if (sub.dead.load(.seq_cst)) continue;
+            self.sendControlFrame(sub, event) catch {
+                sub.dead.store(true, .seq_cst);
+            };
+        }
+    }
+
+    /// Shared write path for small control-plane events (like
+    /// `session.size_changed`). Mirrors the tail of `pushOneSubscriber`:
+    /// routes through the per-connection `OutboundQueue` when present,
+    /// falling back to a direct WS-framed write under `stream_lock`.
+    /// `event` is borrowed; the queue path copies it.
+    fn sendControlFrame(
+        self: *Service,
+        sub: *TerminalSubscription,
+        event: []const u8,
+    ) !void {
+        if (sub.queue) |q| {
+            const line = try self.alloc.alloc(u8, event.len + 1);
+            @memcpy(line[0..event.len], event);
+            line[event.len] = '\n';
+            q.enqueueControl(line) catch |err| {
+                self.alloc.free(line);
+                return err;
+            };
+            return;
+        }
+        sub.stream_lock.lock();
+        defer sub.stream_lock.unlock();
+        try sendWsTextFrame(sub.stream, event);
     }
 
     /// Called from the pump's notify callback when a session just pumped
