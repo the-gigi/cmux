@@ -322,6 +322,13 @@ pub const Client = struct {
     alloc: std.mem.Allocator,
     fd: std.posix.fd_t,
     pending: std.ArrayListUnmanaged(u8) = .empty,
+    /// Lines that were read from the socket but not consumed by the caller
+    /// (e.g. non-matching frames that `awaitResponse` had to skip past to
+    /// find its response). `readLine` drains this queue before splitting
+    /// more bytes out of `pending`, so subsequent `readFrame` calls see
+    /// those intermediate frames in the original wire order. Lines are
+    /// allocator-owned slices taking the same form as `readLine`'s return.
+    queued_lines: std.ArrayListUnmanaged([]u8) = .empty,
     next_id: u64 = 1,
 
     pub fn connect(alloc: std.mem.Allocator, socket_path: []const u8) !Client {
@@ -345,6 +352,8 @@ pub const Client = struct {
     pub fn deinit(self: *Client) void {
         std.posix.close(self.fd);
         self.pending.deinit(self.alloc);
+        for (self.queued_lines.items) |line| self.alloc.free(line);
+        self.queued_lines.deinit(self.alloc);
     }
 
     pub fn allocId(self: *Client) u64 {
@@ -387,6 +396,9 @@ pub const Client = struct {
     }
 
     pub fn readLine(self: *Client, deadline_ms: i64) ![]u8 {
+        if (self.queued_lines.items.len > 0) {
+            return self.queued_lines.orderedRemove(0);
+        }
         while (true) {
             if (std.mem.indexOfScalar(u8, self.pending.items, '\n')) |idx| {
                 const line = try self.alloc.alloc(u8, idx);
@@ -416,22 +428,59 @@ pub const Client = struct {
         return std.json.parseFromSlice(std.json.Value, self.alloc, line, .{});
     }
 
+    /// Read frames until one matches `expected_id`. Any non-matching frames
+    /// encountered along the way (typically `terminal.output` pushes that
+    /// the daemon wrote between the request and its response) are preserved
+    /// in the client's line queue in original wire order, so subsequent
+    /// `readFrame` / `awaitResponse` calls still observe them.
     pub fn awaitResponse(
         self: *Client,
         expected_id: u64,
         deadline_ms: i64,
     ) !std.json.Parsed(std.json.Value) {
+        var skipped: std.ArrayListUnmanaged([]u8) = .empty;
+        // On any early exit, put skipped lines back at the head of the
+        // queue so the caller still sees them.
+        errdefer {
+            for (skipped.items) |line| self.alloc.free(line);
+            skipped.deinit(self.alloc);
+        }
         while (true) {
-            var parsed = try self.readFrame(deadline_ms);
-            var keep = false;
-            defer if (!keep) parsed.deinit();
-            if (parsed.value != .object) continue;
-            if (parsed.value.object.get("id")) |id_val| {
-                if (idEquals(id_val, expected_id)) {
-                    keep = true;
-                    return parsed;
+            const line = try self.readLine(deadline_ms);
+            var free_line = true;
+            defer if (free_line) self.alloc.free(line);
+
+            var parsed = std.json.parseFromSlice(std.json.Value, self.alloc, line, .{}) catch {
+                try skipped.append(self.alloc, line);
+                free_line = false;
+                continue;
+            };
+            var keep_parsed = false;
+            defer if (!keep_parsed) parsed.deinit();
+
+            const matches = parsed.value == .object and blk: {
+                const id_val = parsed.value.object.get("id") orelse break :blk false;
+                break :blk idEquals(id_val, expected_id);
+            };
+
+            if (matches) {
+                // Reinsert any skipped lines at the front of the queue,
+                // preserving their relative order.
+                if (skipped.items.len > 0) {
+                    self.queued_lines.insertSlice(self.alloc, 0, skipped.items) catch |err| {
+                        // On OOM, free the skipped lines so we don't leak.
+                        for (skipped.items) |l| self.alloc.free(l);
+                        skipped.deinit(self.alloc);
+                        return err;
+                    };
+                    skipped.deinit(self.alloc);
                 }
+                keep_parsed = true;
+                return parsed;
             }
+
+            try skipped.append(self.alloc, line);
+            free_line = false;
         }
     }
 };
