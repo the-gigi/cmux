@@ -51,6 +51,16 @@ final class EditorPanel: Panel, ObservableObject {
     /// savedVersionId so the next edit emits a fresh dirty transition.
     var backendAfterSave: (() async -> Void)?
 
+    /// Optional hook the backend view registers so `focus()` can restore
+    /// first-responder for web-based backends (Monaco's WKWebView). The
+    /// native NSTextView backend uses the `textView` reference below; Monaco
+    /// wires this closure to `makeFirstResponder` on its WKWebView and sends
+    /// a JS `focus` command. Without this, workspace focus reconciliation
+    /// paths that call `panel.focus()` without an `isFocused` transition
+    /// would leave Monaco tabs without keyboard input until the user
+    /// clicked them.
+    var backendFocus: (() -> Void)?
+
     /// Last known cursor/selection state. Persisted via session snapshot and
     /// restored into the text view when it is created.
     var cursorLocation: Int = 0
@@ -105,6 +115,12 @@ final class EditorPanel: Panel, ObservableObject {
     // MARK: - Panel protocol
 
     func focus() {
+        // Monaco registers a hook that routes through its WKWebView; when
+        // set, prefer it so web-backed tabs get keyboard focus too.
+        if let backendFocus {
+            backendFocus()
+            return
+        }
         guard let textView else { return }
         textView.window?.makeFirstResponder(textView)
     }

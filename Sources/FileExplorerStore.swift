@@ -505,6 +505,12 @@ final class FileExplorerStore: ObservableObject {
 
     /// In-flight load tasks keyed by path
     private var loadTasks: [String: Task<Void, Never>] = [:]
+    /// Monotonic token for in-flight watcher refreshes. Each call to
+    /// `refreshFromDisk` bumps it; `mergeChildren` invocations carry the
+    /// token they started with and bail if a newer refresh has superseded
+    /// them. Stops slow refreshes from clobbering fresher data.
+    private var currentRefreshToken: UInt64 = 0
+    private var refreshTask: Task<Void, Never>?
 
     /// Cache of path -> node for quick lookup
     private var nodesByPath: [String: FileExplorerNode] = [:]
@@ -612,6 +618,12 @@ final class FileExplorerStore: ObservableObject {
     /// Non-destructive refresh triggered by the filesystem watcher. Preserves
     /// existing node identities so the outline view keeps its scroll position
     /// and expansion state across edits (e.g. editor saves, bulk git operations).
+    ///
+    /// Serializes concurrent watcher fires: bursty filesystem events (rapid
+    /// rename/create) can otherwise produce multiple `mergeChildren` tasks
+    /// that complete out of order and let a stale merge overwrite a newer
+    /// one. A monotonic `currentRefreshToken` lets the newest call invalidate
+    /// older in-flight writes.
     func refreshFromDisk() {
         guard !rootPath.isEmpty, provider != nil else { return }
         // If we're still loading the initial root, fall back to the canonical path.
@@ -619,19 +631,22 @@ final class FileExplorerStore: ObservableObject {
             reload()
             return
         }
+        currentRefreshToken &+= 1
+        let token = currentRefreshToken
         let path = rootPath
-        Task { [weak self] in
+        refreshTask?.cancel()
+        refreshTask = Task { [weak self] in
             guard let self else { return }
             // Guard against an in-flight refresh landing after the user switched
-            // workspaces/roots — re-check that `rootPath` is still the path we
-            // started with before letting merge mutate `rootNodes`.
-            guard await self.rootPath == path else { return }
-            await self.mergeChildren(parent: nil, at: path)
+            // workspaces/roots OR after a newer watcher-fire bumped the token.
+            guard await self.rootPath == path,
+                  await self.currentRefreshToken == token else { return }
+            await self.mergeChildren(parent: nil, at: path, token: token)
         }
     }
 
     @MainActor
-    private func mergeChildren(parent: FileExplorerNode?, at path: String) async {
+    private func mergeChildren(parent: FileExplorerNode?, at path: String, token: UInt64? = nil) async {
         guard let provider else { return }
         // Snapshot the root before the awaited call so we can reject a merge
         // that lost its race against a root switch (workspace/session change).
@@ -646,6 +661,10 @@ final class FileExplorerStore: ObservableObject {
         // before touching rootNodes with data from the old tree.
         guard rootPath == expectedRoot else { return }
         if parent == nil, path != rootPath { return }
+        // Drop stale watcher refreshes: a newer `refreshFromDisk` call has
+        // already bumped the token, so applying our older diff would
+        // overwrite fresher data.
+        if let token, token != currentRefreshToken { return }
 
         let sorted = entries.sorted { a, b in
             if a.isDirectory != b.isDirectory { return a.isDirectory }
@@ -694,9 +713,11 @@ final class FileExplorerStore: ObservableObject {
         // regardless of current expansion. If we only refreshed expanded
         // directories, a user who collapsed a directory would see a stale
         // child list when they re-expanded it (expand() only reloads when
-        // `children == nil`).
+        // `children == nil`). Carry the refresh token so nested merges also
+        // short-circuit when a newer watcher fire supersedes this pass.
         for child in merged where child.isDirectory && child.children != nil {
-            await mergeChildren(parent: child, at: child.path)
+            if let token, token != currentRefreshToken { return }
+            await mergeChildren(parent: child, at: child.path, token: token)
         }
     }
 

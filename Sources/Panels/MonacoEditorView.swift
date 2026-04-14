@@ -205,6 +205,9 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         panel.backendAfterSave = { [weak self] in
             self?.markMonacoClean()
         }
+        panel.backendFocus = { [weak self] in
+            self?.focusEditor()
+        }
         // Only observe content changes that were NOT originated by Monaco
         // itself. When Monaco posts a `changed` message and we set
         // `panel.content = value`, this sink would fire and push the same
