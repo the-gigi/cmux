@@ -803,6 +803,129 @@ fn expectViewSize(alloc: std.mem.Allocator, client: *test_util.Client, deadline:
 }
 
 // ---------------------------------------------------------------------------
+// Test: workspaces own their sessions end-to-end via workspace.open_pane.
+// Mac calls workspace.create + workspace.open_pane; daemon mints session.
+// A second client (iOS-shaped) calls workspace.list, finds the same
+// session_id in the workspace's pane tree, attaches, and sees the same
+// shell output. Proves the "daemon is the sole minter" invariant.
+// ---------------------------------------------------------------------------
+
+test "integration: workspace.open_pane mints a session that workspace.list exposes" {
+    if (!pty_pump.supported) return error.SkipZigTest;
+
+    const alloc = std.testing.allocator;
+    var fx = try Fixture.init(alloc, "openpane");
+    defer fx.deinit();
+
+    var client = try test_util.Client.connect(alloc, fx.socket_path);
+    defer client.deinit();
+
+    // 1) Create the workspace.
+    const create_id = client.allocId();
+    try client.sendRequest(create_id, "workspace.create", .{
+        .title = "shared-test",
+        .directory = "/tmp",
+    });
+    var create_resp = try client.awaitResponse(create_id, deadlineIn(2000));
+    defer create_resp.deinit();
+    try std.testing.expect(create_resp.value.object.get("ok").?.bool);
+    const ws_id_str = create_resp.value.object.get("result").?.object.get("workspace_id").?.string;
+    const ws_id = try alloc.dupe(u8, ws_id_str);
+    defer alloc.free(ws_id);
+
+    // 2) Open a pane in it. Daemon mints session_id and binds.
+    const open_id = client.allocId();
+    try client.sendRequest(open_id, "workspace.open_pane", .{
+        .workspace_id = ws_id,
+        .command = "printf SHARED",
+        .cols = @as(u16, 80),
+        .rows = @as(u16, 24),
+    });
+    var open_resp = try client.awaitResponse(open_id, deadlineIn(2000));
+    defer open_resp.deinit();
+    try std.testing.expect(open_resp.value.object.get("ok").?.bool);
+    const open_result = open_resp.value.object.get("result").?.object;
+    const session_id_from_open = try alloc.dupe(u8, open_result.get("session_id").?.string);
+    defer alloc.free(session_id_from_open);
+    const pane_id_from_open = try alloc.dupe(u8, open_result.get("pane_id").?.string);
+    defer alloc.free(pane_id_from_open);
+    try std.testing.expect(session_id_from_open.len > 0);
+    try std.testing.expect(pane_id_from_open.len > 0);
+
+    // 3) workspace.list should expose this same session_id under the
+    //    workspace's pane tree.
+    const list_id = client.allocId();
+    try client.sendRequest(list_id, "workspace.list", .{});
+    var list_resp = try client.awaitResponse(list_id, deadlineIn(2000));
+    defer list_resp.deinit();
+    try std.testing.expect(list_resp.value.object.get("ok").?.bool);
+    const workspaces = list_resp.value.object.get("result").?.object.get("workspaces").?.array;
+    var found_session: ?[]const u8 = null;
+    var found_pane: ?[]const u8 = null;
+    for (workspaces.items) |ws| {
+        const wid = ws.object.get("id").?.string;
+        if (!std.mem.eql(u8, wid, ws_id)) continue;
+        const panes = ws.object.get("panes").?.array;
+        for (panes.items) |p| {
+            if (p.object.get("session_id")) |sid_v| {
+                if (sid_v == .string) {
+                    found_session = sid_v.string;
+                    found_pane = p.object.get("id").?.string;
+                }
+            }
+        }
+    }
+    try std.testing.expect(found_session != null);
+    try std.testing.expectEqualStrings(session_id_from_open, found_session.?);
+    try std.testing.expectEqualStrings(pane_id_from_open, found_pane.?);
+
+    // 4) A SECOND client subscribes using only the discovered session_id
+    //    and sees the same shell output. This is the iOS shape.
+    var ios_client = try test_util.Client.connect(alloc, fx.socket_path);
+    defer ios_client.deinit();
+    const sub_id = ios_client.allocId();
+    try ios_client.sendRequest(sub_id, "terminal.subscribe", .{
+        .session_id = session_id_from_open,
+        .offset = @as(u64, 0),
+    });
+    var sub_resp = try ios_client.awaitResponse(sub_id, deadlineIn(2000));
+    defer sub_resp.deinit();
+    try std.testing.expect(sub_resp.value.object.get("ok").?.bool);
+
+    // Read frames until SHARED appears or deadline. The shell wrote
+    // SHARED via printf; daemon will deliver it via terminal.output
+    // pushes (or the snapshot in the subscribe response).
+    var accum: std.ArrayListUnmanaged(u8) = .empty;
+    defer accum.deinit(alloc);
+    const sub_data_b64 = sub_resp.value.object.get("result").?.object.get("data").?.string;
+    if (sub_data_b64.len > 0) {
+        const decoded = try test_util.base64Decode(alloc, sub_data_b64);
+        defer alloc.free(decoded);
+        try accum.appendSlice(alloc, decoded);
+    }
+
+    const deadline = deadlineIn(3000);
+    while (std.mem.indexOf(u8, accum.items, "SHARED") == null and std.time.milliTimestamp() < deadline) {
+        var parsed = ios_client.readFrame(deadline) catch |err| switch (err) {
+            error.Timeout => break,
+            else => return err,
+        };
+        defer parsed.deinit();
+        if (parsed.value != .object) continue;
+        const ev = parsed.value.object.get("event") orelse continue;
+        if (ev != .string or !std.mem.eql(u8, ev.string, "terminal.output")) continue;
+        if (parsed.value.object.get("data")) |d| {
+            if (d == .string and d.string.len > 0) {
+                const decoded = try test_util.base64Decode(alloc, d.string);
+                defer alloc.free(decoded);
+                try accum.appendSlice(alloc, decoded);
+            }
+        }
+    }
+    try std.testing.expect(std.mem.indexOf(u8, accum.items, "SHARED") != null);
+}
+
+// ---------------------------------------------------------------------------
 // Test 7: subscribe race — subscribe while output is actively streaming,
 // verify `snapshot_offset + len(snapshot_data)` exactly equals the first
 // push's `offset - len(push_data)` (no gap, no overlap)

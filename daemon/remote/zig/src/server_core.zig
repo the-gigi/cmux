@@ -61,6 +61,7 @@ fn dispatchInner(service: *session_service.Service, req: *const json_rpc.Request
                     "workspace.subscribe",
                     "workspace.sync",
                     "workspace.set_color",
+                    "workspace.open_pane",
                     "notifications.push",
                     "notifications.remote",
                     "proxy.http_connect",
@@ -93,6 +94,7 @@ fn dispatchInner(service: *session_service.Service, req: *const json_rpc.Request
     if (std.mem.eql(u8, req.method, "session.history")) return handleSessionHistory(service, req);
     if (std.mem.eql(u8, req.method, "workspace.list")) return handleWorkspaceList(service, req);
     if (std.mem.eql(u8, req.method, "workspace.create")) return handleWorkspaceCreate(service, req);
+    if (std.mem.eql(u8, req.method, "workspace.open_pane")) return handleWorkspaceOpenPane(service, req);
     if (std.mem.eql(u8, req.method, "workspace.rename")) return handleWorkspaceRename(service, req);
     if (std.mem.eql(u8, req.method, "workspace.pin")) return handleWorkspacePin(service, req);
     if (std.mem.eql(u8, req.method, "workspace.set_color")) return handleWorkspaceSetColor(service, req);
@@ -738,6 +740,106 @@ fn handleWorkspaceCreate(service: *session_service.Service, req: *const json_rpc
         .result = .{
             .workspace_id = id,
             .change_seq = service.workspace_reg.change_seq,
+        },
+    });
+}
+
+/// Mint a new daemon-side terminal session and bind it to a pane in the
+/// given workspace. This is the canonical "I want a new shell in this
+/// workspace" RPC — clients never invent session IDs themselves; they
+/// call this and use whatever session_id the daemon returns. Both mac
+/// and iOS go through this path so a workspace's panes always have
+/// daemon-minted IDs that both can discover via `workspace.list`.
+///
+/// Params:
+///   workspace_id    (required)
+///   command         (required) — shell to exec
+///   cols, rows      (required, > 0)
+///   parent_pane_id  (optional) — when present, splitPane creates a new
+///                                 sibling next to this pane and the
+///                                 session is bound to the new sibling.
+///                                 When absent, the session is bound to
+///                                 the workspace's first leaf pane —
+///                                 typically the empty root created by
+///                                 workspace.create.
+///   direction       (optional)  — "horizontal"|"vertical"; only meaningful
+///                                 with parent_pane_id.
+///
+/// Returns: { workspace_id, pane_id, session_id, attachment_id, offset,
+///            change_seq }.
+fn handleWorkspaceOpenPane(service: *session_service.Service, req: *const json_rpc.Request) ![]u8 {
+    const alloc = service.alloc;
+    const params = getParamsObject(req) orelse
+        return invalidParams(alloc, req.id, "workspace.open_pane requires params");
+    const workspace_id = getRequiredStringParam(params, "workspace_id", "workspace.open_pane requires workspace_id") catch |err|
+        return paramError(alloc, req.id, err);
+    const command = getRequiredStringParam(params, "command", "workspace.open_pane requires command") catch |err|
+        return paramError(alloc, req.id, err);
+    const cols = getRequiredPositiveU16Param(params, "cols", "workspace.open_pane requires cols > 0") catch |err|
+        return paramError(alloc, req.id, err);
+    const rows = getRequiredPositiveU16Param(params, "rows", "workspace.open_pane requires rows > 0") catch |err|
+        return paramError(alloc, req.id, err);
+    const parent_pane_id = getOptionalStringParam(params, "parent_pane_id");
+    const dir_str = getOptionalStringParam(params, "direction") orelse "horizontal";
+    const direction: workspace_registry.SplitDirection = if (std.mem.eql(u8, dir_str, "vertical"))
+        .vertical
+    else
+        .horizontal;
+
+    // Resolve the target pane id: either splitPane creates a fresh
+    // sibling, or we reuse the workspace's first existing leaf.
+    var owned_pane_id: ?[]const u8 = null;
+    defer if (owned_pane_id) |pid| alloc.free(pid);
+    const target_pane_id: []const u8 = blk: {
+        if (parent_pane_id) |pid| {
+            const new_pid = service.workspace_reg.splitPane(workspace_id, pid, direction, .terminal) catch |err| {
+                return try errorResponse(alloc, req.id, "not_found", @errorName(err));
+            };
+            owned_pane_id = new_pid;
+            break :blk new_pid;
+        }
+        const ws = service.workspace_reg.workspaces.getPtr(workspace_id) orelse
+            return errorResponse(alloc, req.id, "not_found", "workspace not found");
+        const leaves = ws.root_pane.collectLeaves(alloc) catch |err| {
+            return try errorResponse(alloc, req.id, "internal_error", @errorName(err));
+        };
+        defer alloc.free(leaves);
+        if (leaves.len == 0) {
+            return try errorResponse(alloc, req.id, "internal_error", "workspace has no panes");
+        }
+        // Take ownership of a copy so the slice survives `defer alloc.free(leaves)`.
+        owned_pane_id = try alloc.dupe(u8, leaves[0].id);
+        break :blk owned_pane_id.?;
+    };
+
+    // Mint the session.
+    var opened = service.openTerminal(null, command, cols, rows) catch |err| switch (err) {
+        else => return internalError(service.alloc, req.id, err),
+    };
+    defer opened.status.deinit(alloc);
+    defer alloc.free(opened.attachment_id);
+    const session_id = opened.status.session_id;
+
+    // Bind into the workspace tree.
+    service.workspace_reg.bindSession(workspace_id, target_pane_id, session_id) catch |err| {
+        // Bind failed — try to clean up the orphaned session so we
+        // don't leak. Best-effort; closeSession swallows missing IDs.
+        service.closeSession(session_id) catch {};
+        return try errorResponse(alloc, req.id, "not_found", @errorName(err));
+    };
+
+    return try json_rpc.encodeResponse(alloc, .{
+        .id = req.id,
+        .ok = true,
+        .result = .{
+            .workspace_id = workspace_id,
+            .pane_id = target_pane_id,
+            .session_id = session_id,
+            .attachment_id = opened.attachment_id,
+            .offset = opened.offset,
+            .change_seq = service.workspace_reg.change_seq,
+            .effective_cols = opened.status.effective_cols,
+            .effective_rows = opened.status.effective_rows,
         },
     });
 }
