@@ -2218,9 +2218,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         Self.detectRunningUnderXCTest(env)
     }
 
+    private nonisolated static let sessionSnapshotDirtyRequestLock = NSLock()
+    private nonisolated(unsafe) static var sessionSnapshotDirtyRequestTaskScheduled = false
+    private nonisolated(unsafe) static var sessionSnapshotDirtyRequestQueuedDuringWrite = false
+    private nonisolated(unsafe) static var sessionSnapshotDirtyRequestMirrorIsDirty = false
+    private nonisolated(unsafe) static var sessionSnapshotDirtyRequestWriteInFlight = false
+    private nonisolated(unsafe) static var sessionSnapshotDirtyRequestLatestReason = "unspecified"
+
     nonisolated static func requestSessionSnapshotDirty(reason: String) {
+        guard beginSessionSnapshotDirtyRequest(reason: reason) else { return }
         Task { @MainActor in
-            AppDelegate.shared?.markSessionSnapshotDirty(reason: reason)
+            let pendingReason = takeSessionSnapshotDirtyRequestReason()
+            _ = AppDelegate.shared?.markSessionSnapshotDirty(reason: pendingReason)
+            finishSessionSnapshotDirtyRequestDispatch()
+        }
+    }
+
+    private nonisolated static func beginSessionSnapshotDirtyRequest(reason: String) -> Bool {
+        sessionSnapshotDirtyRequestLock.lock()
+        defer { sessionSnapshotDirtyRequestLock.unlock() }
+
+        sessionSnapshotDirtyRequestLatestReason = reason
+        if sessionSnapshotDirtyRequestTaskScheduled {
+            return false
+        }
+        if sessionSnapshotDirtyRequestMirrorIsDirty {
+            guard sessionSnapshotDirtyRequestWriteInFlight,
+                  !sessionSnapshotDirtyRequestQueuedDuringWrite else {
+                return false
+            }
+            sessionSnapshotDirtyRequestQueuedDuringWrite = true
+        }
+        sessionSnapshotDirtyRequestTaskScheduled = true
+        return true
+    }
+
+    private nonisolated static func takeSessionSnapshotDirtyRequestReason() -> String {
+        sessionSnapshotDirtyRequestLock.lock()
+        defer { sessionSnapshotDirtyRequestLock.unlock() }
+        return sessionSnapshotDirtyRequestLatestReason
+    }
+
+    private nonisolated static func finishSessionSnapshotDirtyRequestDispatch() {
+        sessionSnapshotDirtyRequestLock.lock()
+        defer { sessionSnapshotDirtyRequestLock.unlock() }
+        sessionSnapshotDirtyRequestTaskScheduled = false
+    }
+
+    private nonisolated static func setSessionSnapshotDirtyRequestMirror(isDirty: Bool) {
+        sessionSnapshotDirtyRequestLock.lock()
+        defer { sessionSnapshotDirtyRequestLock.unlock() }
+        sessionSnapshotDirtyRequestMirrorIsDirty = isDirty
+        if !isDirty && !sessionSnapshotDirtyRequestWriteInFlight {
+            sessionSnapshotDirtyRequestQueuedDuringWrite = false
+        }
+    }
+
+    private nonisolated static func setSessionSnapshotDirtyRequestWriteInFlight(_ isInFlight: Bool) {
+        sessionSnapshotDirtyRequestLock.lock()
+        defer { sessionSnapshotDirtyRequestLock.unlock() }
+        if isInFlight && !sessionSnapshotDirtyRequestWriteInFlight {
+            sessionSnapshotDirtyRequestQueuedDuringWrite = false
+        }
+        sessionSnapshotDirtyRequestWriteInFlight = isInFlight
+        if !isInFlight {
+            sessionSnapshotDirtyRequestQueuedDuringWrite = false
         }
     }
 
@@ -2441,7 +2503,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var didAttemptStartupSessionRestore = false
     private var isApplyingStartupSessionRestore = false
     private var sessionAutosaveTimer: DispatchSourceTimer?
-    private var sessionAutosaveTickInFlight = false
     private var sessionSnapshotIsDirty = false
     private var sessionSnapshotDirtyGeneration: UInt64 = 0
     private var sessionSnapshotPendingWriteCount = 0
@@ -4347,26 +4408,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func stopSessionAutosaveTimer() {
         sessionAutosaveTimer?.cancel()
         sessionAutosaveTimer = nil
-        sessionAutosaveTickInFlight = false
         sessionAutosaveScheduledDeadlineUptime = nil
     }
 
-    private func markSessionSnapshotDirty(reason: String) {
-        guard !isApplyingStartupSessionRestore else { return }
+    @discardableResult
+    private func markSessionSnapshotDirty(reason: String) -> Bool {
+        guard !isApplyingStartupSessionRestore else { return false }
         sessionSnapshotDirtyGeneration &+= 1
         sessionSnapshotIsDirty = true
-        guard Self.shouldRunSessionAutosaveTick(isTerminatingApp: isTerminatingApp) else { return }
+        Self.setSessionSnapshotDirtyRequestMirror(isDirty: true)
+        guard Self.shouldRunSessionAutosaveTick(isTerminatingApp: isTerminatingApp) else { return true }
         scheduleSessionAutosave(
             after: SessionPersistencePolicy.autosaveInterval,
             source: reason,
             allowDelayExtension: false
         )
+        return true
     }
 
     private func scheduleSessionAutosave(
         after delay: TimeInterval,
         source: String,
-        allowDelayExtension: Bool = true
+        allowDelayExtension: Bool = false
     ) {
         guard sessionSnapshotIsDirty else { return }
         guard delay.isFinite else { return }
@@ -4512,6 +4575,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard let snapshot = buildSessionSnapshot(includeScrollback: includeScrollback) else {
             if !writeSynchronously {
                 sessionSnapshotPendingWriteCount += 1
+                Self.setSessionSnapshotDirtyRequestWriteInFlight(sessionSnapshotPendingWriteCount > 0)
             }
             persistSessionSnapshot(
                 nil,
@@ -4540,6 +4604,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #endif
         if !writeSynchronously {
             sessionSnapshotPendingWriteCount += 1
+            Self.setSessionSnapshotDirtyRequestWriteInFlight(sessionSnapshotPendingWriteCount > 0)
         }
         persistSessionSnapshot(
             snapshot,
@@ -4603,10 +4668,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #endif
             return
         }
-        guard !sessionAutosaveTickInFlight else {
-            scheduleSessionAutosave(after: 1, source: "inFlightRetry")
-            return
-        }
         guard sessionSnapshotPendingWriteCount == 0 else {
             scheduleSessionAutosave(after: 1, source: "pendingWriteRetry")
             return
@@ -4622,13 +4683,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return
         }
 
-        sessionAutosaveTickInFlight = true
 #if DEBUG
         let timingStart = CmuxTypingTiming.start()
         let phaseStart = ProcessInfo.processInfo.systemUptime
         var saveMs: Double = 0
         defer {
-            sessionAutosaveTickInFlight = false
             let totalMs = (ProcessInfo.processInfo.systemUptime - phaseStart) * 1000.0
             CmuxTypingTiming.logBreakdown(
                 path: "session.autosaveTick.phase",
@@ -4645,8 +4704,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 extra: "source=\(source)"
             )
         }
-#else
-        defer { sessionAutosaveTickInFlight = false }
 #endif
 
 #if DEBUG
@@ -4697,7 +4754,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         if synchronously {
-            writeBlock()
+            sessionPersistenceQueue.sync(execute: writeBlock)
             completion?()
         } else {
             sessionPersistenceQueue.async {
@@ -4718,8 +4775,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     ) {
         if wroteAsynchronously {
             sessionSnapshotPendingWriteCount = max(0, sessionSnapshotPendingWriteCount - 1)
+            Self.setSessionSnapshotDirtyRequestWriteInFlight(sessionSnapshotPendingWriteCount > 0)
         }
-        sessionAutosaveScheduledDeadlineUptime = nil
 
         let dirtiedDuringWrite = sessionSnapshotDirtyGeneration != startedDirtyGeneration
 #if DEBUG
@@ -4730,20 +4787,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #endif
         if dirtiedDuringWrite {
             sessionSnapshotIsDirty = true
+            Self.setSessionSnapshotDirtyRequestMirror(isDirty: true)
             guard sessionSnapshotPendingWriteCount == 0,
                   Self.shouldRunSessionAutosaveTick(isTerminatingApp: isTerminatingApp) else {
                 return
             }
-            scheduleSessionAutosave(
-                after: 0,
-                source: "persistenceCompletionRetry",
-                allowDelayExtension: false
-            )
+            if sessionAutosaveScheduledDeadlineUptime == nil {
+                scheduleSessionAutosave(
+                    after: SessionPersistencePolicy.autosaveInterval,
+                    source: "persistenceCompletionRetry"
+                )
+            }
             return
         }
 
         if sessionSnapshotPendingWriteCount == 0 {
             sessionSnapshotIsDirty = false
+            sessionAutosaveScheduledDeadlineUptime = nil
+            Self.setSessionSnapshotDirtyRequestMirror(isDirty: false)
         }
     }
 

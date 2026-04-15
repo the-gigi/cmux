@@ -382,15 +382,19 @@ final class SidebarState: ObservableObject {
     }
     @Published var persistedWidth: CGFloat {
         didSet {
-            guard abs(persistedWidth - oldValue) > 0.5 else { return }
+            let sanitizedWidth = CGFloat(SessionPersistencePolicy.sanitizedSidebarWidth(Double(persistedWidth)))
+            guard abs(sanitizedWidth - lastSessionSnapshotDirtyWidth) > 0.5 else { return }
+            lastSessionSnapshotDirtyWidth = sanitizedWidth
             AppDelegate.requestSessionSnapshotDirty(reason: "sidebar.width")
         }
     }
+    private var lastSessionSnapshotDirtyWidth: CGFloat
 
     init(isVisible: Bool = true, persistedWidth: CGFloat = CGFloat(SessionPersistencePolicy.defaultSidebarWidth)) {
         self.isVisible = isVisible
         let sanitized = SessionPersistencePolicy.sanitizedSidebarWidth(Double(persistedWidth))
         self.persistedWidth = CGFloat(sanitized)
+        self.lastSessionSnapshotDirtyWidth = CGFloat(sanitized)
     }
 
     func toggle() {

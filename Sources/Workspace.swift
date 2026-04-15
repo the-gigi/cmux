@@ -440,12 +440,10 @@ extension Workspace {
         let branchSnapshot = panelGitBranches[panelId].map {
             SessionGitBranchSnapshot(branch: $0.branch, isDirty: $0.isDirty)
         }
-        let listeningPorts: [Int]
-        if remoteDetectedSurfaceIds.contains(panelId) || isRemoteTerminalSurface(panelId) {
-            listeningPorts = []
-        } else {
-            listeningPorts = (surfaceListeningPorts[panelId] ?? []).sorted()
-        }
+        let listeningPorts = persistedSessionSnapshotListeningPorts(
+            for: panelId,
+            source: surfaceListeningPorts
+        )
         let ttyName = surfaceTTYNames[panelId]
 
         let terminalSnapshot: SessionTerminalPanelSnapshot?
@@ -510,6 +508,30 @@ extension Workspace {
             browser: browserSnapshot,
             markdown: markdownSnapshot
         )
+    }
+
+    private func shouldPersistListeningPortsInSessionSnapshot(for panelId: UUID) -> Bool {
+        !remoteDetectedSurfaceIds.contains(panelId) && !isRemoteTerminalSurface(panelId)
+    }
+
+    private func persistedSessionSnapshotListeningPorts(
+        for panelId: UUID,
+        source: [UUID: [Int]]
+    ) -> [Int] {
+        guard shouldPersistListeningPortsInSessionSnapshot(for: panelId) else { return [] }
+        return (source[panelId] ?? []).sorted()
+    }
+
+    private func persistedSessionSnapshotListeningPortsSubset(
+        from source: [UUID: [Int]]
+    ) -> [UUID: [Int]] {
+        var subset: [UUID: [Int]] = [:]
+        for (panelId, _) in source {
+            let persistedPorts = persistedSessionSnapshotListeningPorts(for: panelId, source: source)
+            guard !persistedPorts.isEmpty else { continue }
+            subset[panelId] = persistedPorts
+        }
+        return subset
     }
 
     nonisolated static func resolvedSnapshotTerminalScrollback(
@@ -6635,6 +6657,7 @@ final class Workspace: Identifiable, ObservableObject {
     private var manualUnreadMarkedAt: [UUID: Date] = [:]
     nonisolated private static let manualUnreadFocusGraceInterval: TimeInterval = 0.2
     nonisolated private static let manualUnreadClearDelayAfterFocusFlash: TimeInterval = 0.2
+    // Runtime-only sidebar status is restored empty, so it should not drive autosave.
     @Published var statusEntries: [String: SidebarStatusEntry] = [:]
     @Published var metadataBlocks: [String: SidebarMetadataBlock] = [:]
     @Published var logEntries: [SidebarLogEntry] = [] {
@@ -6665,7 +6688,10 @@ final class Workspace: Identifiable, ObservableObject {
     @Published var panelPullRequests: [UUID: SidebarPullRequestState] = [:]
     @Published var surfaceListeningPorts: [UUID: [Int]] = [:] {
         didSet {
-            guard surfaceListeningPorts != oldValue else { return }
+            guard persistedSessionSnapshotListeningPortsSubset(from: surfaceListeningPorts)
+                    != persistedSessionSnapshotListeningPortsSubset(from: oldValue) else {
+                return
+            }
             markSessionSnapshotDirty(reason: "surfaceListeningPorts")
         }
     }
