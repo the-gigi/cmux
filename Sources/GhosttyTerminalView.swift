@@ -4609,20 +4609,29 @@ final class TerminalSurface: Identifiable, ObservableObject {
             return
         }
         ghostty_surface_set_size(surface, pinnedPxW, pinnedPxH)
-        // Convert pixel dimensions back to points and center inside the
-        // attached view's bounds so the visible Ghostty cells (which
-        // start at the layer origin in points) are framed by the border.
+        // Ghostty only re-rasterizes the cells it owns at the new grid;
+        // the rest of the CAMetalLayer keeps stale pixels from the prior
+        // larger set_size. Force a redraw so the inactive region clears
+        // before the border layer above it is painted.
+        ghostty_surface_refresh(surface)
+        attachedView?.layer?.setNeedsDisplay()
+        // Convert pixel dimensions back to points, left-align inside the
+        // attached view's bounds, and anchor the top edge so Ghostty's
+        // prompt stays where it was on screen. Left-align (not center)
+        // so the prompt starts at the same column every time regardless
+        // of container width — users reading text expect a fixed left
+        // margin, not a moving column.
         if let view = attachedView {
             let scale = max(view.window?.backingScaleFactor ?? 2.0, 1.0)
             let widthPts = CGFloat(pinnedPxW) / scale
             let heightPts = CGFloat(pinnedPxH) / scale
             let bounds = view.bounds
-            let originX = max(0, ((bounds.width - widthPts) / 2).rounded())
-            // Ghostty renders from the top of the view; keep the pinned
-            // rect anchored at the top so the prompt stays in the
-            // expected location while the bottom letterboxes.
-            let originY: CGFloat = 0
-            let rect = CGRect(x: originX, y: originY, width: min(widthPts, bounds.width), height: min(heightPts, bounds.height))
+            let rect = CGRect(
+                x: 0,
+                y: 0,
+                width: min(widthPts, bounds.width),
+                height: min(heightPts, bounds.height)
+            )
             view.letterboxRect = rect
         }
         #if DEBUG
@@ -5403,49 +5412,24 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     }
 
     /// Pinned region (in this view's coordinate space, points) where the
-    /// daemon-effective grid is being rendered. When set, a 1 pt
-    /// `NSColor.separatorColor` stroke is drawn around it to indicate
-    /// to the user that the active terminal area is smaller than the
-    /// view because another (smaller) device is attached to the same
-    /// shared session. Set to nil to remove the border (we are the
+    /// daemon-effective grid is being rendered. When set, the enclosing
+    /// scroll view shrinks this view's frame to match, so AppKit
+    /// re-sizes the CAMetalLayer cleanly (no stale-pixel ghosting), and
+    /// draws a 1 pt `NSColor.separatorColor` stroke just outside the
+    /// frame. Set to nil to restore full-bounds rendering (we are the
     /// smallest attached device, or the only one).
     var letterboxRect: CGRect? {
         didSet {
             guard letterboxRect != oldValue else { return }
-            updateLetterboxBorderLayer()
-        }
-    }
-    private var letterboxBorderLayer: CAShapeLayer?
-
-    private func updateLetterboxBorderLayer() {
-        guard let hostLayer = layer else { return }
-        guard let rect = letterboxRect else {
-            letterboxBorderLayer?.removeFromSuperlayer()
-            letterboxBorderLayer = nil
-            return
-        }
-        let border: CAShapeLayer = {
-            if let existing = letterboxBorderLayer { return existing }
-            let b = CAShapeLayer()
-            b.fillColor = NSColor.clear.cgColor
-            b.lineWidth = 1.0
-            b.zPosition = 1000 // above the Metal sublayer
-            // Decorative; let mouse / key events pass through to the
-            // Ghostty renderer underneath.
-            b.actions = ["path": NSNull(), "frame": NSNull()]
-            hostLayer.addSublayer(b)
-            letterboxBorderLayer = b
-            return b
-        }()
-        border.strokeColor = NSColor.separatorColor.cgColor
-        border.contentsScale = hostLayer.contentsScale
-        let outline = rect.insetBy(dx: -1.5, dy: -1.5)
-        let path = CGPath(rect: outline, transform: nil)
-        if border.path != path {
-            border.path = path
-        }
-        if border.frame != hostLayer.bounds {
-            border.frame = hostLayer.bounds
+            // Force the enclosing GhosttySurfaceScrollView to re-run
+            // `synchronizeGeometryAndContent`, which reads this rect
+            // and resizes our frame (so AppKit also resizes the
+            // CAMetalLayer — critical to avoid stale-pixel ghosting
+            // from the previous larger grid) and repaints the border.
+            if let host = enclosingScrollView?.superview as? GhosttySurfaceScrollView {
+                host.needsLayout = true
+                host.layoutSubtreeIfNeeded()
+            }
         }
     }
 
@@ -5687,7 +5671,6 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         super.layout()
         updateSurfaceSize()
         invalidateTextInputCoordinates()
-        updateLetterboxBorderLayer()
     }
 
     override var isOpaque: Bool { false }
@@ -8786,6 +8769,42 @@ final class GhosttySurfaceScrollView: NSView {
     private let backgroundView: NSView
     private let scrollView: GhosttyScrollView
     private let documentView: NSView
+    /// Shape layer drawn on documentView to outline the pinned terminal
+    /// rect when the daemon has asked us to letterbox. Hidden when no
+    /// pin is active. Mouse / key events pass through (no hit testing).
+    private let letterboxBorderLayer: CAShapeLayer = {
+        let layer = CAShapeLayer()
+        layer.fillColor = NSColor.clear.cgColor
+        layer.lineWidth = 1.0
+        layer.zPosition = 1000
+        layer.isHidden = true
+        layer.actions = ["path": NSNull(), "frame": NSNull()]
+        return layer
+    }()
+
+    /// Refresh the letterbox border around `surfaceView`. Called by
+    /// `GhosttyNSView` when its `letterboxRect` changes, and by our own
+    /// `synchronizeGeometryAndContent` after every layout pass so the
+    /// stroke follows window resizes.
+    func updateLetterboxBorderLayer(around view: NSView) {
+        guard let docLayer = documentView.layer else { return }
+        // Hide the border when surfaceView fills the document view — the
+        // smallest-device case: no letterboxing, no visual chrome.
+        let doc = documentView.bounds
+        let s = view.frame
+        let isPinned = s.width + 0.5 < doc.width || s.height + 0.5 < doc.height
+        letterboxBorderLayer.isHidden = !isPinned
+        letterboxBorderLayer.strokeColor = NSColor.separatorColor.cgColor
+        letterboxBorderLayer.contentsScale = docLayer.contentsScale
+        let outline = s.insetBy(dx: -1, dy: -1)
+        let path = CGPath(rect: outline, transform: nil)
+        if letterboxBorderLayer.path != path {
+            letterboxBorderLayer.path = path
+        }
+        if letterboxBorderLayer.frame != doc {
+            letterboxBorderLayer.frame = doc
+        }
+    }
     private let surfaceView: GhosttyNSView
     private let inactiveOverlayView: GhosttyFlashOverlayView
     private let dropZoneOverlayView: GhosttyFlashOverlayView
@@ -9044,10 +9063,15 @@ final class GhosttySurfaceScrollView: NSView {
         documentView = NSView(frame: .zero)
         scrollView.documentView = documentView
         documentView.addSubview(surfaceView)
+        documentView.wantsLayer = true
 
         super.init(frame: .zero)
         wantsLayer = true
         layer?.masksToBounds = true
+
+        // documentView.layer is materialized after wantsLayer=true; attach
+        // the letterbox border sublayer now that self is fully set up.
+        documentView.layer?.addSublayer(letterboxBorderLayer)
 
         backgroundView.wantsLayer = true
         let initialTerminalBackground = GhosttyApp.shared.defaultBackgroundColor
@@ -9399,8 +9423,28 @@ final class GhosttySurfaceScrollView: NSView {
 #if DEBUG
         logLayoutDuringActiveDrag(targetSize: targetSize)
 #endif
-        let targetSurfaceFrame = CGRect(origin: surfaceView.frame.origin, size: targetSize)
+        // When the daemon has pinned this surface to a smaller effective
+        // grid (another attached device has a smaller container),
+        // shrink the surfaceView so AppKit resizes its CAMetalLayer to
+        // the pinned rect. Without this the Ghostty renderer writes into
+        // a smaller cell region but the surrounding Metal pixels retain
+        // stale content from the previous larger grid, producing the
+        // ghosting / overlapping-text artifact.
+        let targetSurfaceFrame: CGRect
+        if let pin = surfaceView.letterboxRect,
+           pin.width > 0, pin.height > 0,
+           pin.width + 0.5 < targetSize.width || pin.height + 0.5 < targetSize.height {
+            targetSurfaceFrame = CGRect(
+                x: 0,
+                y: 0,
+                width: min(pin.width, targetSize.width),
+                height: min(pin.height, targetSize.height)
+            )
+        } else {
+            targetSurfaceFrame = CGRect(origin: surfaceView.frame.origin, size: targetSize)
+        }
         _ = setFrameIfNeeded(surfaceView, to: targetSurfaceFrame)
+        updateLetterboxBorderLayer(around: surfaceView)
         let targetDocumentFrame = CGRect(
             origin: documentView.frame.origin,
             size: CGSize(width: scrollView.bounds.width, height: documentView.frame.height)

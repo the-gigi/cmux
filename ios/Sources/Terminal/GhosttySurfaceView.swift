@@ -982,13 +982,12 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
             if pinnedW + 0.5 < containerW || pinnedH + 0.5 < containerH {
                 let clampedW = min(pinnedW, containerW)
                 let clampedH = min(pinnedH, containerH)
-                let originX = ((containerW - clampedW) / 2).rounded()
-                // Keep the pinned surface anchored near the top of the
-                // container — preserves the existing convention where the
-                // terminal fills from top and extends down, and keeps the
-                // prompt visible when the keyboard covers the bottom.
-                let originY = ((containerH - clampedH) / 2).rounded()
-                renderRect = CGRect(x: originX, y: originY, width: clampedW, height: clampedH)
+                // Left-align + top-anchor the pinned surface so cells line
+                // up at the same screen column every render, regardless of
+                // container width. Users scanning text expect a fixed left
+                // margin; centering would make the prompt jitter horizontally
+                // when another device attaches or detaches.
+                renderRect = CGRect(x: 0, y: 0, width: clampedW, height: clampedH)
                 renderPxW = UInt32(max(1, Int((clampedW * scale).rounded(.down))))
                 renderPxH = UInt32(max(1, Int((clampedH * scale).rounded(.down))))
                 ghostty_surface_set_size(surface, renderPxW, renderPxH)
