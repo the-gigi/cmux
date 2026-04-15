@@ -1563,18 +1563,13 @@ private final class WindowTmuxWorkspacePaneOverlayController: NSObject {
     private weak var window: NSWindow?
     private let containerView = PassthroughWindowOverlayContainerView(frame: .zero)
     private let model = TmuxWorkspacePaneOverlayModel()
-    private let hostingView: NSHostingView<TmuxWorkspacePaneOverlayView>
+    private let hostingView: NSHostingView<TmuxWorkspacePaneOverlayObservedView>
     private var installConstraints: [NSLayoutConstraint] = []
 
     init(window: NSWindow) {
         self.window = window
         self.hostingView = NSHostingView(
-            rootView: TmuxWorkspacePaneOverlayView(
-                unreadRects: [],
-                flashRect: nil,
-                flashStartedAt: nil,
-                flashReason: nil
-            )
+            rootView: TmuxWorkspacePaneOverlayObservedView(model: model)
         )
         super.init()
         containerView.translatesAutoresizingMaskIntoConstraints = false
@@ -1623,22 +1618,10 @@ private final class WindowTmuxWorkspacePaneOverlayController: NSObject {
         guard ensureInstalled() else { return }
         if let state {
             model.apply(state)
-            hostingView.rootView = TmuxWorkspacePaneOverlayView(
-                unreadRects: model.unreadRects,
-                flashRect: model.flashRect,
-                flashStartedAt: model.flashStartedAt,
-                flashReason: model.flashReason
-            )
             containerView.alphaValue = 1
             containerView.isHidden = false
         } else {
             model.clear()
-            hostingView.rootView = TmuxWorkspacePaneOverlayView(
-                unreadRects: [],
-                flashRect: nil,
-                flashStartedAt: nil,
-                flashReason: nil
-            )
             containerView.alphaValue = 0
             containerView.isHidden = true
         }

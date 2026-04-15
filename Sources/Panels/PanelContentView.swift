@@ -24,16 +24,10 @@ struct PanelContentView: View {
                     assertionFailure("Terminal panels should render via the AppKit split host")
                 }
         case .browser:
-            if let browserPanel = panel as? BrowserPanel {
-                BrowserPanelView(
-                    panel: browserPanel,
-                    paneId: paneId,
-                    isFocused: isFocused,
-                    isVisibleInUI: isVisibleInUI,
-                    portalPriority: portalPriority,
-                    onRequestPanelFocus: onRequestPanelFocus
-                )
-            }
+            Color.clear
+                .onAppear {
+                    assertionFailure("Browser panels should render via the AppKit split host")
+                }
         case .markdown:
             if let markdownPanel = panel as? MarkdownPanel {
                 MarkdownPanelView(

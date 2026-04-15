@@ -42,12 +42,12 @@ struct WorkspaceTabID: Hashable, Codable, Sendable, CustomStringConvertible {
 
 typealias TabID = WorkspaceTabID
 
-enum WorkspaceSplitOrientation: String, Codable, Sendable {
+enum WorkspaceLayoutOrientation: String, Codable, Sendable {
     case horizontal
     case vertical
 }
 
-typealias SplitOrientation = WorkspaceSplitOrientation
+typealias SplitOrientation = WorkspaceLayoutOrientation
 
 enum WorkspaceNavigationDirection: String, Codable, Sendable {
     case left
@@ -226,7 +226,7 @@ enum NewTabPosition: Sendable {
     case end
 }
 
-struct WorkspaceSplitConfiguration: Sendable {
+struct WorkspaceLayoutConfiguration: Sendable {
     var allowSplits: Bool
     var allowCloseTabs: Bool
     var allowCloseLastPane: Bool
@@ -237,7 +237,7 @@ struct WorkspaceSplitConfiguration: Sendable {
     var newTabPosition: NewTabPosition
     var appearance: Appearance
 
-    static let `default` = WorkspaceSplitConfiguration()
+    static let `default` = WorkspaceLayoutConfiguration()
 
     init(
         allowSplits: Bool = true,
@@ -296,6 +296,7 @@ struct WorkspaceSplitConfiguration: Sendable {
         var tabBarHeight: CGFloat
         var tabMinWidth: CGFloat
         var tabMaxWidth: CGFloat
+        var tabTitleFontSize: CGFloat
         var tabSpacing: CGFloat
         var minimumPaneWidth: CGFloat
         var minimumPaneHeight: CGFloat
@@ -313,6 +314,7 @@ struct WorkspaceSplitConfiguration: Sendable {
             tabBarHeight: CGFloat = 30,
             tabMinWidth: CGFloat = 48,
             tabMaxWidth: CGFloat = 220,
+            tabTitleFontSize: CGFloat = 11,
             tabSpacing: CGFloat = 0,
             minimumPaneWidth: CGFloat = 100,
             minimumPaneHeight: CGFloat = 100,
@@ -327,6 +329,7 @@ struct WorkspaceSplitConfiguration: Sendable {
             self.tabBarHeight = tabBarHeight
             self.tabMinWidth = tabMinWidth
             self.tabMaxWidth = tabMaxWidth
+            self.tabTitleFontSize = tabTitleFontSize
             self.tabSpacing = tabSpacing
             self.minimumPaneWidth = minimumPaneWidth
             self.minimumPaneHeight = minimumPaneHeight
@@ -341,7 +344,7 @@ struct WorkspaceSplitConfiguration: Sendable {
     }
 }
 
-enum WorkspaceSplit {
+enum WorkspaceLayout {
     struct Tab: Identifiable, Hashable, Sendable {
         var id: TabID
         var title: String
@@ -380,40 +383,40 @@ enum WorkspaceSplit {
     }
 }
 
-protocol WorkspaceSplitDelegate: AnyObject {
-    func workspaceSplit(_ controller: WorkspaceSplitController, shouldCreateTab tab: WorkspaceSplit.Tab, inPane pane: PaneID) -> Bool
-    func workspaceSplit(_ controller: WorkspaceSplitController, shouldCloseTab tab: WorkspaceSplit.Tab, inPane pane: PaneID) -> Bool
-    func workspaceSplit(_ controller: WorkspaceSplitController, didCreateTab tab: WorkspaceSplit.Tab, inPane pane: PaneID)
-    func workspaceSplit(_ controller: WorkspaceSplitController, didCloseTab tabId: TabID, fromPane pane: PaneID)
-    func workspaceSplit(_ controller: WorkspaceSplitController, didSelectTab tab: WorkspaceSplit.Tab, inPane pane: PaneID)
-    func workspaceSplit(_ controller: WorkspaceSplitController, didMoveTab tab: WorkspaceSplit.Tab, fromPane source: PaneID, toPane destination: PaneID)
-    func workspaceSplit(_ controller: WorkspaceSplitController, shouldSplitPane pane: PaneID, orientation: SplitOrientation) -> Bool
-    func workspaceSplit(_ controller: WorkspaceSplitController, shouldClosePane pane: PaneID) -> Bool
-    func workspaceSplit(_ controller: WorkspaceSplitController, didSplitPane originalPane: PaneID, newPane: PaneID, orientation: SplitOrientation)
-    func workspaceSplit(_ controller: WorkspaceSplitController, didClosePane paneId: PaneID)
-    func workspaceSplit(_ controller: WorkspaceSplitController, didFocusPane pane: PaneID)
-    func workspaceSplit(_ controller: WorkspaceSplitController, didRequestNewTab kind: String, inPane pane: PaneID)
-    func workspaceSplit(_ controller: WorkspaceSplitController, didRequestTabContextAction action: TabContextAction, for tab: WorkspaceSplit.Tab, inPane pane: PaneID)
-    func workspaceSplit(_ controller: WorkspaceSplitController, didChangeGeometry snapshot: LayoutSnapshot)
-    func workspaceSplit(_ controller: WorkspaceSplitController, shouldNotifyDuringDrag: Bool) -> Bool
+protocol WorkspaceLayoutDelegate: AnyObject {
+    func workspaceSplit(_ controller: WorkspaceLayoutController, shouldCreateTab tab: WorkspaceLayout.Tab, inPane pane: PaneID) -> Bool
+    func workspaceSplit(_ controller: WorkspaceLayoutController, shouldCloseTab tab: WorkspaceLayout.Tab, inPane pane: PaneID) -> Bool
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didCreateTab tab: WorkspaceLayout.Tab, inPane pane: PaneID)
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didCloseTab tabId: TabID, fromPane pane: PaneID)
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didSelectTab tab: WorkspaceLayout.Tab, inPane pane: PaneID)
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didMoveTab tab: WorkspaceLayout.Tab, fromPane source: PaneID, toPane destination: PaneID)
+    func workspaceSplit(_ controller: WorkspaceLayoutController, shouldSplitPane pane: PaneID, orientation: SplitOrientation) -> Bool
+    func workspaceSplit(_ controller: WorkspaceLayoutController, shouldClosePane pane: PaneID) -> Bool
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didSplitPane originalPane: PaneID, newPane: PaneID, orientation: SplitOrientation)
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didClosePane paneId: PaneID)
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didFocusPane pane: PaneID)
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didRequestNewTab kind: String, inPane pane: PaneID)
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didRequestTabContextAction action: TabContextAction, for tab: WorkspaceLayout.Tab, inPane pane: PaneID)
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didChangeGeometry snapshot: LayoutSnapshot)
+    func workspaceSplit(_ controller: WorkspaceLayoutController, shouldNotifyDuringDrag: Bool) -> Bool
 }
 
-extension WorkspaceSplitDelegate {
-    func workspaceSplit(_ controller: WorkspaceSplitController, shouldCreateTab tab: WorkspaceSplit.Tab, inPane pane: PaneID) -> Bool { true }
-    func workspaceSplit(_ controller: WorkspaceSplitController, shouldCloseTab tab: WorkspaceSplit.Tab, inPane pane: PaneID) -> Bool { true }
-    func workspaceSplit(_ controller: WorkspaceSplitController, didCreateTab tab: WorkspaceSplit.Tab, inPane pane: PaneID) {}
-    func workspaceSplit(_ controller: WorkspaceSplitController, didCloseTab tabId: TabID, fromPane pane: PaneID) {}
-    func workspaceSplit(_ controller: WorkspaceSplitController, didSelectTab tab: WorkspaceSplit.Tab, inPane pane: PaneID) {}
-    func workspaceSplit(_ controller: WorkspaceSplitController, didMoveTab tab: WorkspaceSplit.Tab, fromPane source: PaneID, toPane destination: PaneID) {}
-    func workspaceSplit(_ controller: WorkspaceSplitController, shouldSplitPane pane: PaneID, orientation: SplitOrientation) -> Bool { true }
-    func workspaceSplit(_ controller: WorkspaceSplitController, shouldClosePane pane: PaneID) -> Bool { true }
-    func workspaceSplit(_ controller: WorkspaceSplitController, didSplitPane originalPane: PaneID, newPane: PaneID, orientation: SplitOrientation) {}
-    func workspaceSplit(_ controller: WorkspaceSplitController, didClosePane paneId: PaneID) {}
-    func workspaceSplit(_ controller: WorkspaceSplitController, didFocusPane pane: PaneID) {}
-    func workspaceSplit(_ controller: WorkspaceSplitController, didRequestNewTab kind: String, inPane pane: PaneID) {}
-    func workspaceSplit(_ controller: WorkspaceSplitController, didRequestTabContextAction action: TabContextAction, for tab: WorkspaceSplit.Tab, inPane pane: PaneID) {}
-    func workspaceSplit(_ controller: WorkspaceSplitController, didChangeGeometry snapshot: LayoutSnapshot) {}
-    func workspaceSplit(_ controller: WorkspaceSplitController, shouldNotifyDuringDrag: Bool) -> Bool { false }
+extension WorkspaceLayoutDelegate {
+    func workspaceSplit(_ controller: WorkspaceLayoutController, shouldCreateTab tab: WorkspaceLayout.Tab, inPane pane: PaneID) -> Bool { true }
+    func workspaceSplit(_ controller: WorkspaceLayoutController, shouldCloseTab tab: WorkspaceLayout.Tab, inPane pane: PaneID) -> Bool { true }
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didCreateTab tab: WorkspaceLayout.Tab, inPane pane: PaneID) {}
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didCloseTab tabId: TabID, fromPane pane: PaneID) {}
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didSelectTab tab: WorkspaceLayout.Tab, inPane pane: PaneID) {}
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didMoveTab tab: WorkspaceLayout.Tab, fromPane source: PaneID, toPane destination: PaneID) {}
+    func workspaceSplit(_ controller: WorkspaceLayoutController, shouldSplitPane pane: PaneID, orientation: SplitOrientation) -> Bool { true }
+    func workspaceSplit(_ controller: WorkspaceLayoutController, shouldClosePane pane: PaneID) -> Bool { true }
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didSplitPane originalPane: PaneID, newPane: PaneID, orientation: SplitOrientation) {}
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didClosePane paneId: PaneID) {}
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didFocusPane pane: PaneID) {}
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didRequestNewTab kind: String, inPane pane: PaneID) {}
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didRequestTabContextAction action: TabContextAction, for tab: WorkspaceLayout.Tab, inPane pane: PaneID) {}
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didChangeGeometry snapshot: LayoutSnapshot) {}
+    func workspaceSplit(_ controller: WorkspaceLayoutController, shouldNotifyDuringDrag: Bool) -> Bool { false }
 }
 
 
@@ -433,7 +436,7 @@ extension WorkspaceDropZone {
     }
 }
 
-extension WorkspaceSplit.Tab {
+extension WorkspaceLayout.Tab {
     init(from tabItem: TabItem) {
         self.init(
             id: TabID(id: tabItem.id),
@@ -451,7 +454,7 @@ extension WorkspaceSplit.Tab {
 }
 
 #if DEBUG
-enum WorkspaceSplitDebugCounters {
+enum WorkspaceLayoutDebugCounters {
     private(set) static var arrangedSubviewUnderflowCount: Int = 0
 
     static func reset() {
@@ -463,7 +466,7 @@ enum WorkspaceSplitDebugCounters {
     }
 }
 #else
-enum WorkspaceSplitDebugCounters {
+enum WorkspaceLayoutDebugCounters {
     static let arrangedSubviewUnderflowCount: Int = 0
 
     static func reset() {}
@@ -848,6 +851,9 @@ final class PaneState: Identifiable {
     let id: PaneID
     var tabs: [TabItem]
     var selectedTabId: UUID?
+    // AppKit tab chrome is driven by snapshots of this pane. Bump explicitly on
+    // metadata edits so hosts don't depend on nested array observation quirks.
+    var chromeRevision: UInt64 = 0
 
     init(
         id: PaneID = PaneID(),
@@ -867,7 +873,9 @@ final class PaneState: Identifiable {
     /// Select a tab by ID
     func selectTab(_ tabId: UUID) {
         guard tabs.contains(where: { $0.id == tabId }) else { return }
+        guard selectedTabId != tabId else { return }
         selectedTabId = tabId
+        chromeRevision &+= 1
     }
 
     /// Add a new tab
@@ -878,6 +886,7 @@ final class PaneState: Identifiable {
         if select {
             selectedTabId = tab.id
         }
+        chromeRevision &+= 1
     }
 
     /// Insert a tab at a specific index
@@ -894,6 +903,7 @@ final class PaneState: Identifiable {
         if select {
             selectedTabId = tab.id
         }
+        chromeRevision &+= 1
     }
 
     /// Remove a tab and return it
@@ -913,6 +923,8 @@ final class PaneState: Identifiable {
                 selectedTabId = nil
             }
         }
+
+        chromeRevision &+= 1
 
         return tab
     }
@@ -939,6 +951,7 @@ final class PaneState: Identifiable {
         }
         let safeIndex = min(max(0, adjustedIndex), tabs.count)
         tabs.insert(tab, at: safeIndex)
+        chromeRevision &+= 1
     }
 }
 
@@ -1139,7 +1152,7 @@ final class SplitViewController {
     @ObservationIgnored var activeDragSourcePaneId: PaneID?
 
     /// When false, drop delegates reject all drags and NSViews are hidden.
-    /// Mirrors WorkspaceSplitController.isInteractive. Must be observable so
+    /// Mirrors WorkspaceLayoutController.isInteractive. Must be observable so
     /// updateNSView is called to toggle isHidden on the AppKit containers.
     var isInteractive: Bool = true
 
@@ -1182,7 +1195,7 @@ final class SplitViewController {
     func focusPane(_ paneId: PaneID) {
         guard rootNode.findPane(paneId) != nil else { return }
 #if DEBUG
-        dlog("focus.WorkspaceSplit pane=\(paneId.id.uuidString.prefix(5))")
+        dlog("focus.WorkspaceLayout pane=\(paneId.id.uuidString.prefix(5))")
 #endif
         focusedPaneId = paneId
     }
@@ -1692,35 +1705,35 @@ enum TabBarColors {
     }
 
     private static func chromeBackgroundColor(
-        for appearance: WorkspaceSplitConfiguration.Appearance
+        for appearance: WorkspaceLayoutConfiguration.Appearance
     ) -> NSColor? {
         guard let value = appearance.chromeColors.backgroundHex else { return nil }
         return NSColor(workspaceSplitHex: value)
     }
 
     private static func chromeBorderColor(
-        for appearance: WorkspaceSplitConfiguration.Appearance
+        for appearance: WorkspaceLayoutConfiguration.Appearance
     ) -> NSColor? {
         guard let value = appearance.chromeColors.borderHex else { return nil }
         return NSColor(workspaceSplitHex: value)
     }
 
     private static func effectiveBackgroundColor(
-        for appearance: WorkspaceSplitConfiguration.Appearance,
+        for appearance: WorkspaceLayoutConfiguration.Appearance,
         fallback fallbackColor: NSColor
     ) -> NSColor {
         chromeBackgroundColor(for: appearance) ?? fallbackColor
     }
 
     private static func effectiveTextColor(
-        for appearance: WorkspaceSplitConfiguration.Appearance,
+        for appearance: WorkspaceLayoutConfiguration.Appearance,
         secondary: Bool
     ) -> NSColor {
         guard let custom = chromeBackgroundColor(for: appearance) else {
             return secondary ? .secondaryLabelColor : .labelColor
         }
 
-        if custom.isWorkspaceSplitLightColor {
+        if custom.isWorkspaceLayoutLightColor {
             let alpha = secondary ? Constants.darkSecondaryTextAlpha : Constants.darkTextAlpha
             return NSColor.black.withAlphaComponent(alpha)
         }
@@ -1729,11 +1742,11 @@ enum TabBarColors {
         return NSColor.white.withAlphaComponent(alpha)
     }
 
-    static func paneBackground(for appearance: WorkspaceSplitConfiguration.Appearance) -> Color {
+    static func paneBackground(for appearance: WorkspaceLayoutConfiguration.Appearance) -> Color {
         Color(nsColor: effectiveBackgroundColor(for: appearance, fallback: .textBackgroundColor))
     }
 
-    static func nsColorPaneBackground(for appearance: WorkspaceSplitConfiguration.Appearance) -> NSColor {
+    static func nsColorPaneBackground(for appearance: WorkspaceLayoutConfiguration.Appearance) -> NSColor {
         effectiveBackgroundColor(for: appearance, fallback: .textBackgroundColor)
     }
 
@@ -1743,7 +1756,7 @@ enum TabBarColors {
         Color(nsColor: .windowBackgroundColor)
     }
 
-    static func barBackground(for appearance: WorkspaceSplitConfiguration.Appearance) -> Color {
+    static func barBackground(for appearance: WorkspaceLayoutConfiguration.Appearance) -> Color {
         Color(nsColor: effectiveBackgroundColor(for: appearance, fallback: .windowBackgroundColor))
     }
 
@@ -1757,11 +1770,11 @@ enum TabBarColors {
         Color(nsColor: .controlBackgroundColor)
     }
 
-    static func activeTabBackground(for appearance: WorkspaceSplitConfiguration.Appearance) -> Color {
+    static func activeTabBackground(for appearance: WorkspaceLayoutConfiguration.Appearance) -> Color {
         guard let custom = chromeBackgroundColor(for: appearance) else {
             return activeTabBackground
         }
-        let adjusted = custom.isWorkspaceSplitLightColor
+        let adjusted = custom.isWorkspaceLayoutLightColor
             ? custom.workspaceSplitDarken(by: 0.065)
             : custom.workspaceSplitLighten(by: 0.12)
         return Color(nsColor: adjusted)
@@ -1771,11 +1784,11 @@ enum TabBarColors {
         Color(nsColor: .controlBackgroundColor).opacity(0.5)
     }
 
-    static func hoveredTabBackground(for appearance: WorkspaceSplitConfiguration.Appearance) -> Color {
+    static func hoveredTabBackground(for appearance: WorkspaceLayoutConfiguration.Appearance) -> Color {
         guard let custom = chromeBackgroundColor(for: appearance) else {
             return hoveredTabBackground
         }
-        let adjusted = custom.isWorkspaceSplitLightColor
+        let adjusted = custom.isWorkspaceLayoutLightColor
             ? custom.workspaceSplitDarken(by: 0.03)
             : custom.workspaceSplitLighten(by: 0.07)
         return Color(nsColor: adjusted.withAlphaComponent(0.78))
@@ -1791,11 +1804,11 @@ enum TabBarColors {
         Color(nsColor: .labelColor)
     }
 
-    static func activeText(for appearance: WorkspaceSplitConfiguration.Appearance) -> Color {
+    static func activeText(for appearance: WorkspaceLayoutConfiguration.Appearance) -> Color {
         Color(nsColor: effectiveTextColor(for: appearance, secondary: false))
     }
 
-    static func nsColorActiveText(for appearance: WorkspaceSplitConfiguration.Appearance) -> NSColor {
+    static func nsColorActiveText(for appearance: WorkspaceLayoutConfiguration.Appearance) -> NSColor {
         effectiveTextColor(for: appearance, secondary: false)
     }
 
@@ -1803,20 +1816,20 @@ enum TabBarColors {
         Color(nsColor: .secondaryLabelColor)
     }
 
-    static func inactiveText(for appearance: WorkspaceSplitConfiguration.Appearance) -> Color {
+    static func inactiveText(for appearance: WorkspaceLayoutConfiguration.Appearance) -> Color {
         Color(nsColor: effectiveTextColor(for: appearance, secondary: true))
     }
 
-    static func nsColorInactiveText(for appearance: WorkspaceSplitConfiguration.Appearance) -> NSColor {
+    static func nsColorInactiveText(for appearance: WorkspaceLayoutConfiguration.Appearance) -> NSColor {
         effectiveTextColor(for: appearance, secondary: true)
     }
 
-    static func splitActionIcon(for appearance: WorkspaceSplitConfiguration.Appearance, isPressed: Bool) -> Color {
+    static func splitActionIcon(for appearance: WorkspaceLayoutConfiguration.Appearance, isPressed: Bool) -> Color {
         Color(nsColor: nsColorSplitActionIcon(for: appearance, isPressed: isPressed))
     }
 
     static func nsColorSplitActionIcon(
-        for appearance: WorkspaceSplitConfiguration.Appearance,
+        for appearance: WorkspaceLayoutConfiguration.Appearance,
         isPressed: Bool
     ) -> NSColor {
         isPressed ? nsColorActiveText(for: appearance) : nsColorInactiveText(for: appearance)
@@ -1828,11 +1841,11 @@ enum TabBarColors {
         Color(nsColor: .separatorColor)
     }
 
-    static func separator(for appearance: WorkspaceSplitConfiguration.Appearance) -> Color {
+    static func separator(for appearance: WorkspaceLayoutConfiguration.Appearance) -> Color {
         Color(nsColor: nsColorSeparator(for: appearance))
     }
 
-    static func nsColorSeparator(for appearance: WorkspaceSplitConfiguration.Appearance) -> NSColor {
+    static func nsColorSeparator(for appearance: WorkspaceLayoutConfiguration.Appearance) -> NSColor {
         if let explicit = chromeBorderColor(for: appearance) {
             return explicit
         }
@@ -1840,8 +1853,8 @@ enum TabBarColors {
         guard let custom = chromeBackgroundColor(for: appearance) else {
             return .separatorColor
         }
-        let alpha: CGFloat = custom.isWorkspaceSplitLightColor ? 0.26 : 0.36
-        let tone = custom.isWorkspaceSplitLightColor
+        let alpha: CGFloat = custom.isWorkspaceLayoutLightColor ? 0.26 : 0.36
+        let tone = custom.isWorkspaceLayoutLightColor
             ? custom.workspaceSplitDarken(by: 0.12)
             : custom.workspaceSplitLighten(by: 0.16)
         return tone.withAlphaComponent(alpha)
@@ -1851,7 +1864,7 @@ enum TabBarColors {
         Color.accentColor
     }
 
-    static func dropIndicator(for appearance: WorkspaceSplitConfiguration.Appearance) -> Color {
+    static func dropIndicator(for appearance: WorkspaceLayoutConfiguration.Appearance) -> Color {
         _ = appearance
         return dropIndicator
     }
@@ -1864,7 +1877,7 @@ enum TabBarColors {
         Color(nsColor: .labelColor).opacity(0.6)
     }
 
-    static func dirtyIndicator(for appearance: WorkspaceSplitConfiguration.Appearance) -> Color {
+    static func dirtyIndicator(for appearance: WorkspaceLayoutConfiguration.Appearance) -> Color {
         guard chromeBackgroundColor(for: appearance) != nil else { return dirtyIndicator }
         return activeText(for: appearance).opacity(0.72)
     }
@@ -1873,7 +1886,7 @@ enum TabBarColors {
         Color(nsColor: .systemBlue)
     }
 
-    static func notificationBadge(for appearance: WorkspaceSplitConfiguration.Appearance) -> Color {
+    static func notificationBadge(for appearance: WorkspaceLayoutConfiguration.Appearance) -> Color {
         _ = appearance
         return notificationBadge
     }
@@ -1914,7 +1927,7 @@ private extension NSColor {
         self.init(red: red, green: green, blue: blue, alpha: alpha)
     }
 
-    var isWorkspaceSplitLightColor: Bool {
+    var isWorkspaceLayoutLightColor: Bool {
         var red: CGFloat = 0
         var green: CGFloat = 0
         var blue: CGFloat = 0
@@ -2097,37 +2110,6 @@ final class SplitAnimator {
     }
 }
 
-import SwiftUI
-
-/// Preview shown during tab drag operations
-struct TabDragPreview: View {
-    let tab: TabItem
-    let appearance: WorkspaceSplitConfiguration.Appearance
-
-    var body: some View {
-        HStack(spacing: TabBarMetrics.contentSpacing) {
-            if let iconName = tab.icon {
-                Image(systemName: iconName)
-                    .font(.system(size: TabBarMetrics.iconSize))
-                    .foregroundStyle(TabBarColors.activeText(for: appearance))
-            }
-
-            Text(tab.title)
-                .font(.system(size: TabBarMetrics.titleFontSize))
-                .lineLimit(1)
-                .foregroundStyle(TabBarColors.activeText(for: appearance))
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: TabBarMetrics.tabCornerRadius, style: .continuous)
-                .fill(TabBarColors.activeTabBackground(for: appearance))
-                .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
-        )
-        .opacity(0.9)
-    }
-}
-
 struct TabContextMenuState {
     let isPinned: Bool
     let isUnread: Bool
@@ -2154,7 +2136,7 @@ struct TabContextMenuState {
 
 @MainActor
 @Observable
-final class WorkspaceSplitController {
+final class WorkspaceLayoutController {
 
     struct ExternalTabDropRequest {
         enum Destination {
@@ -2176,12 +2158,12 @@ final class WorkspaceSplitController {
     // MARK: - Delegate
 
     /// Delegate for receiving callbacks about tab bar events
-    weak var delegate: WorkspaceSplitDelegate?
+    weak var delegate: WorkspaceLayoutDelegate?
 
     // MARK: - Configuration
 
     /// Configuration for behavior and appearance
-    var configuration: WorkspaceSplitConfiguration
+    var configuration: WorkspaceLayoutConfiguration
 
     /// When false, drop delegates reject all drags. Set to false for inactive workspaces
     /// so their views (kept alive in a ZStack for state preservation) don't intercept drags
@@ -2197,7 +2179,7 @@ final class WorkspaceSplitController {
         didSet { internalController.onFileDrop = onFileDrop }
     }
 
-    /// Handler for tab drops originating from another WorkspaceSplit controller (e.g. another workspace/window).
+    /// Handler for tab drops originating from another WorkspaceLayout controller (e.g. another workspace/window).
     /// Return `true` when the drop has been handled by the host application.
     @ObservationIgnored var onExternalTabDrop: ((ExternalTabDropRequest) -> Bool)?
 
@@ -2212,12 +2194,12 @@ final class WorkspaceSplitController {
     // MARK: - Initialization
 
     /// Create a new controller with the specified configuration
-    init(configuration: WorkspaceSplitConfiguration = .default) {
+    init(configuration: WorkspaceLayoutConfiguration = .default) {
         self.configuration = configuration
         self.internalController = SplitViewController()
     }
 
-    // MARK: - WorkspaceSplit.Tab Operations
+    // MARK: - WorkspaceLayout.Tab Operations
 
     /// Create a new tab in the focused pane (or specified pane)
     /// - Parameters:
@@ -2246,7 +2228,7 @@ final class WorkspaceSplitController {
         inPane pane: PaneID? = nil
     ) -> TabID? {
         let tabId = TabID()
-        let tab = WorkspaceSplit.Tab(
+        let tab = WorkspaceLayout.Tab(
             id: tabId,
             title: title,
             hasCustomTitle: hasCustomTitle,
@@ -2340,33 +2322,65 @@ final class WorkspaceSplitController {
         isPinned: Bool? = nil
     ) {
         guard let (pane, tabIndex) = findTabInternal(tabId) else { return }
+        var didMutate = false
 
         if let title = title {
-            pane.tabs[tabIndex].title = title
+            if pane.tabs[tabIndex].title != title {
+                pane.tabs[tabIndex].title = title
+                didMutate = true
+            }
         }
         if let icon = icon {
-            pane.tabs[tabIndex].icon = icon
+            if pane.tabs[tabIndex].icon != icon {
+                pane.tabs[tabIndex].icon = icon
+                didMutate = true
+            }
         }
         if let iconImageData = iconImageData {
-            pane.tabs[tabIndex].iconImageData = iconImageData
+            if pane.tabs[tabIndex].iconImageData != iconImageData {
+                pane.tabs[tabIndex].iconImageData = iconImageData
+                didMutate = true
+            }
         }
         if let kind = kind {
-            pane.tabs[tabIndex].kind = kind
+            if pane.tabs[tabIndex].kind != kind {
+                pane.tabs[tabIndex].kind = kind
+                didMutate = true
+            }
         }
         if let hasCustomTitle = hasCustomTitle {
-            pane.tabs[tabIndex].hasCustomTitle = hasCustomTitle
+            if pane.tabs[tabIndex].hasCustomTitle != hasCustomTitle {
+                pane.tabs[tabIndex].hasCustomTitle = hasCustomTitle
+                didMutate = true
+            }
         }
         if let isDirty = isDirty {
-            pane.tabs[tabIndex].isDirty = isDirty
+            if pane.tabs[tabIndex].isDirty != isDirty {
+                pane.tabs[tabIndex].isDirty = isDirty
+                didMutate = true
+            }
         }
         if let showsNotificationBadge = showsNotificationBadge {
-            pane.tabs[tabIndex].showsNotificationBadge = showsNotificationBadge
+            if pane.tabs[tabIndex].showsNotificationBadge != showsNotificationBadge {
+                pane.tabs[tabIndex].showsNotificationBadge = showsNotificationBadge
+                didMutate = true
+            }
         }
         if let isLoading = isLoading {
-            pane.tabs[tabIndex].isLoading = isLoading
+            if pane.tabs[tabIndex].isLoading != isLoading {
+                pane.tabs[tabIndex].isLoading = isLoading
+                didMutate = true
+            }
         }
         if let isPinned = isPinned {
-            pane.tabs[tabIndex].isPinned = isPinned
+            if pane.tabs[tabIndex].isPinned != isPinned {
+                pane.tabs[tabIndex].isPinned = isPinned
+                didMutate = true
+            }
+        }
+
+        if didMutate {
+            pane.chromeRevision &+= 1
         }
     }
 
@@ -2397,7 +2411,7 @@ final class WorkspaceSplitController {
     /// - Parameter pane: The pane in which to close the tab
     private func closeTab(_ tabId: TabID, with tabIndex: Int, in pane: PaneState) -> Bool {
         let tabItem = pane.tabs[tabIndex]
-        let tab = WorkspaceSplit.Tab(from: tabItem)
+        let tab = WorkspaceLayout.Tab(from: tabItem)
         let paneId = pane.id
 
         // Check with delegate
@@ -2423,7 +2437,7 @@ final class WorkspaceSplitController {
         internalController.focusPane(pane.id)
 
         // Notify delegate
-        let tab = WorkspaceSplit.Tab(from: pane.tabs[tabIndex])
+        let tab = WorkspaceLayout.Tab(from: pane.tabs[tabIndex])
         delegate?.workspaceSplit(self, didSelectTab: tab, inPane: pane.id)
     }
 
@@ -2439,7 +2453,7 @@ final class WorkspaceSplitController {
         guard let targetPane = internalController.rootNode.findPane(PaneID(id: targetPaneId.id)) else { return false }
 
         let tabItem = sourcePane.tabs[sourceIndex]
-        let movedTab = WorkspaceSplit.Tab(from: tabItem)
+        let movedTab = WorkspaceLayout.Tab(from: tabItem)
         let sourcePaneId = sourcePane.id
 
         if sourcePaneId == targetPane.id {
@@ -2475,7 +2489,7 @@ final class WorkspaceSplitController {
         pane.selectTab(tabId.id)
         internalController.focusPane(pane.id)
         if let tabIndex = pane.tabs.firstIndex(where: { $0.id == tabId.id }) {
-            let tab = WorkspaceSplit.Tab(from: pane.tabs[tabIndex])
+            let tab = WorkspaceLayout.Tab(from: pane.tabs[tabIndex])
             delegate?.workspaceSplit(self, didSelectTab: tab, inPane: pane.id)
         }
         notifyGeometryChange()
@@ -2506,7 +2520,7 @@ final class WorkspaceSplitController {
     func splitPane(
         _ paneId: PaneID? = nil,
         orientation: SplitOrientation,
-        withTab tab: WorkspaceSplit.Tab? = nil
+        withTab tab: WorkspaceLayout.Tab? = nil
     ) -> PaneID? {
         guard configuration.allowSplits else { return nil }
 
@@ -2569,7 +2583,7 @@ final class WorkspaceSplitController {
     func splitPane(
         _ paneId: PaneID? = nil,
         orientation: SplitOrientation,
-        withTab tab: WorkspaceSplit.Tab,
+        withTab tab: WorkspaceLayout.Tab,
         insertFirst: Bool
     ) -> PaneID? {
         guard configuration.allowSplits else { return nil }
@@ -2777,26 +2791,26 @@ final class WorkspaceSplitController {
     }
 
     /// Get tab metadata by ID
-    func tab(_ tabId: TabID) -> WorkspaceSplit.Tab? {
+    func tab(_ tabId: TabID) -> WorkspaceLayout.Tab? {
         guard let (pane, tabIndex) = findTabInternal(tabId) else { return nil }
-        return WorkspaceSplit.Tab(from: pane.tabs[tabIndex])
+        return WorkspaceLayout.Tab(from: pane.tabs[tabIndex])
     }
 
     /// Get tabs in a specific pane
-    func tabs(inPane paneId: PaneID) -> [WorkspaceSplit.Tab] {
+    func tabs(inPane paneId: PaneID) -> [WorkspaceLayout.Tab] {
         guard let pane = internalController.rootNode.findPane(PaneID(id: paneId.id)) else {
             return []
         }
-        return pane.tabs.map { WorkspaceSplit.Tab(from: $0) }
+        return pane.tabs.map { WorkspaceLayout.Tab(from: $0) }
     }
 
     /// Get selected tab in a pane
-    func selectedTab(inPane paneId: PaneID) -> WorkspaceSplit.Tab? {
+    func selectedTab(inPane paneId: PaneID) -> WorkspaceLayout.Tab? {
         guard let pane = internalController.rootNode.findPane(PaneID(id: paneId.id)),
               let selected = pane.selectedTab else {
             return nil
         }
-        return WorkspaceSplit.Tab(from: selected)
+        return WorkspaceLayout.Tab(from: selected)
     }
 
     // MARK: - Geometry Query API
@@ -2960,22 +2974,22 @@ final class WorkspaceSplitController {
     private func notifyTabSelection() {
         guard let pane = internalController.focusedPane,
               let tabItem = pane.selectedTab else { return }
-        let tab = WorkspaceSplit.Tab(from: tabItem)
+        let tab = WorkspaceLayout.Tab(from: tabItem)
         delegate?.workspaceSplit(self, didSelectTab: tab, inPane: pane.id)
     }
 }
 
 import SwiftUI
 
-/// Main entry point for the WorkspaceSplit library
+/// Main entry point for the WorkspaceLayout library
 ///
 /// Usage:
 /// ```swift
 /// struct MyApp: View {
-///     @State private var controller = WorkspaceSplitController()
+///     @State private var controller = WorkspaceLayoutController()
 ///
 ///     var body: some View {
-///         WorkspaceSplitView(controller: controller) { tab, paneId in
+///         WorkspaceLayoutView(controller: controller) { tab, paneId in
 ///             MyContentView(for: tab)
 ///                 .onTapGesture { controller.focusPane(paneId) }
 ///         } emptyPane: { paneId in
@@ -2984,21 +2998,21 @@ import SwiftUI
 ///     }
 /// }
 /// ```
-struct WorkspaceSplitView<Content: View, EmptyContent: View>: View {
-    @Bindable private var controller: WorkspaceSplitController
-    private let contentBuilder: (WorkspaceSplit.Tab, PaneID) -> Content
+struct WorkspaceLayoutView<Content: View, EmptyContent: View>: View {
+    @Bindable private var controller: WorkspaceLayoutController
+    private let contentBuilder: (WorkspaceLayout.Tab, PaneID) -> Content
     private let emptyPaneBuilder: (PaneID) -> EmptyContent
-    private let nativeContentBuilder: ((WorkspaceSplit.Tab, PaneID) -> WorkspaceNativePaneContent?)?
+    private let nativeContentBuilder: ((WorkspaceLayout.Tab, PaneID) -> WorkspaceNativePaneContent?)?
 
     /// Initialize with a controller, content builder, and empty pane builder
     /// - Parameters:
-    ///   - controller: The WorkspaceSplitController managing the tab state
+    ///   - controller: The WorkspaceLayoutController managing the tab state
     ///   - content: A ViewBuilder closure that provides content for each tab. Receives the tab and pane ID.
     ///   - emptyPane: A ViewBuilder closure that provides content for empty panes
     init(
-        controller: WorkspaceSplitController,
-        nativeContent: ((WorkspaceSplit.Tab, PaneID) -> WorkspaceNativePaneContent?)? = nil,
-        @ViewBuilder content: @escaping (WorkspaceSplit.Tab, PaneID) -> Content,
+        controller: WorkspaceLayoutController,
+        nativeContent: ((WorkspaceLayout.Tab, PaneID) -> WorkspaceNativePaneContent?)? = nil,
+        @ViewBuilder content: @escaping (WorkspaceLayout.Tab, PaneID) -> Content,
         @ViewBuilder emptyPane: @escaping (PaneID) -> EmptyContent
     ) {
         self.controller = controller
@@ -3008,7 +3022,7 @@ struct WorkspaceSplitView<Content: View, EmptyContent: View>: View {
     }
 
     var body: some View {
-        WorkspaceSplitNativeHost(
+        WorkspaceLayoutNativeHost(
             controller: controller,
             nativeContent: nativeContentBuilder,
             content: contentBuilder,
@@ -3024,15 +3038,15 @@ struct WorkspaceSplitView<Content: View, EmptyContent: View>: View {
 
 // MARK: - Convenience initializer with default empty view
 
-extension WorkspaceSplitView where EmptyContent == DefaultEmptyPaneView {
+extension WorkspaceLayoutView where EmptyContent == DefaultEmptyPaneView {
     /// Initialize with a controller and content builder, using the default empty pane view
     /// - Parameters:
-    ///   - controller: The WorkspaceSplitController managing the tab state
+    ///   - controller: The WorkspaceLayoutController managing the tab state
     ///   - content: A ViewBuilder closure that provides content for each tab. Receives the tab and pane ID.
     init(
-        controller: WorkspaceSplitController,
-        nativeContent: ((WorkspaceSplit.Tab, PaneID) -> WorkspaceNativePaneContent?)? = nil,
-        @ViewBuilder content: @escaping (WorkspaceSplit.Tab, PaneID) -> Content
+        controller: WorkspaceLayoutController,
+        nativeContent: ((WorkspaceLayout.Tab, PaneID) -> WorkspaceNativePaneContent?)? = nil,
+        @ViewBuilder content: @escaping (WorkspaceLayout.Tab, PaneID) -> Content
     ) {
         self.controller = controller
         self.nativeContentBuilder = nativeContent
@@ -3044,18 +3058,19 @@ extension WorkspaceSplitView where EmptyContent == DefaultEmptyPaneView {
 @MainActor
 enum WorkspaceNativePaneContent {
     case terminal(WorkspaceTerminalPaneContent)
+    case browser(WorkspaceBrowserPaneContent)
 }
 
 extension WorkspaceNativePaneContent {
     var prefersNativeDropOverlay: Bool {
         switch self {
-        case .terminal:
+        case .terminal, .browser:
             true
         }
     }
 }
 
-extension WorkspaceSplit.Tab {
+extension WorkspaceLayout.Tab {
     var prefersNativeDropOverlay: Bool {
         switch kind {
         case "browser":
@@ -3076,6 +3091,16 @@ struct WorkspaceTerminalPaneContent {
     let hasUnreadNotification: Bool
     let onFocus: () -> Void
     let onTriggerFlash: () -> Void
+}
+
+@MainActor
+struct WorkspaceBrowserPaneContent {
+    let panel: BrowserPanel
+    let paneId: PaneID
+    let isFocused: Bool
+    let isVisibleInUI: Bool
+    let portalPriority: Int
+    let onRequestPanelFocus: () -> Void
 }
 
 /// Default view shown when a pane has no tabs

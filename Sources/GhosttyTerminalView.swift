@@ -2950,18 +2950,9 @@ class GhosttyApp {
         if action.tag == GHOSTTY_ACTION_SHOW_CHILD_EXITED {
             // The child (shell) exited. Ghostty will fall back to printing
             // "Process exited. Press any key..." into the terminal unless the host
-            // handles this action. Upstream macOS does not handle this action for
-            // normal exits, and instead relies on the separate close_surface_cb path
-            // for the actual close. Matching that behavior avoids double-closing and
-            // keeps the close path aligned with Ghostty's ground truth.
+            // handles this action. For cmux, the correct behavior is to close
+            // the panel immediately (no prompt).
 #if DEBUG
-            latencyLog(
-                "ctrl_d.surface.showChildExited",
-                data: [
-                    "surface": callbackSurfaceId?.uuidString.prefix(5).description ?? "nil",
-                    "tab": callbackTabId?.uuidString.prefix(5).description ?? "nil",
-                ]
-            )
             dlog(
                 "surface.action.showChildExited tab=\(callbackTabId?.uuidString.prefix(5) ?? "nil") " +
                 "surface=\(callbackSurfaceId?.uuidString.prefix(5) ?? "nil")"
@@ -2976,7 +2967,17 @@ class GhosttyApp {
                 increments: ["probeShowChildExitedCount": 1]
             )
 #endif
-            return false
+            DispatchQueue.main.async {
+                guard let app = AppDelegate.shared else { return }
+                if let callbackTabId,
+                   let callbackSurfaceId,
+                   let manager = app.tabManagerFor(tabId: callbackTabId) ?? app.tabManager,
+                   let workspace = manager.tabs.first(where: { $0.id == callbackTabId }),
+                   workspace.panels[callbackSurfaceId] != nil {
+                    manager.closePanelAfterChildExited(tabId: callbackTabId, surfaceId: callbackSurfaceId)
+                }
+            }
+            return true
         }
 
         guard let surfaceView = callbackContext?.surfaceView else { return false }
@@ -3113,6 +3114,18 @@ class GhosttyApp {
             if let tabId = surfaceView.tabId,
                let surfaceId = surfaceView.terminalSurface?.id {
                 DispatchQueue.main.async {
+#if DEBUG
+                    dlog(
+                        "dbg.title.ghostty.setTitle tab=\(tabId.uuidString.prefix(8)) " +
+                        "panel=\(surfaceId.uuidString.prefix(8)) " +
+                        "title=\"\(title.replacingOccurrences(of: "\n", with: "\\n"))\""
+                    )
+                    startupLog(
+                        "rt.title.ghostty.setTitle tab=\(tabId.uuidString.prefix(8)) " +
+                        "panel=\(surfaceId.uuidString.prefix(8)) " +
+                        "title=\"\(title.replacingOccurrences(of: "\n", with: "\\n"))\""
+                    )
+#endif
                     NotificationCenter.default.post(
                         name: .ghosttyDidSetTitle,
                         object: surfaceView,
@@ -3130,6 +3143,18 @@ class GhosttyApp {
                   let surfaceId = surfaceView.terminalSurface?.id else { return true }
             let pwd = action.action.pwd.pwd.flatMap { String(cString: $0) } ?? ""
             DispatchQueue.main.async {
+#if DEBUG
+                dlog(
+                    "dbg.title.ghostty.pwd tab=\(tabId.uuidString.prefix(8)) " +
+                    "panel=\(surfaceId.uuidString.prefix(8)) " +
+                    "pwd=\"\((pwd as NSString).standardizingPath.replacingOccurrences(of: "\n", with: "\\n"))\""
+                )
+                startupLog(
+                    "rt.title.ghostty.pwd tab=\(tabId.uuidString.prefix(8)) " +
+                    "panel=\(surfaceId.uuidString.prefix(8)) " +
+                    "pwd=\"\((pwd as NSString).standardizingPath.replacingOccurrences(of: "\n", with: "\\n"))\""
+                )
+#endif
                 AppDelegate.shared?.tabManagerFor(tabId: tabId)?.updateSurfaceDirectory(
                     tabId: tabId,
                     surfaceId: surfaceId,
@@ -3654,7 +3679,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
         self.tabId = tabId
         self.surfaceContext = context
         self.configTemplate = configTemplate
-        self.workingDirectory = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.workingDirectory = cmuxNormalizedWorkingDirectory(workingDirectory)
         let trimmedCommand = initialCommand?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.initialCommand = (trimmedCommand?.isEmpty == false) ? trimmedCommand : nil
         self.initialEnvironmentOverrides = Self.mergedNormalizedEnvironment(base: [:], overrides: initialEnvironmentOverrides)
@@ -4427,7 +4452,10 @@ final class TerminalSurface: Identifiable, ObservableObject {
             if let workingDirectory, !workingDirectory.isEmpty {
                 return workingDirectory
             }
-            return baseConfig.workingDirectory
+            if let inheritedWorkingDirectory = cmuxNormalizedWorkingDirectory(baseConfig.workingDirectory) {
+                return inheritedWorkingDirectory
+            }
+            return cmuxDefaultWorkingDirectory()
         }()
         let resolvedCommand: String? = {
             if let initialCommand, !initialCommand.isEmpty {

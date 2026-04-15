@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 import Darwin
 import UniformTypeIdentifiers
@@ -495,6 +496,9 @@ struct cmuxApp: App {
                     }
                     Button("Split Button Layout Debug…") {
                         SplitButtonLayoutDebugWindowController.shared.show()
+                    }
+                    Button("Workspace Tab Chrome Debug…") {
+                        WorkspaceTabChromeDebugWindowController.shared.show()
                     }
                     Button("File Explorer Style Debug…") {
                         FileExplorerStyleDebugWindowController.shared.show()
@@ -1138,6 +1142,7 @@ struct cmuxApp: App {
         SidebarDebugWindowController.shared.show()
         BackgroundDebugWindowController.shared.show()
         MenuBarExtraDebugWindowController.shared.show()
+        WorkspaceTabChromeDebugWindowController.shared.show()
     }
 }
 
@@ -1152,6 +1157,7 @@ private let cmuxAuxiliaryWindowIdentifiers: Set<String> = [
     "cmux.sidebarDebug",
     "cmux.menubarDebug",
     "cmux.backgroundDebug",
+    "cmux.workspaceTabChromeDebug",
 ]
 
 /// Returns whether the given window should handle the standard close shortcut
@@ -1321,13 +1327,14 @@ private struct SettingsAboutTitlebarDebugOptions: Equatable {
 }
 
 @MainActor
-private final class SettingsAboutTitlebarDebugStore: ObservableObject {
+@Observable
+private final class SettingsAboutTitlebarDebugStore {
     static let shared = SettingsAboutTitlebarDebugStore()
 
-    @Published var settingsOptions = SettingsAboutTitlebarDebugOptions.defaults(for: .settings) {
+    var settingsOptions = SettingsAboutTitlebarDebugOptions.defaults(for: .settings) {
         didSet { applyToOpenWindows(for: .settings) }
     }
-    @Published var aboutOptions = SettingsAboutTitlebarDebugOptions.defaults(for: .about) {
+    var aboutOptions = SettingsAboutTitlebarDebugOptions.defaults(for: .about) {
         didSet { applyToOpenWindows(for: .about) }
     }
 
@@ -1497,7 +1504,7 @@ private final class SettingsAboutTitlebarDebugWindowController: NSWindowControll
 }
 
 private struct SettingsAboutTitlebarDebugView: View {
-    @ObservedObject private var store = SettingsAboutTitlebarDebugStore.shared
+    private let store = SettingsAboutTitlebarDebugStore.shared
 
     var body: some View {
         ScrollView {
@@ -2715,6 +2722,7 @@ private struct FileExplorerStyleDebugView: View {
 extension Notification.Name {
     static let fileExplorerStyleDidChange = Notification.Name("fileExplorerStyleDidChange")
     static let titlebarShortcutHintsVisibilityChanged = Notification.Name("titlebarShortcutHintsVisibilityChanged")
+    static let workspaceTabChromeDebugSettingsDidChange = Notification.Name("workspaceTabChromeDebugSettingsDidChange")
 }
 
 private final class FileExplorerStyleDebugWindowController: NSWindowController, NSWindowDelegate {
@@ -3416,6 +3424,802 @@ private struct SplitButtonLayoutDebugView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+}
+
+// MARK: - Workspace Tab Chrome Debug Window
+
+final class WorkspaceTabChromeDebugWindowController: NSWindowController, NSWindowDelegate {
+    static let shared = WorkspaceTabChromeDebugWindowController()
+
+    private init() {
+        let window = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 1560, height: 980),
+            styleMask: [.titled, .closable, .resizable, .utilityWindow],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Workspace Tab Chrome Debug"
+        window.titleVisibility = .visible
+        window.titlebarAppearsTransparent = false
+        window.isMovableByWindowBackground = true
+        window.isReleasedWhenClosed = false
+        window.hidesOnDeactivate = false
+        window.isFloatingPanel = true
+        window.identifier = NSUserInterfaceItemIdentifier("cmux.workspaceTabChromeDebug")
+        window.center()
+        window.contentView = NSHostingView(rootView: WorkspaceTabChromeDebugView())
+        AppDelegate.shared?.applyWindowDecorations(to: window)
+        super.init(window: window)
+        window.delegate = self
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func show() {
+        guard let window else { return }
+        window.center()
+        showWindow(nil)
+        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
+        NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        if let windowIdPath = ProcessInfo.processInfo.environment["CMUX_WORKSPACE_TAB_CHROME_WINDOW_ID_FILE"],
+           !windowIdPath.isEmpty {
+            try? "\(window.windowNumber)\n".write(
+                to: URL(fileURLWithPath: windowIdPath),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+    }
+}
+
+private struct WorkspaceTabChromeDebugRenderedScenario: Identifiable {
+    let scenario: WorkspaceLayoutTabChromeDebugScenario
+    let appKitImage: NSImage
+    let referenceImage: NSImage
+    let diffImage: NSImage
+    let metrics: WorkspaceLayoutTabChromeDebugDiffMetrics
+
+    var id: String { scenario.id }
+}
+
+@MainActor
+private func workspaceTabChromeDebugRenderedScenario(
+    from scenario: WorkspaceLayoutTabChromeDebugScenario
+) -> WorkspaceTabChromeDebugRenderedScenario? {
+    guard let appKitImage = workspaceLayoutRenderAppKitTabChromeImage(scenario: scenario),
+          let referenceImage = workspaceLayoutRenderReferenceTabChromeImage(scenario: scenario),
+          let diff = workspaceLayoutTabChromeDebugDiff(
+            appKitImage: appKitImage,
+            referenceImage: referenceImage
+          ) else {
+        return nil
+    }
+    return WorkspaceTabChromeDebugRenderedScenario(
+        scenario: scenario,
+        appKitImage: appKitImage,
+        referenceImage: referenceImage,
+        diffImage: diff.image,
+        metrics: diff.metrics
+    )
+}
+
+@MainActor
+private func workspaceTabChromeDebugRenderedScenarios() -> [WorkspaceTabChromeDebugRenderedScenario] {
+    workspaceLayoutTabChromeDebugScenarios().compactMap(workspaceTabChromeDebugRenderedScenario(from:))
+}
+
+@MainActor
+private func workspaceTabChromeDebugPreviewScenario(
+    isSelected: Bool,
+    isHovered: Bool,
+    isCloseHovered: Bool,
+    isClosePressed: Bool
+) -> WorkspaceLayoutTabChromeDebugScenario {
+    let appearance = workspaceLayoutTabChromeDebugAppearance()
+    let tab = TabItem(title: "~/fun/cmuxterm-hq", icon: "terminal.fill", kind: "terminal")
+
+    return WorkspaceLayoutTabChromeDebugScenario(
+        id: "interactive-preview",
+        title: String(
+            localized: "debug.workspaceTabChrome.preview.scenarioTitle",
+            defaultValue: "Interactive Preview"
+        ),
+        tab: tab,
+        isSelected: isSelected,
+        isHovered: isHovered,
+        isCloseHovered: isCloseHovered || isClosePressed,
+        isClosePressed: isClosePressed,
+        showsZoomIndicator: false,
+        isZoomHovered: false,
+        isZoomPressed: false,
+        appearance: appearance
+    )
+}
+
+private struct WorkspaceTabChromeDebugView: View {
+    @AppStorage(WorkspaceLayoutTabChromeDebugSettings.closeGlyphDXKey)
+    private var closeGlyphDX = WorkspaceLayoutTabChromeDebugSettings.defaultCloseGlyphDX
+    @AppStorage(WorkspaceLayoutTabChromeDebugSettings.closeGlyphDYKey)
+    private var closeGlyphDY = WorkspaceLayoutTabChromeDebugSettings.defaultCloseGlyphDY
+    @AppStorage(WorkspaceLayoutTabChromeDebugSettings.closeCircleDXKey)
+    private var closeCircleDX = WorkspaceLayoutTabChromeDebugSettings.defaultCloseCircleDX
+    @AppStorage(WorkspaceLayoutTabChromeDebugSettings.closeCircleDYKey)
+    private var closeCircleDY = WorkspaceLayoutTabChromeDebugSettings.defaultCloseCircleDY
+    @AppStorage(WorkspaceLayoutTabChromeDebugSettings.closeCircleSizeDeltaKey)
+    private var closeCircleSizeDelta = WorkspaceLayoutTabChromeDebugSettings.defaultCloseCircleSizeDelta
+    @State private var previewIsSelected = true
+    @State private var previewIsHovered = false
+    @State private var previewCloseHovered = true
+    @State private var previewClosePressed = false
+    @State private var previewRenderedScenario: WorkspaceTabChromeDebugRenderedScenario?
+    @State private var renderedScenarios: [WorkspaceTabChromeDebugRenderedScenario] = []
+    @State private var overlayOpacity = 0.55
+    @State private var exportStatus: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Workspace Tab Chrome")
+                        .font(.headline)
+                    Text("AppKit candidate vs. reference tab rendering across representative states.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                HStack(spacing: 8) {
+                    Text("Overlay")
+                    Slider(value: $overlayOpacity, in: 0...1)
+                        .frame(width: 160)
+                    Text(String(format: "%.0f%%", overlayOpacity * 100))
+                        .monospacedDigit()
+                        .frame(width: 44, alignment: .trailing)
+                }
+
+                Button("Refresh") {
+                    renderAll()
+                }
+
+                Button("Export PNGs") {
+                    exportPNGs()
+                }
+            }
+
+            if !renderedScenarios.isEmpty {
+                let perfectCount = renderedScenarios.filter { $0.metrics.matchingPixels }.count
+                Text("\(perfectCount)/\(renderedScenarios.count) states pixel-perfect")
+                    .font(.caption)
+                    .foregroundColor(perfectCount == renderedScenarios.count ? .green : .secondary)
+            }
+
+            if !exportStatus.isEmpty {
+                Text(exportStatus)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .textSelection(.enabled)
+            }
+
+            GroupBox(
+                String(
+                    localized: "debug.workspaceTabChrome.closeGlyph.sectionTitle",
+                    defaultValue: "Close Glyph"
+                )
+            ) {
+                VStack(alignment: .leading, spacing: 8) {
+                    tuningSliderRow(
+                        String(
+                            localized: "debug.workspaceTabChrome.closeGlyph.xLabel",
+                            defaultValue: "X"
+                        ),
+                        value: $closeGlyphDX
+                    )
+                    tuningSliderRow(
+                        String(
+                            localized: "debug.workspaceTabChrome.closeGlyph.yLabel",
+                            defaultValue: "Y"
+                        ),
+                        value: $closeGlyphDY
+                    )
+
+                    HStack(spacing: 10) {
+                        Button(
+                            String(
+                                localized: "settings.sidebarAppearance.reset.button",
+                                defaultValue: "Reset"
+                            )
+                        ) {
+                            closeGlyphDX = WorkspaceLayoutTabChromeDebugSettings.defaultCloseGlyphDX
+                            closeGlyphDY = WorkspaceLayoutTabChromeDebugSettings.defaultCloseGlyphDY
+                            applyLiveUpdate()
+                        }
+
+                        Text(
+                            String(
+                                localized: "debug.workspaceTabChrome.closeGlyph.help",
+                                defaultValue: "Updates live tabs and the debug previews."
+                            )
+                        )
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.top, 2)
+            }
+
+            GroupBox(
+                String(
+                    localized: "debug.workspaceTabChrome.closeCircle.sectionTitle",
+                    defaultValue: "Close Circle"
+                )
+            ) {
+                VStack(alignment: .leading, spacing: 8) {
+                    tuningSliderRow(
+                        String(
+                            localized: "debug.workspaceTabChrome.closeGlyph.xLabel",
+                            defaultValue: "X"
+                        ),
+                        value: $closeCircleDX
+                    )
+                    tuningSliderRow(
+                        String(
+                            localized: "debug.workspaceTabChrome.closeGlyph.yLabel",
+                            defaultValue: "Y"
+                        ),
+                        value: $closeCircleDY
+                    )
+                    tuningSliderRow(
+                        String(
+                            localized: "debug.workspaceTabChrome.closeCircle.sizeLabel",
+                            defaultValue: "Size"
+                        ),
+                        value: $closeCircleSizeDelta,
+                        range: WorkspaceLayoutTabChromeDebugSettings.closeCircleSizeDeltaRange,
+                        clamp: WorkspaceLayoutTabChromeDebugSettings.clampedCircleSizeDelta
+                    )
+
+                    HStack(spacing: 10) {
+                        Button(
+                            String(
+                                localized: "settings.sidebarAppearance.reset.button",
+                                defaultValue: "Reset"
+                            )
+                        ) {
+                            closeCircleDX = WorkspaceLayoutTabChromeDebugSettings.defaultCloseCircleDX
+                            closeCircleDY = WorkspaceLayoutTabChromeDebugSettings.defaultCloseCircleDY
+                            closeCircleSizeDelta = WorkspaceLayoutTabChromeDebugSettings.defaultCloseCircleSizeDelta
+                            applyLiveUpdate()
+                        }
+
+                        Text(
+                            String(
+                                localized: "debug.workspaceTabChrome.closeGlyph.help",
+                                defaultValue: "Updates live tabs and the debug previews."
+                            )
+                        )
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.top, 2)
+            }
+
+            GroupBox(
+                String(
+                    localized: "debug.workspaceTabChrome.preview.sectionTitle",
+                    defaultValue: "Interactive Preview"
+                )
+            ) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 14) {
+                        Toggle(
+                            String(
+                                localized: "debug.workspaceTabChrome.preview.selected",
+                                defaultValue: "Selected"
+                            ),
+                            isOn: $previewIsSelected
+                        )
+                        .toggleStyle(.checkbox)
+
+                        Toggle(
+                            String(
+                                localized: "debug.workspaceTabChrome.preview.tabHover",
+                                defaultValue: "Tab Hover"
+                            ),
+                            isOn: $previewIsHovered
+                        )
+                        .toggleStyle(.checkbox)
+
+                        Toggle(
+                        String(
+                                localized: "debug.workspaceTabChrome.preview.closeHover",
+                                defaultValue: "Close Hover"
+                            ),
+                            isOn: $previewCloseHovered
+                        )
+                        .toggleStyle(.checkbox)
+
+                        Toggle(
+                            String(
+                                localized: "debug.workspaceTabChrome.preview.closePressed",
+                                defaultValue: "Close Pressed"
+                            ),
+                            isOn: $previewClosePressed
+                        )
+                        .toggleStyle(.checkbox)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Live AppKit")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        WorkspaceTabChromeLiveInteractivePreviewCanvas(
+                            appearance: workspaceLayoutTabChromeDebugAppearance(),
+                            isSelected: previewIsSelected,
+                            isHovered: previewIsHovered,
+                            isCloseHovered: previewCloseHovered,
+                            isClosePressed: previewClosePressed
+                        )
+                    }
+
+                    if let previewRenderedScenario {
+                        WorkspaceTabChromeDebugScenarioSection(
+                            rendered: previewRenderedScenario,
+                            overlayOpacity: overlayOpacity
+                        )
+                    }
+
+                    WorkspaceTabChromeCloseGlyphPreviewStrip(
+                        appearance: workspaceLayoutTabChromeDebugAppearance(),
+                        closeGlyphDX: closeGlyphDX,
+                        closeGlyphDY: closeGlyphDY,
+                        closeCircleDX: closeCircleDX,
+                        closeCircleDY: closeCircleDY,
+                        closeCircleSizeDelta: closeCircleSizeDelta
+                    )
+                }
+                .padding(.top, 2)
+            }
+
+            ScrollView([.vertical, .horizontal]) {
+                VStack(alignment: .leading, spacing: 18) {
+                    ForEach(renderedScenarios) { rendered in
+                        WorkspaceTabChromeDebugScenarioSection(
+                            rendered: rendered,
+                            overlayOpacity: overlayOpacity
+                        )
+                    }
+                }
+                .padding(.bottom, 8)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear {
+            if renderedScenarios.isEmpty {
+                renderAll()
+            }
+            applyLiveUpdate()
+        }
+        .onChange(of: closeGlyphDX) { _, _ in applyLiveUpdate() }
+        .onChange(of: closeGlyphDY) { _, _ in applyLiveUpdate() }
+        .onChange(of: closeCircleDX) { _, _ in applyLiveUpdate() }
+        .onChange(of: closeCircleDY) { _, _ in applyLiveUpdate() }
+        .onChange(of: closeCircleSizeDelta) { _, _ in applyLiveUpdate() }
+        .onChange(of: previewIsSelected) { _, _ in renderPreview() }
+        .onChange(of: previewIsHovered) { _, _ in renderPreview() }
+        .onChange(of: previewCloseHovered) { _, _ in renderPreview() }
+        .onChange(of: previewClosePressed) { _, _ in renderPreview() }
+    }
+
+    private func renderAll() {
+        renderedScenarios = workspaceTabChromeDebugRenderedScenarios()
+    }
+
+    private func renderPreview() {
+        previewRenderedScenario = workspaceTabChromeDebugRenderedScenario(
+            from: workspaceTabChromeDebugPreviewScenario(
+                isSelected: previewIsSelected,
+                isHovered: previewIsHovered,
+                isCloseHovered: previewCloseHovered,
+                isClosePressed: previewClosePressed
+            )
+        )
+    }
+
+    private func tuningSliderRow(
+        _ label: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double> = WorkspaceLayoutTabChromeDebugSettings.closeGlyphOffsetRange,
+        clamp: @escaping (Double) -> Double = WorkspaceLayoutTabChromeDebugSettings.clamped
+    ) -> some View {
+        let clampedValue = Binding<Double>(
+            get: { value.wrappedValue },
+            set: { value.wrappedValue = clamp($0) }
+        )
+
+        return HStack(spacing: 8) {
+            Text(label)
+            Slider(
+                value: clampedValue,
+                in: range,
+                step: 0.01
+            )
+            TextField(
+                "",
+                value: clampedValue,
+                format: .number.precision(.fractionLength(2...3))
+            )
+                .font(.caption)
+                .monospacedDigit()
+                .multilineTextAlignment(.trailing)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 72)
+        }
+    }
+
+    private func exportPNGs() {
+        let formatter = ISO8601DateFormatter()
+        let stamp = formatter.string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-workspace-tab-chrome-\(stamp)", isDirectory: true)
+        do {
+            _ = try workspaceLayoutExportTabChromeDebugArtifacts(to: directory)
+            exportStatus = directory.path
+            NSWorkspace.shared.activateFileViewerSelecting([directory])
+        } catch {
+            exportStatus = "Export failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func applyLiveUpdate() {
+        NotificationCenter.default.post(name: .workspaceTabChromeDebugSettingsDidChange, object: nil)
+        renderPreview()
+        renderAll()
+    }
+}
+
+private struct WorkspaceTabChromeCloseGlyphPreviewStrip: View {
+    let appearance: WorkspaceLayoutConfiguration.Appearance
+    let closeGlyphDX: Double
+    let closeGlyphDY: Double
+    let closeCircleDX: Double
+    let closeCircleDY: Double
+    let closeCircleSizeDelta: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(
+                String(
+                    localized: "debug.workspaceTabChrome.preview.closeState",
+                    defaultValue: "Close Button"
+                )
+            )
+            .font(.caption)
+            .foregroundColor(.secondary)
+
+            HStack(alignment: .top, spacing: 12) {
+                closeGlyphCell(
+                    title: String(
+                        localized: "debug.workspaceTabChrome.preview.closeState.idle",
+                        defaultValue: "Idle"
+                    ),
+                    appearance: appearance,
+                    isHovered: false,
+                    isPressed: false
+                )
+                closeGlyphCell(
+                    title: String(
+                        localized: "debug.workspaceTabChrome.preview.closeState.hover",
+                        defaultValue: "Hover"
+                    ),
+                    appearance: appearance,
+                    isHovered: true,
+                    isPressed: false
+                )
+                closeGlyphCell(
+                    title: String(
+                        localized: "debug.workspaceTabChrome.preview.closeState.pressed",
+                        defaultValue: "Pressed"
+                    ),
+                    appearance: appearance,
+                    isHovered: true,
+                    isPressed: true
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func closeGlyphCell(
+        title: String,
+        appearance: WorkspaceLayoutConfiguration.Appearance,
+        isHovered: Bool,
+        isPressed: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            ZStack {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(nsColor: TabBarColors.nsColorPaneBackground(for: appearance)))
+                VStack(spacing: 0) {
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(height: TabBarMetrics.activeIndicatorHeight)
+                    Spacer(minLength: 0)
+                }
+                WorkspaceTabChromeCloseGlyphPreviewCanvas(
+                    appearance: appearance,
+                    isHovered: isHovered,
+                    isPressed: isPressed,
+                    closeGlyphDX: closeGlyphDX,
+                    closeGlyphDY: closeGlyphDY,
+                    closeCircleDX: closeCircleDX,
+                    closeCircleDY: closeCircleDY,
+                    closeCircleSizeDelta: closeCircleSizeDelta
+                )
+                .frame(width: 72, height: 72)
+            }
+            .frame(width: 96, height: 96)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Color.black.opacity(0.12), lineWidth: 1)
+            )
+        }
+    }
+}
+
+private struct WorkspaceTabChromeCloseGlyphPreviewCanvas: NSViewRepresentable {
+    let appearance: WorkspaceLayoutConfiguration.Appearance
+    let isHovered: Bool
+    let isPressed: Bool
+    let closeGlyphDX: Double
+    let closeGlyphDY: Double
+    let closeCircleDX: Double
+    let closeCircleDY: Double
+    let closeCircleSizeDelta: Double
+
+    func makeNSView(context: Context) -> WorkspaceLayoutAccessoryDebugPreviewView {
+        WorkspaceLayoutAccessoryDebugPreviewView(
+            frame: CGRect(x: 0, y: 0, width: 72, height: 72),
+            symbolName: "xmark",
+            pointSize: TabBarMetrics.closeIconSize,
+            isHovered: isHovered,
+            isPressed: isPressed,
+            appearance: appearance
+        )
+    }
+
+    func updateNSView(_ nsView: WorkspaceLayoutAccessoryDebugPreviewView, context: Context) {
+        _ = closeGlyphDX
+        _ = closeGlyphDY
+        _ = closeCircleDX
+        _ = closeCircleDY
+        _ = closeCircleSizeDelta
+        nsView.update(
+            symbolName: "xmark",
+            pointSize: TabBarMetrics.closeIconSize,
+            isHovered: isHovered,
+            isPressed: isPressed,
+            appearance: appearance
+        )
+    }
+}
+
+private struct WorkspaceTabChromeLiveInteractivePreviewCanvas: NSViewRepresentable {
+    let appearance: WorkspaceLayoutConfiguration.Appearance
+    let isSelected: Bool
+    let isHovered: Bool
+    let isCloseHovered: Bool
+    let isClosePressed: Bool
+
+    func makeNSView(context: Context) -> WorkspaceLayoutNativeTabButtonDebugPreviewHost {
+        let host = WorkspaceLayoutNativeTabButtonDebugPreviewHost(frame: .zero)
+        host.update(
+            title: "~/fun/cmuxterm-hq",
+            icon: "terminal.fill",
+            kind: "terminal",
+            appearance: appearance,
+            isSelected: isSelected,
+            isHovered: isHovered,
+            isCloseHovered: isCloseHovered,
+            isClosePressed: isClosePressed
+        )
+        return host
+    }
+
+    func updateNSView(_ nsView: WorkspaceLayoutNativeTabButtonDebugPreviewHost, context: Context) {
+        nsView.update(
+            title: "~/fun/cmuxterm-hq",
+            icon: "terminal.fill",
+            kind: "terminal",
+            appearance: appearance,
+            isSelected: isSelected,
+            isHovered: isHovered,
+            isCloseHovered: isCloseHovered,
+            isClosePressed: isClosePressed
+        )
+    }
+}
+
+private struct WorkspaceTabChromeDebugSnapshotView: View {
+    let renderedScenarios: [WorkspaceTabChromeDebugRenderedScenario]
+    let overlayOpacity: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Workspace Tab Chrome")
+                        .font(.headline)
+                    Text("AppKit candidate vs. reference tab rendering across representative states.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                Text("Overlay \(String(format: "%.0f%%", overlayOpacity * 100))")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            if !renderedScenarios.isEmpty {
+                let perfectCount = renderedScenarios.filter { $0.metrics.matchingPixels }.count
+                Text("\(perfectCount)/\(renderedScenarios.count) states pixel-perfect")
+                    .font(.caption)
+                    .foregroundColor(perfectCount == renderedScenarios.count ? .green : .secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 18) {
+                ForEach(renderedScenarios) { rendered in
+                    WorkspaceTabChromeDebugScenarioSection(
+                        rendered: rendered,
+                        overlayOpacity: overlayOpacity
+                    )
+                }
+            }
+        }
+        .padding(16)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+@MainActor
+private func workspaceTabChromeDebugSnapshotImage(overlayOpacity: Double = 0.55) -> NSImage? {
+    let renderedScenarios = workspaceTabChromeDebugRenderedScenarios()
+    let hostingView = NSHostingView(
+        rootView: WorkspaceTabChromeDebugSnapshotView(
+            renderedScenarios: renderedScenarios,
+            overlayOpacity: overlayOpacity
+        )
+    )
+    let fittingSize = hostingView.fittingSize
+    guard fittingSize.width > 0, fittingSize.height > 0 else {
+        return nil
+    }
+
+    hostingView.frame = NSRect(origin: .zero, size: fittingSize)
+    hostingView.layoutSubtreeIfNeeded()
+
+    guard let bitmap = hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds) else {
+        return nil
+    }
+    hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+
+    let image = NSImage(size: fittingSize)
+    image.addRepresentation(bitmap)
+    return image
+}
+
+@MainActor
+func workspaceTabChromeDebugWriteSnapshot(to url: URL, overlayOpacity: Double = 0.55) throws {
+    guard let image = workspaceTabChromeDebugSnapshotImage(overlayOpacity: overlayOpacity),
+          let tiff = image.tiffRepresentation,
+          let bitmap = NSBitmapImageRep(data: tiff),
+          let pngData = bitmap.representation(using: .png, properties: [:]) else {
+        throw NSError(
+            domain: "cmux.workspaceTabChromeDebug",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Failed to render workspace tab chrome debug snapshot."]
+        )
+    }
+
+    let directory = url.deletingLastPathComponent()
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try pngData.write(to: url)
+}
+
+private struct WorkspaceTabChromeDebugScenarioSection: View {
+    let rendered: WorkspaceTabChromeDebugRenderedScenario
+    let overlayOpacity: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text(rendered.scenario.title)
+                    .font(.headline)
+                Text(rendered.scenario.id)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text(metricSummary)
+                    .font(.caption)
+                    .foregroundColor(rendered.metrics.matchingPixels ? .green : .secondary)
+            }
+
+            HStack(alignment: .top, spacing: 14) {
+                chromeCell(title: "AppKit", image: rendered.appKitImage)
+                chromeCell(title: "Reference", image: rendered.referenceImage)
+                overlayCell
+                chromeCell(title: "Diff", image: rendered.diffImage)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+    }
+
+    private var metricSummary: String {
+        let metrics = rendered.metrics
+        return "diff \(metrics.differingPixelCount)/\(metrics.totalPixelCount), max \(metrics.maxChannelDelta), mean \(String(format: "%.2f", metrics.meanAbsoluteChannelDelta))"
+    }
+
+    @ViewBuilder
+    private func chromeCell(title: String, image: NSImage) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            chromeCanvas {
+                Image(nsImage: image)
+                    .interpolation(.none)
+                    .antialiased(false)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var overlayCell: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Overlay")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            chromeCanvas {
+                ZStack {
+                    Image(nsImage: rendered.referenceImage)
+                        .interpolation(.none)
+                        .antialiased(false)
+                    Image(nsImage: rendered.appKitImage)
+                        .interpolation(.none)
+                        .antialiased(false)
+                        .opacity(overlayOpacity)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func chromeCanvas<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        let width = max(rendered.appKitImage.size.width, max(rendered.referenceImage.size.width, rendered.diffImage.size.width))
+        let height = max(rendered.appKitImage.size.height, max(rendered.referenceImage.size.height, rendered.diffImage.size.height))
+        ZStack {
+            Rectangle()
+                .fill(Color(nsColor: .windowBackgroundColor))
+            content()
+        }
+        .frame(width: width, height: height)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Color.black.opacity(0.12), lineWidth: 1)
+        )
     }
 }
 

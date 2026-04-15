@@ -2567,6 +2567,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.writeUITestDiagnosticsIfNeeded(stage: "after1s")
         }
+        DispatchQueue.main.async {
+            let env = ProcessInfo.processInfo.environment
+            if env["CMUX_OPEN_WORKSPACE_TAB_CHROME_DEBUG"] == "1" {
+                WorkspaceTabChromeDebugWindowController.shared.show()
+            }
+            if let snapshotPath = env["CMUX_WORKSPACE_TAB_CHROME_DEBUG_SNAPSHOT_FILE"],
+               !snapshotPath.isEmpty {
+                do {
+                    try workspaceTabChromeDebugWriteSnapshot(to: URL(fileURLWithPath: snapshotPath))
+                } catch {
+                    NSLog("Workspace tab chrome debug snapshot failed: %@", error.localizedDescription)
+                }
+                if env["CMUX_WORKSPACE_TAB_CHROME_SNAPSHOT_ONLY"] == "1" {
+                    NSApp.terminate(nil)
+                }
+            }
+            if let exportPath = env["CMUX_WORKSPACE_TAB_CHROME_EXPORT_DIR"],
+               !exportPath.isEmpty {
+                do {
+                    _ = try workspaceLayoutExportTabChromeDebugArtifacts(to: URL(fileURLWithPath: exportPath, isDirectory: true))
+                } catch {
+                    NSLog("Workspace tab chrome export failed: %@", error.localizedDescription)
+                }
+                if env["CMUX_WORKSPACE_TAB_CHROME_EXPORT_ONLY"] == "1" {
+                    NSApp.terminate(nil)
+                }
+            }
+        }
 #endif
 
         if telemetryEnabled {
@@ -2627,6 +2655,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         NSWindow.allowsAutomaticWindowTabbing = false
         disableNativeTabbingShortcut()
+        retargetNativeSidebarMenuItem()
         ensureApplicationIcon()
         if !isRunningUnderXCTest {
             configureUserNotifications()
@@ -12622,6 +12651,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func disableNativeTabbingShortcut() {
         guard let menu = NSApp.mainMenu else { return }
         disableMenuItemShortcut(in: menu, action: #selector(NSWindow.toggleTabBar(_:)))
+    }
+
+    @objc private func handleNativeToggleSidebar(_ sender: Any?) {
+        _ = toggleSidebarInActiveMainWindow()
+    }
+
+    private func retargetNativeSidebarMenuItem() {
+        guard let menu = NSApp.mainMenu else { return }
+        retargetMenuItemAction(
+            in: menu,
+            action: NSSelectorFromString("toggleSidebar:"),
+            target: self,
+            replacementAction: #selector(handleNativeToggleSidebar(_:))
+        )
+    }
+
+    private func retargetMenuItemAction(
+        in menu: NSMenu,
+        action: Selector,
+        target: AnyObject,
+        replacementAction: Selector
+    ) {
+        for item in menu.items {
+            if item.action == action {
+                item.target = target
+                item.action = replacementAction
+            }
+            if let submenu = item.submenu {
+                retargetMenuItemAction(
+                    in: submenu,
+                    action: action,
+                    target: target,
+                    replacementAction: replacementAction
+                )
+            }
+        }
     }
 
     private func disableMenuItemShortcut(in menu: NSMenu, action: Selector) {

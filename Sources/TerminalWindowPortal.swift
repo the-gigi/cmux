@@ -940,7 +940,7 @@ final class WindowTerminalPortal: NSObject {
 
         let containerClass = NSStringFromClass(type(of: container))
         dlog(
-            "portal.WorkspaceSplit.container hosted=\(portalDebugToken(hostedView)) " +
+            "portal.WorkspaceLayout.container hosted=\(portalDebugToken(hostedView)) " +
             "class=\(containerClass) frame=\(portalDebugFrame(containerFrame)) " +
             "host=\(portalDebugFrameInWindow(hostView)) anchor=\(portalDebugFrameInWindow(anchorView))"
         )

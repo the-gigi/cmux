@@ -4,6 +4,21 @@ import Foundation
 import CoreVideo
 import Combine
 
+#if DEBUG
+private func debugTabManagerPreview(_ text: String?, limit: Int = 120) -> String {
+    guard let text else { return "nil" }
+    let escaped = text
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\n", with: "\\n")
+        .replacingOccurrences(of: "\r", with: "\\r")
+        .replacingOccurrences(of: "\t", with: "\\t")
+    if escaped.count <= limit {
+        return escaped
+    }
+    return "\(escaped.prefix(limit))..."
+}
+#endif
+
 // MARK: - Tab Type Alias for Backwards Compatibility
 // The old Tab class is replaced by Workspace
 typealias Tab = Workspace
@@ -1041,6 +1056,14 @@ class TabManager: ObservableObject {
                 guard let tabId = notification.userInfo?[GhosttyNotificationKey.tabId] as? UUID else { return }
                 guard let surfaceId = notification.userInfo?[GhosttyNotificationKey.surfaceId] as? UUID else { return }
                 guard let title = notification.userInfo?[GhosttyNotificationKey.title] as? String else { return }
+#if DEBUG
+                dlog(
+                    "dbg.title.tabManager.event tab=\(tabId.uuidString.prefix(8)) " +
+                    "panel=\(surfaceId.uuidString.prefix(8)) " +
+                    "len=\((title as NSString).length) " +
+                    "title=\"\(title.replacingOccurrences(of: "\n", with: "\\n"))\""
+                )
+#endif
                 enqueuePanelTitleUpdate(tabId: tabId, panelId: surfaceId, title: title)
             }
         })
@@ -3613,8 +3636,18 @@ class TabManager: ObservableObject {
         guard let tab = tabs.first(where: { $0.id == tabId }) else { return }
         let previousDirectory = gitProbeDirectory(for: tab, panelId: surfaceId)
         let normalized = normalizeDirectory(directory)
-        tab.updatePanelDirectory(panelId: surfaceId, directory: normalized)
         let nextDirectory = normalizedWorkingDirectory(normalized)
+#if DEBUG
+        dlog(
+            "dbg.title.tabManager.dir tab=\(tabId.uuidString.prefix(8)) " +
+            "panel=\(surfaceId.uuidString.prefix(8)) " +
+            "prev=\"\(debugTabManagerPreview(previousDirectory))\" " +
+            "input=\"\(debugTabManagerPreview(directory))\" " +
+            "normalized=\"\(debugTabManagerPreview(normalized))\" " +
+            "next=\"\(debugTabManagerPreview(nextDirectory))\""
+        )
+#endif
+        tab.updatePanelDirectory(panelId: surfaceId, directory: normalized)
         if previousDirectory != nextDirectory {
             scheduleWorkspacePullRequestRefresh(
                 workspaceId: tabId,
@@ -4623,6 +4656,18 @@ class TabManager: ObservableObject {
         guard !trimmed.isEmpty else { return }
         let key = PanelTitleUpdateKey(tabId: tabId, panelId: panelId)
         pendingPanelTitleUpdates[key] = trimmed
+#if DEBUG
+        dlog(
+            "dbg.title.tabManager.enqueue tab=\(tabId.uuidString.prefix(8)) " +
+            "panel=\(panelId.uuidString.prefix(8)) " +
+            "title=\"\(trimmed.replacingOccurrences(of: "\n", with: "\\n"))\""
+        )
+        startupLog(
+            "rt.title.tabManager.enqueue tab=\(tabId.uuidString.prefix(8)) " +
+            "panel=\(panelId.uuidString.prefix(8)) " +
+            "title=\"\(trimmed.replacingOccurrences(of: "\n", with: "\\n"))\""
+        )
+#endif
         panelTitleUpdateCoalescer.signal { [weak self] in
             self?.flushPendingPanelTitleUpdates()
         }
@@ -4632,6 +4677,9 @@ class TabManager: ObservableObject {
         guard !pendingPanelTitleUpdates.isEmpty else { return }
         let updates = pendingPanelTitleUpdates
         pendingPanelTitleUpdates.removeAll(keepingCapacity: true)
+#if DEBUG
+        dlog("dbg.title.tabManager.flush count=\(updates.count)")
+#endif
         for (key, title) in updates {
             updatePanelTitle(tabId: key.tabId, panelId: key.panelId, title: title)
         }
@@ -4639,7 +4687,27 @@ class TabManager: ObservableObject {
 
     private func updatePanelTitle(tabId: UUID, panelId: UUID, title: String) {
         guard let tab = tabs.first(where: { $0.id == tabId }) else { return }
+        let previousTitle = tab.panelTitles[panelId]
         let didChange = tab.updatePanelTitle(panelId: panelId, title: title)
+#if DEBUG
+        let nextTitle = tab.panelTitles[panelId]
+        dlog(
+            "dbg.title.tabManager.apply tab=\(tabId.uuidString.prefix(8)) " +
+            "panel=\(panelId.uuidString.prefix(8)) " +
+            "didChange=\(didChange ? 1 : 0) " +
+            "old=\"\(debugTabManagerPreview(previousTitle))\" " +
+            "input=\"\(debugTabManagerPreview(title))\" " +
+            "new=\"\(debugTabManagerPreview(nextTitle))\""
+        )
+        startupLog(
+            "rt.title.tabManager.apply tab=\(tabId.uuidString.prefix(8)) " +
+            "panel=\(panelId.uuidString.prefix(8)) " +
+            "didChange=\(didChange ? 1 : 0) " +
+            "old=\"\(debugTabManagerPreview(previousTitle))\" " +
+            "input=\"\(debugTabManagerPreview(title))\" " +
+            "new=\"\(debugTabManagerPreview(nextTitle))\""
+        )
+#endif
         guard didChange else { return }
 
         // Update window title if this is the selected tab and focused panel
@@ -5202,7 +5270,7 @@ class TabManager: ObservableObject {
 
     private func equalizeSplits(
         in node: ExternalTreeNode,
-        controller: WorkspaceSplitController,
+        controller: WorkspaceLayoutController,
         foundSplit: inout Bool,
         allSucceeded: inout Bool
     ) {

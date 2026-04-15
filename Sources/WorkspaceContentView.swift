@@ -1,6 +1,7 @@
 import SwiftUI
 import Foundation
 import AppKit
+import Observation
 
 enum TmuxOverlayExperimentTarget: String, CaseIterable, Codable, Sendable {
     case surface
@@ -101,11 +102,12 @@ struct TmuxWorkspacePaneOverlayRenderState: Equatable {
 }
 
 @MainActor
-final class TmuxWorkspacePaneOverlayModel: ObservableObject {
-    @Published private(set) var unreadRects: [CGRect] = []
-    @Published private(set) var flashRect: CGRect?
-    @Published private(set) var flashStartedAt: Date?
-    @Published private(set) var flashReason: WorkspaceAttentionFlashReason?
+@Observable
+final class TmuxWorkspacePaneOverlayModel {
+    private(set) var unreadRects: [CGRect] = []
+    private(set) var flashRect: CGRect?
+    private(set) var flashStartedAt: Date?
+    private(set) var flashReason: WorkspaceAttentionFlashReason?
 
     private var lastWorkspaceId: UUID?
     private var lastFlashToken: UInt64?
@@ -219,7 +221,21 @@ struct TmuxWorkspacePaneOverlayView: View {
     }
 }
 
-/// View that renders a Workspace's content using WorkspaceSplitView
+@MainActor
+struct TmuxWorkspacePaneOverlayObservedView: View {
+    let model: TmuxWorkspacePaneOverlayModel
+
+    var body: some View {
+        TmuxWorkspacePaneOverlayView(
+            unreadRects: model.unreadRects,
+            flashRect: model.flashRect,
+            flashStartedAt: model.flashStartedAt,
+            flashReason: model.flashReason
+        )
+    }
+}
+
+/// View that renders a Workspace's content using WorkspaceLayoutView
 struct WorkspaceContentView: View {
     @ObservedObject var workspace: Workspace
     let isWorkspaceVisible: Bool
@@ -277,11 +293,11 @@ struct WorkspaceContentView: View {
             }
         }()
 
-        let splitView = WorkspaceSplitView(
+        let splitView = WorkspaceLayoutView(
             controller: workspace.splitController,
             nativeContent: { tab, paneId in
                 let _ = Self.debugPanelLookup(tab: tab, workspace: workspace)
-                guard let panel = workspace.panel(for: tab.id) as? TerminalPanel else { return nil }
+                guard let panel = workspace.panel(for: tab.id) else { return nil }
 
                 let isFocused = isWorkspaceInputActive && workspace.focusedPanelId == panel.id
                 let isSelectedInPane = workspace.splitController.selectedTab(inPane: paneId)?.id == tab.id
@@ -298,29 +314,50 @@ struct WorkspaceContentView: View {
                     isManuallyUnread: workspace.manualUnreadPanelIds.contains(panel.id)
                 )
 
-                return .terminal(
-                    WorkspaceTerminalPaneContent(
-                        panel: panel,
-                        isFocused: isFocused,
-                        isVisibleInUI: isVisibleInUI,
-                        isSplit: isSplit,
-                        appearance: appearance,
-                        hasUnreadNotification: showsNotificationRing && !usesWorkspacePaneOverlay,
-                        onFocus: {
-                            guard isWorkspaceInputActive else { return }
-                            guard workspace.panels[panel.id] != nil else { return }
-                            workspace.focusPanel(panel.id, trigger: .terminalFirstResponder)
-                        },
-                        onTriggerFlash: { workspace.triggerDebugFlash(panelId: panel.id) }
+                if let terminalPanel = panel as? TerminalPanel {
+                    return .terminal(
+                        WorkspaceTerminalPaneContent(
+                            panel: terminalPanel,
+                            isFocused: isFocused,
+                            isVisibleInUI: isVisibleInUI,
+                            isSplit: isSplit,
+                            appearance: appearance,
+                            hasUnreadNotification: showsNotificationRing && !usesWorkspacePaneOverlay,
+                            onFocus: {
+                                guard isWorkspaceInputActive else { return }
+                                guard workspace.panels[terminalPanel.id] != nil else { return }
+                                workspace.focusPanel(terminalPanel.id, trigger: .terminalFirstResponder)
+                            },
+                            onTriggerFlash: { workspace.triggerDebugFlash(panelId: terminalPanel.id) }
+                        )
                     )
-                )
+                }
+
+                if let browserPanel = panel as? BrowserPanel {
+                    return .browser(
+                        WorkspaceBrowserPaneContent(
+                            panel: browserPanel,
+                            paneId: paneId,
+                            isFocused: isFocused,
+                            isVisibleInUI: isVisibleInUI,
+                            portalPriority: workspacePortalPriority,
+                            onRequestPanelFocus: {
+                                guard isWorkspaceInputActive else { return }
+                                guard workspace.panels[browserPanel.id] != nil else { return }
+                                workspace.focusPanel(browserPanel.id)
+                            }
+                        )
+                    )
+                }
+
+                return nil
             }
         ) { tab, paneId in
             // Workspace terminal panes are mounted directly by the AppKit split host.
-            // The SwiftUI content path remains for non-terminal panel types.
+            // Browser panes now use the native host path too, leaving SwiftUI for markdown.
             let _ = Self.debugPanelLookup(tab: tab, workspace: workspace)
             if let panel = workspace.panel(for: tab.id) {
-                if panel is TerminalPanel {
+                if panel is TerminalPanel || panel is BrowserPanel {
                     Color.clear
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
@@ -755,7 +792,7 @@ struct WorkspaceContentView: View {
 
 extension WorkspaceContentView {
     #if DEBUG
-    static func debugPanelLookup(tab: WorkspaceSplit.Tab, workspace: Workspace) {
+    static func debugPanelLookup(tab: WorkspaceLayout.Tab, workspace: Workspace) {
         let found = workspace.panel(for: tab.id) != nil
         if !found {
             let ts = ISO8601DateFormatter().string(from: Date())
@@ -775,7 +812,7 @@ extension WorkspaceContentView {
         }
     }
     #else
-    static func debugPanelLookup(tab: WorkspaceSplit.Tab, workspace: Workspace) {
+    static func debugPanelLookup(tab: WorkspaceLayout.Tab, workspace: Workspace) {
         _ = tab
         _ = workspace
     }

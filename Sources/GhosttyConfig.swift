@@ -250,7 +250,7 @@ struct GhosttyConfig {
                 case "theme":
                     theme = value
                 case "working-directory":
-                    workingDirectory = value
+                    workingDirectory = cmuxNormalizedWorkingDirectory(value)
                 case "scrollback-limit":
                     if let limit = Int(value) {
                         scrollbackLimit = limit

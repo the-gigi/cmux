@@ -3766,7 +3766,7 @@ class TerminalController {
     @discardableResult
     private func v2ProportionalEqualize(
         node: ExternalTreeNode,
-        controller: WorkspaceSplitController,
+        controller: WorkspaceLayoutController,
         orientationFilter: String? = nil
     ) -> Bool {
         guard case .split(let s) = node else { return false }
@@ -13239,7 +13239,7 @@ class TerminalController {
         var result = "OK 0"
         DispatchQueue.main.sync {
 #if DEBUG
-            result = "OK \(WorkspaceSplitDebugCounters.arrangedSubviewUnderflowCount)"
+            result = "OK \(WorkspaceLayoutDebugCounters.arrangedSubviewUnderflowCount)"
 #else
             result = "OK 0"
 #endif
@@ -13250,7 +13250,7 @@ class TerminalController {
     private func resetSplitUnderflowCount() -> String {
         DispatchQueue.main.sync {
 #if DEBUG
-            WorkspaceSplitDebugCounters.reset()
+            WorkspaceLayoutDebugCounters.reset()
 #endif
         }
         return "OK"

@@ -35,7 +35,9 @@ struct CmuxSurfaceConfigTemplate {
     init(cConfig: ghostty_surface_config_s) {
         fontSize = cConfig.font_size
         if let workingDirectory = cConfig.working_directory {
-            self.workingDirectory = String(cString: workingDirectory, encoding: .utf8)
+            self.workingDirectory = cmuxNormalizedWorkingDirectory(
+                String(cString: workingDirectory, encoding: .utf8)
+            )
         }
         if let command = cConfig.command {
             self.command = String(cString: command, encoding: .utf8)
@@ -54,6 +56,21 @@ struct CmuxSurfaceConfigTemplate {
         }
         waitAfterCommand = cConfig.wait_after_command
     }
+}
+
+func cmuxNormalizedWorkingDirectory(_ raw: String?) -> String? {
+    let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !trimmed.isEmpty else { return nil }
+    let expanded = NSString(string: trimmed).expandingTildeInPath
+    let normalized = expanded.trimmingCharacters(in: .whitespacesAndNewlines)
+    return normalized.isEmpty ? nil : normalized
+}
+
+func cmuxDefaultWorkingDirectory() -> String {
+    if let configured = cmuxNormalizedWorkingDirectory(GhosttyConfig.load().workingDirectory) {
+        return configured
+    }
+    return FileManager.default.homeDirectoryForCurrentUser.path
 }
 
 func cmuxSurfaceContextName(_ context: ghostty_surface_context_e) -> String {
@@ -6554,7 +6571,7 @@ struct ClosedBrowserPanelRestoreSnapshot {
 }
 
 /// Workspace represents a sidebar tab.
-/// Each workspace contains one WorkspaceSplitController that manages split panes and nested surfaces.
+/// Each workspace contains one WorkspaceLayoutController that manages split panes and nested surfaces.
 @MainActor
 final class Workspace: Identifiable, ObservableObject {
     let id: UUID
@@ -6570,7 +6587,7 @@ final class Workspace: Identifiable, ObservableObject {
     var portOrdinal: Int = 0
 
     /// The WorkspaceSplit controller managing the split panes for this workspace
-    let splitController: WorkspaceSplitController
+    let splitController: WorkspaceLayoutController
 
     /// Mapping from WorkspaceSplit TabID to our Panel instances
     @Published private(set) var panels: [UUID: any Panel] = [:]
@@ -6809,8 +6826,8 @@ final class Workspace: Identifiable, ObservableObject {
 
     // MARK: - Initialization
 
-    private static func currentSplitButtonTooltips() -> WorkspaceSplitConfiguration.SplitButtonTooltips {
-        WorkspaceSplitConfiguration.SplitButtonTooltips(
+    private static func currentSplitButtonTooltips() -> WorkspaceLayoutConfiguration.SplitButtonTooltips {
+        WorkspaceLayoutConfiguration.SplitButtonTooltips(
             newTerminal: KeyboardShortcutSettings.Action.newSurface.tooltip("New Terminal"),
             newBrowser: KeyboardShortcutSettings.Action.openBrowser.tooltip("New Browser"),
             splitRight: KeyboardShortcutSettings.Action.splitRight.tooltip("Split Right"),
@@ -6818,10 +6835,11 @@ final class Workspace: Identifiable, ObservableObject {
         )
     }
 
-    private static func splitAppearance(from config: GhosttyConfig) -> WorkspaceSplitConfiguration.Appearance {
+    private static func splitAppearance(from config: GhosttyConfig) -> WorkspaceLayoutConfiguration.Appearance {
         splitAppearance(
             from: config.backgroundColor,
-            backgroundOpacity: config.backgroundOpacity
+            backgroundOpacity: config.backgroundOpacity,
+            tabTitleFontSize: config.surfaceTabBarFontSize
         )
     }
 
@@ -6836,15 +6854,17 @@ final class Workspace: Identifiable, ObservableObject {
 
     nonisolated static func resolvedChromeColors(
         from backgroundColor: NSColor
-    ) -> WorkspaceSplitConfiguration.Appearance.ChromeColors {
+    ) -> WorkspaceLayoutConfiguration.Appearance.ChromeColors {
         .init(backgroundHex: backgroundColor.hexString())
     }
 
     private static func splitAppearance(
         from backgroundColor: NSColor,
-        backgroundOpacity: Double
-    ) -> WorkspaceSplitConfiguration.Appearance {
-        WorkspaceSplitConfiguration.Appearance(
+        backgroundOpacity: Double,
+        tabTitleFontSize: CGFloat = 11
+    ) -> WorkspaceLayoutConfiguration.Appearance {
+        WorkspaceLayoutConfiguration.Appearance(
+            tabTitleFontSize: tabTitleFontSize,
             splitButtonTooltips: Self.currentSplitButtonTooltips(),
             enableAnimations: false,
             chromeColors: .init(
@@ -6905,11 +6925,9 @@ final class Workspace: Identifiable, ObservableObject {
         self.customTitle = nil
         self.customDescription = nil
 
-        let trimmedWorkingDirectory = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let hasWorkingDirectory = !trimmedWorkingDirectory.isEmpty
-        self.currentDirectory = hasWorkingDirectory
-            ? trimmedWorkingDirectory
-            : FileManager.default.homeDirectoryForCurrentUser.path
+        let resolvedWorkingDirectory = cmuxNormalizedWorkingDirectory(workingDirectory)
+            ?? cmuxDefaultWorkingDirectory()
+        self.currentDirectory = resolvedWorkingDirectory
 
         // Configure WorkspaceSplit with keepAllAlive to preserve terminal state
         // and keep split entry instantaneous.
@@ -6919,7 +6937,7 @@ final class Workspace: Identifiable, ObservableObject {
             from: GhosttyApp.shared.defaultBackgroundColor,
             backgroundOpacity: GhosttyApp.shared.defaultBackgroundOpacity
         )
-        let config = WorkspaceSplitConfiguration(
+        let config = WorkspaceLayoutConfiguration(
             allowSplits: true,
             allowCloseTabs: true,
             allowCloseLastPane: false,
@@ -6930,7 +6948,7 @@ final class Workspace: Identifiable, ObservableObject {
             newTabPosition: .current,
             appearance: appearance
         )
-        self.splitController = WorkspaceSplitController(configuration: config)
+        self.splitController = WorkspaceLayoutController(configuration: config)
         splitController.contextMenuShortcuts = Self.buildContextMenuShortcuts()
 
         // Remove the default "Welcome" tab that WorkspaceSplit creates
@@ -6941,20 +6959,20 @@ final class Workspace: Identifiable, ObservableObject {
             workspaceId: id,
             context: GHOSTTY_SURFACE_CONTEXT_TAB,
             configTemplate: configTemplate,
-            workingDirectory: hasWorkingDirectory ? trimmedWorkingDirectory : nil,
+            workingDirectory: resolvedWorkingDirectory,
             portOrdinal: portOrdinal,
             initialCommand: initialTerminalCommand,
             initialEnvironmentOverrides: initialTerminalEnvironment
         )
         configureTerminalPanel(terminalPanel)
         panels[terminalPanel.id] = terminalPanel
-        panelTitles[terminalPanel.id] = terminalPanel.displayTitle
+        seedInitialTerminalPanelTitle(terminalPanel, fallbackDirectory: resolvedWorkingDirectory)
         seedTerminalInheritanceFontPoints(panelId: terminalPanel.id, configTemplate: configTemplate)
 
         // Create initial tab in WorkspaceSplit and store the mapping
         var initialTabId: TabID?
         if let tabId = splitController.createTab(
-            title: title,
+            title: panelTitle(panelId: terminalPanel.id) ?? title,
             icon: "terminal.fill",
             kind: SurfaceKind.terminal,
             isDirty: false,
@@ -7609,6 +7627,7 @@ final class Workspace: Identifiable, ObservableObject {
     func updatePanelDirectory(panelId: UUID, directory: String) {
         let trimmed = directory.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let previousDirectory = panelDirectories[panelId]
         if panelDirectories[panelId] != trimmed {
             panelDirectories[panelId] = trimmed
         }
@@ -7616,6 +7635,55 @@ final class Workspace: Identifiable, ObservableObject {
         if panelId == focusedPanelId, currentDirectory != trimmed {
             currentDirectory = trimmed
         }
+        syncTerminalTitleFromDirectoryIfNeeded(
+            panelId: panelId,
+            previousDirectory: previousDirectory,
+            nextDirectory: trimmed
+        )
+    }
+
+    private func syncTerminalTitleFromDirectoryIfNeeded(
+        panelId: UUID,
+        previousDirectory: String?,
+        nextDirectory: String
+    ) {
+        guard let terminalPanel = panels[panelId] as? TerminalPanel else { return }
+        guard panelCustomTitles[panelId] == nil else { return }
+        guard let nextDirectoryTitle = Self.derivedTerminalTitle(fromDirectory: nextDirectory) else { return }
+
+        let currentTitle = (panelTitles[panelId] ?? terminalPanel.displayTitle)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let genericTitle = terminalPanel.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let previousDirectoryTitle = Self.derivedTerminalTitle(fromDirectory: previousDirectory)
+
+        let shouldFollowDirectoryTitle =
+            currentTitle.isEmpty
+            || currentTitle == genericTitle
+            || currentTitle == previousDirectoryTitle
+        guard shouldFollowDirectoryTitle else { return }
+        _ = updatePanelTitle(panelId: panelId, title: nextDirectoryTitle)
+    }
+
+    private static func derivedTerminalTitle(fromDirectory directory: String?) -> String? {
+        guard let directory else { return nil }
+        let trimmed = directory.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let standardized = (trimmed as NSString).standardizingPath
+        let canonical = standardized.isEmpty ? trimmed : standardized
+        let abbreviated = (canonical as NSString).abbreviatingWithTildeInPath
+        let resolved = abbreviated.trimmingCharacters(in: .whitespacesAndNewlines)
+        return resolved.isEmpty ? nil : resolved
+    }
+
+    private func seedInitialTerminalPanelTitle(
+        _ terminalPanel: TerminalPanel,
+        fallbackDirectory: String? = nil
+    ) {
+        let initialTitle = Self.derivedTerminalTitle(
+            fromDirectory: terminalPanel.requestedWorkingDirectory ?? fallbackDirectory ?? currentDirectory
+        ) ?? terminalPanel.displayTitle
+        terminalPanel.updateTitle(initialTitle)
+        panelTitles[terminalPanel.id] = initialTitle
     }
 
     func updatePanelShellActivityState(panelId: UUID, state: PanelShellActivityState) {
@@ -8886,7 +8954,7 @@ final class Workspace: Identifiable, ObservableObject {
         )
         configureTerminalPanel(newPanel)
         panels[newPanel.id] = newPanel
-        panelTitles[newPanel.id] = newPanel.displayTitle
+        seedInitialTerminalPanelTitle(newPanel, fallbackDirectory: splitWorkingDirectory)
         if remoteTerminalStartupCommand != nil {
             trackRemoteTerminalSurface(newPanel.id)
         }
@@ -8894,8 +8962,8 @@ final class Workspace: Identifiable, ObservableObject {
 
         // Pre-generate the WorkspaceSplit tab ID so we can install the panel mapping before WorkspaceSplit
         // mutates layout state (avoids transient "Empty Panel" flashes during split).
-        let newTab = WorkspaceSplit.Tab(
-            title: newPanel.displayTitle,
+        let newTab = WorkspaceLayout.Tab(
+            title: panelTitle(panelId: newPanel.id) ?? newPanel.displayTitle,
             icon: newPanel.displayIcon,
             kind: SurfaceKind.terminal,
             isDirty: newPanel.isDirty,
@@ -8982,7 +9050,7 @@ final class Workspace: Identifiable, ObservableObject {
         )
         configureTerminalPanel(newPanel)
         panels[newPanel.id] = newPanel
-        panelTitles[newPanel.id] = newPanel.displayTitle
+        seedInitialTerminalPanelTitle(newPanel, fallbackDirectory: workingDirectory)
         if remoteTerminalStartupCommand != nil {
             trackRemoteTerminalSurface(newPanel.id)
         }
@@ -8990,7 +9058,7 @@ final class Workspace: Identifiable, ObservableObject {
 
         // Create tab in WorkspaceSplit
         guard let newTabId = splitController.createTab(
-            title: newPanel.displayTitle,
+            title: panelTitle(panelId: newPanel.id) ?? newPanel.displayTitle,
             icon: newPanel.displayIcon,
             kind: SurfaceKind.terminal,
             isDirty: newPanel.isDirty,
@@ -9080,7 +9148,7 @@ final class Workspace: Identifiable, ObservableObject {
         panelTitles[browserPanel.id] = browserPanel.displayTitle
 
         // Pre-generate the WorkspaceSplit tab ID so the mapping exists before the split lands.
-        let newTab = WorkspaceSplit.Tab(
+        let newTab = WorkspaceLayout.Tab(
             title: browserPanel.displayTitle,
             icon: browserPanel.displayIcon,
             kind: SurfaceKind.browser,
@@ -9224,7 +9292,7 @@ final class Workspace: Identifiable, ObservableObject {
         panels[markdownPanel.id] = markdownPanel
         panelTitles[markdownPanel.id] = markdownPanel.displayTitle
 
-        let newTab = WorkspaceSplit.Tab(
+        let newTab = WorkspaceLayout.Tab(
             title: markdownPanel.displayTitle,
             icon: markdownPanel.displayIcon,
             kind: SurfaceKind.markdown,
@@ -9575,7 +9643,7 @@ final class Workspace: Identifiable, ObservableObject {
         let anchorPaneId: UUID?
     }
 
-    private func stageClosedBrowserRestoreSnapshotIfNeeded(for tab: WorkspaceSplit.Tab, inPane pane: PaneID) {
+    private func stageClosedBrowserRestoreSnapshotIfNeeded(for tab: WorkspaceLayout.Tab, inPane pane: PaneID) {
         guard let panelId = panelIdFromSurfaceId(tab.id),
               let browserPanel = browserPanel(for: panelId),
               let tabIndex = splitController.tabs(inPane: pane).firstIndex(where: { $0.id == tab.id }) else {
@@ -10307,12 +10375,12 @@ final class Workspace: Identifiable, ObservableObject {
         )
         configureTerminalPanel(newPanel)
         panels[newPanel.id] = newPanel
-        panelTitles[newPanel.id] = newPanel.displayTitle
+        seedInitialTerminalPanelTitle(newPanel)
         seedTerminalInheritanceFontPoints(panelId: newPanel.id, configTemplate: inheritedConfig)
 
         // Create tab in WorkspaceSplit
         if let newTabId = splitController.createTab(
-            title: newPanel.displayTitle,
+            title: panelTitle(panelId: newPanel.id) ?? newPanel.displayTitle,
             icon: newPanel.displayIcon,
             kind: SurfaceKind.terminal,
             isDirty: newPanel.isDirty,
@@ -11063,7 +11131,7 @@ final class Workspace: Identifiable, ObservableObject {
         }
     }
 
-    private func handleExternalTabDrop(_ request: WorkspaceSplitController.ExternalTabDropRequest) -> Bool {
+    private func handleExternalTabDrop(_ request: WorkspaceLayoutController.ExternalTabDropRequest) -> Bool {
         guard let app = AppDelegate.shared else { return false }
 #if DEBUG
         let dropStart = ProcessInfo.processInfo.systemUptime
@@ -11119,9 +11187,9 @@ final class Workspace: Identifiable, ObservableObject {
 
 }
 
-// MARK: - WorkspaceSplitDelegate
+// MARK: - WorkspaceLayoutDelegate
 
-extension Workspace: WorkspaceSplitDelegate {
+extension Workspace: WorkspaceLayoutDelegate {
     @MainActor
     private func shouldCloseWorkspaceOnLastSurface(for tabId: TabID) -> Bool {
         let manager = owningTabManager ?? AppDelegate.shared?.tabManagerFor(tabId: id) ?? AppDelegate.shared?.tabManager
@@ -11562,7 +11630,7 @@ extension Workspace: WorkspaceSplitDelegate {
         pendingNonFocusSplitFocusReassert = nil
     }
 
-    func workspaceSplit(_ controller: WorkspaceSplitController, shouldCloseTab tab: WorkspaceSplit.Tab, inPane pane: PaneID) -> Bool {
+    func workspaceSplit(_ controller: WorkspaceLayoutController, shouldCloseTab tab: WorkspaceLayout.Tab, inPane pane: PaneID) -> Bool {
         func recordPostCloseSelection() {
             let tabs = controller.tabs(inPane: pane)
             guard let idx = tabs.firstIndex(where: { $0.id == tab.id }) else {
@@ -11647,7 +11715,7 @@ extension Workspace: WorkspaceSplitDelegate {
         return true
     }
 
-    func workspaceSplit(_ controller: WorkspaceSplitController, didCloseTab tabId: TabID, fromPane pane: PaneID) {
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didCloseTab tabId: TabID, fromPane pane: PaneID) {
         forceCloseTabIds.remove(tabId)
         let selectTabId = postCloseSelectTabId.removeValue(forKey: tabId)
         let closedBrowserRestoreSnapshot = pendingClosedBrowserRestoreSnapshots.removeValue(forKey: tabId)
@@ -11776,11 +11844,11 @@ extension Workspace: WorkspaceSplitDelegate {
         }
     }
 
-    func workspaceSplit(_ controller: WorkspaceSplitController, didSelectTab tab: WorkspaceSplit.Tab, inPane pane: PaneID) {
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didSelectTab tab: WorkspaceLayout.Tab, inPane pane: PaneID) {
         applyTabSelection(tabId: tab.id, inPane: pane)
     }
 
-    func workspaceSplit(_ controller: WorkspaceSplitController, didMoveTab tab: WorkspaceSplit.Tab, fromPane source: PaneID, toPane destination: PaneID) {
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didMoveTab tab: WorkspaceLayout.Tab, fromPane source: PaneID, toPane destination: PaneID) {
 #if DEBUG
         let now = ProcessInfo.processInfo.systemUptime
         let sincePrev: String
@@ -11834,7 +11902,7 @@ extension Workspace: WorkspaceSplitDelegate {
         }
     }
 
-    func workspaceSplit(_ controller: WorkspaceSplitController, didFocusPane pane: PaneID) {
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didFocusPane pane: PaneID) {
         // When a pane is focused, focus its selected tab's panel
         guard let tab = controller.selectedTab(inPane: pane) else { return }
 #if DEBUG
@@ -11851,7 +11919,7 @@ extension Workspace: WorkspaceSplitDelegate {
         }
     }
 
-    func workspaceSplit(_ controller: WorkspaceSplitController, didClosePane paneId: PaneID) {
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didClosePane paneId: PaneID) {
         let closedPanelIds = pendingPaneClosePanelIds.removeValue(forKey: paneId.id) ?? []
         let shouldScheduleFocusReconcile = !isDetachingCloseTransaction
 
@@ -11896,7 +11964,7 @@ extension Workspace: WorkspaceSplitDelegate {
         }
     }
 
-    func workspaceSplit(_ controller: WorkspaceSplitController, shouldClosePane pane: PaneID) -> Bool {
+    func workspaceSplit(_ controller: WorkspaceLayoutController, shouldClosePane pane: PaneID) -> Bool {
         // Check if any panel in this pane needs close confirmation
         let tabs = controller.tabs(inPane: pane)
         for tab in tabs {
@@ -11912,7 +11980,7 @@ extension Workspace: WorkspaceSplitDelegate {
         return true
     }
 
-    func workspaceSplit(_ controller: WorkspaceSplitController, didSplitPane originalPane: PaneID, newPane: PaneID, orientation: SplitOrientation) {
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didSplitPane originalPane: PaneID, newPane: PaneID, orientation: SplitOrientation) {
 #if DEBUG
         let panelKindForTab: (TabID) -> String = { tabId in
             guard let panelId = self.panelIdFromSurfaceId(tabId),
@@ -12003,13 +12071,13 @@ extension Workspace: WorkspaceSplitDelegate {
                     )
                     configureTerminalPanel(replacementPanel)
                     panels[replacementPanel.id] = replacementPanel
-                    panelTitles[replacementPanel.id] = replacementPanel.displayTitle
+                    seedInitialTerminalPanelTitle(replacementPanel)
                     seedTerminalInheritanceFontPoints(panelId: replacementPanel.id, configTemplate: inheritedConfig)
                     surfaceIdToPanelId[replacementTab.id] = replacementPanel.id
 
                     splitController.updateTab(
                         replacementTab.id,
-                        title: replacementPanel.displayTitle,
+                        title: panelTitle(panelId: replacementPanel.id) ?? replacementPanel.displayTitle,
                         icon: .some(replacementPanel.displayIcon),
                         iconImageData: .some(nil),
                         kind: .some(SurfaceKind.terminal),
@@ -12070,11 +12138,11 @@ extension Workspace: WorkspaceSplitDelegate {
         )
         configureTerminalPanel(newPanel)
         panels[newPanel.id] = newPanel
-        panelTitles[newPanel.id] = newPanel.displayTitle
+        seedInitialTerminalPanelTitle(newPanel)
         seedTerminalInheritanceFontPoints(panelId: newPanel.id, configTemplate: inheritedConfig)
 
         guard let newTabId = splitController.createTab(
-            title: newPanel.displayTitle,
+            title: panelTitle(panelId: newPanel.id) ?? newPanel.displayTitle,
             icon: newPanel.displayIcon,
             kind: SurfaceKind.terminal,
             isDirty: newPanel.isDirty,
@@ -12108,7 +12176,7 @@ extension Workspace: WorkspaceSplitDelegate {
         }
     }
 
-    func workspaceSplit(_ controller: WorkspaceSplitController, didRequestNewTab kind: String, inPane pane: PaneID) {
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didRequestNewTab kind: String, inPane pane: PaneID) {
         switch kind {
         case "terminal":
             _ = newTerminalSurface(inPane: pane)
@@ -12119,7 +12187,7 @@ extension Workspace: WorkspaceSplitDelegate {
         }
     }
 
-    func workspaceSplit(_ controller: WorkspaceSplitController, didRequestTabContextAction action: TabContextAction, for tab: WorkspaceSplit.Tab, inPane pane: PaneID) {
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didRequestTabContextAction action: TabContextAction, for tab: WorkspaceLayout.Tab, inPane pane: PaneID) {
         switch action {
         case .rename:
             promptRenamePanel(tabId: tab.id)
@@ -12170,7 +12238,7 @@ extension Workspace: WorkspaceSplitDelegate {
         }
     }
 
-    func workspaceSplit(_ controller: WorkspaceSplitController, didChangeGeometry snapshot: LayoutSnapshot) {
+    func workspaceSplit(_ controller: WorkspaceLayoutController, didChangeGeometry snapshot: LayoutSnapshot) {
         tmuxLayoutSnapshot = snapshot
         scheduleTerminalGeometryReconcile()
         if !isDetachingCloseTransaction {

@@ -1977,6 +1977,71 @@ final class BrowserPaneDropRoutingTests: XCTestCase {
     }
 }
 
+@MainActor
+final class WorkspacePaneDropRoutingTests: XCTestCase {
+    func testTerminalDragKeepsLeftEdgeAsLeft() {
+        let targetPaneId = PaneID(id: UUID())
+        let sourcePaneId = PaneID(id: UUID())
+        let size = CGSize(width: 240, height: 180)
+
+        let decision = WorkspacePaneDropRouting.decision(
+            for: CGPoint(x: 8, y: size.height * 0.5),
+            in: size,
+            targetPaneId: targetPaneId,
+            sourcePaneId: sourcePaneId,
+            draggedKind: "terminal"
+        )
+
+        XCTAssertEqual(decision.defaultZone, .left)
+        XCTAssertEqual(decision.finalZone, .left)
+        XCTAssertEqual(decision.targetPaneId, targetPaneId)
+        XCTAssertEqual(decision.sourcePaneId, sourcePaneId)
+        XCTAssertEqual(decision.draggedKind, "terminal")
+        XCTAssertNil(decision.remapReason)
+    }
+
+    func testTerminalDragKeepsRightEdgeAsRight() {
+        let targetPaneId = PaneID(id: UUID())
+        let sourcePaneId = PaneID(id: UUID())
+        let size = CGSize(width: 240, height: 180)
+
+        let decision = WorkspacePaneDropRouting.decision(
+            for: CGPoint(x: size.width - 8, y: size.height * 0.5),
+            in: size,
+            targetPaneId: targetPaneId,
+            sourcePaneId: sourcePaneId,
+            draggedKind: "terminal"
+        )
+
+        XCTAssertEqual(decision.defaultZone, .right)
+        XCTAssertEqual(decision.finalZone, .right)
+        XCTAssertEqual(decision.targetPaneId, targetPaneId)
+        XCTAssertEqual(decision.sourcePaneId, sourcePaneId)
+        XCTAssertEqual(decision.draggedKind, "terminal")
+        XCTAssertNil(decision.remapReason)
+    }
+
+    func testNoSourceContextStillReturnsGeometryZone() {
+        let targetPaneId = PaneID(id: UUID())
+        let size = CGSize(width: 240, height: 180)
+
+        let decision = WorkspacePaneDropRouting.decision(
+            for: CGPoint(x: size.width * 0.5, y: size.height - 8),
+            in: size,
+            targetPaneId: targetPaneId,
+            sourcePaneId: nil,
+            draggedKind: nil
+        )
+
+        XCTAssertEqual(decision.defaultZone, .top)
+        XCTAssertEqual(decision.finalZone, .top)
+        XCTAssertEqual(decision.targetPaneId, targetPaneId)
+        XCTAssertNil(decision.sourcePaneId)
+        XCTAssertNil(decision.draggedKind)
+        XCTAssertNil(decision.remapReason)
+    }
+}
+
 
 @MainActor
 final class WindowBrowserSlotViewTests: XCTestCase {
