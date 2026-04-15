@@ -3409,6 +3409,14 @@ final class TerminalSurface: Identifiable, ObservableObject {
     /// record to decide whether a pin is actually smaller than our
     /// capacity. Updated only on non-pin-driven layout passes.
     private var naturalContainerPixelSize: CGSize = .zero
+    /// Last (cols, rows) this surface reported to the daemon via
+    /// `bridge.resize`. Used in `applyDaemonEffectiveGrid` to detect
+    /// daemon-echoed values: if effective == lastReported on both axes,
+    /// the daemon is just returning what we asked for (no smaller
+    /// sibling), so we shouldn't pin. If effective is smaller than
+    /// lastReported on either axis, a smaller sibling is attached and
+    /// we genuinely need to letterbox.
+    private var lastReportedToDaemon: (cols: Int, rows: Int)?
     private let debugMetadataLock = NSLock()
     private let createdAt: Date = Date()
     private var runtimeSurfaceCreatedAt: Date?
@@ -4558,8 +4566,9 @@ final class TerminalSurface: Identifiable, ObservableObject {
                         height: CGFloat(natural.height_px)
                     )
                 }
-                if let bridge = daemonBridge {
+                if let bridge = daemonBridge, natural.columns > 0, natural.rows > 0 {
                     bridge.resize(cols: Int(natural.columns), rows: Int(natural.rows))
+                    lastReportedToDaemon = (Int(natural.columns), Int(natural.rows))
                 }
             }
 
@@ -4606,19 +4615,35 @@ final class TerminalSurface: Identifiable, ObservableObject {
         guard effectiveGridPin?.cols != next?.cols || effectiveGridPin?.rows != next?.rows else { return }
         effectiveGridPin = next
         #if DEBUG
-        dlog("effectiveGrid.apply surface=\(id.uuidString.prefix(8)) cols=\(cols) rows=\(rows) stored=\(next != nil ? 1 : 0) naturalCell=\(cachedCellPixelSize.width)x\(cachedCellPixelSize.height) natContainer=\(naturalContainerPixelSize.width)x\(naturalContainerPixelSize.height)")
+        dlog("effectiveGrid.apply surface=\(id.uuidString.prefix(8)) cols=\(cols) rows=\(rows) stored=\(next != nil ? 1 : 0) lastReported=\(lastReportedToDaemon.map { "\($0.cols)x\($0.rows)" } ?? "nil") naturalCell=\(cachedCellPixelSize.width)x\(cachedCellPixelSize.height) natContainer=\(naturalContainerPixelSize.width)x\(naturalContainerPixelSize.height)")
         #endif
         reapplyEffectiveGridPinIfNeeded()
     }
 
-    /// True when (cols × cellW, rows × cellH) is smaller than the natural
-    /// container on at least one axis. When both cell metrics and natural
-    /// container pixel size aren't known yet (first layout hasn't run),
-    /// we defer the judgment to false — avoids pinning to a tiny startup
-    /// value before AppKit has told us how big we really are.
+    /// True when the daemon's effective (cols, rows) represents an
+    /// actual-smaller-sibling situation — i.e. we should letterbox.
+    ///
+    /// The check compares against whichever reference we have:
+    ///
+    /// - Our last reported size via `bridge.resize` if we've reported
+    ///   one. If effective < lastReported on either axis, someone
+    ///   smaller is attached. If effective == lastReported on both
+    ///   axes, the daemon is just echoing us (no sibling, no pin).
+    /// - Otherwise, fall back to comparing (cols, rows) in pixels
+    ///   against the natural container pixel size.
+    /// - If we don't know either reference yet (very early lifecycle),
+    ///   default to false. We'd rather miss the first apply and catch
+    ///   it on the next one than pin prematurely to a stale / startup
+    ///   Ghostty default grid (the "weird resize on new terminal" bug).
     private func isEffectiveSmallerThanNatural(cols: Int, rows: Int) -> Bool {
-        guard cachedCellPixelSize.width > 0, cachedCellPixelSize.height > 0 else { return false }
-        guard naturalContainerPixelSize.width > 0, naturalContainerPixelSize.height > 0 else { return false }
+        if let last = lastReportedToDaemon {
+            if cols == last.cols && rows == last.rows { return false }
+            return cols < last.cols || rows < last.rows
+        }
+        guard cachedCellPixelSize.width > 0, cachedCellPixelSize.height > 0,
+              naturalContainerPixelSize.width > 0, naturalContainerPixelSize.height > 0 else {
+            return false
+        }
         let pinnedW = CGFloat(cols) * cachedCellPixelSize.width
         let pinnedH = CGFloat(rows) * cachedCellPixelSize.height
         return pinnedW + 0.5 < naturalContainerPixelSize.width
