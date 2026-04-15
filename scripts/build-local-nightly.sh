@@ -79,21 +79,35 @@ mv "$SRC_APP" "$DEST_APP"
 echo "==> Embedding provisioning profile"
 cp "$PROFILE" "$DEST_APP/Contents/embedded.provisionprofile"
 
+echo "==> Composing per-bundle entitlements (cmux.entitlements + application-identifier)"
+# AuthenticationServices refuses restricted entitlements like WebAuthn
+# with error 1004 unless the signed entitlements carry a valid
+# application-identifier that matches the embedded provisioning
+# profile. The checked-in cmux.entitlements omits it because it's
+# bundle-id specific; inject it here for the nightly bundle.
+NIGHTLY_ENT="$(mktemp -t cmux-nightly-ent.XXXXXX.plist)"
+trap 'rm -f "$TMP_PLIST" "$NIGHTLY_ENT"' EXIT
+cp "$ENTITLEMENTS" "$NIGHTLY_ENT"
+/usr/libexec/PlistBuddy -c "Delete :com.apple.application-identifier" "$NIGHTLY_ENT" >/dev/null 2>&1 || true
+/usr/libexec/PlistBuddy -c "Delete :com.apple.developer.team-identifier" "$NIGHTLY_ENT" >/dev/null 2>&1 || true
+/usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string 7WLXT3NR37.com.cmuxterm.app.nightly" "$NIGHTLY_ENT"
+/usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string 7WLXT3NR37" "$NIGHTLY_ENT"
+
 echo "==> Codesigning helpers and app"
 CLI_PATH="$DEST_APP/Contents/Resources/bin/cmux"
 HELPER_PATH="$DEST_APP/Contents/Resources/bin/ghostty"
 
 if [[ -f "$CLI_PATH" ]]; then
   /usr/bin/codesign --force --options runtime --timestamp=none \
-    --sign "$IDENTITY" --entitlements "$ENTITLEMENTS" "$CLI_PATH"
+    --sign "$IDENTITY" --entitlements "$NIGHTLY_ENT" "$CLI_PATH"
 fi
 if [[ -f "$HELPER_PATH" ]]; then
   /usr/bin/codesign --force --options runtime --timestamp=none \
-    --sign "$IDENTITY" --entitlements "$ENTITLEMENTS" "$HELPER_PATH"
+    --sign "$IDENTITY" --entitlements "$NIGHTLY_ENT" "$HELPER_PATH"
 fi
 
 /usr/bin/codesign --force --options runtime --timestamp=none \
-  --sign "$IDENTITY" --entitlements "$ENTITLEMENTS" --deep "$DEST_APP"
+  --sign "$IDENTITY" --entitlements "$NIGHTLY_ENT" --deep "$DEST_APP"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$DEST_APP"
 
 echo "==> Verifying WebAuthn entitlement present after signing"
