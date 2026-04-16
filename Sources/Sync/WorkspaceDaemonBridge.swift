@@ -168,12 +168,30 @@ final class WorkspaceDaemonBridge {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let normalizedColor = (color?.isEmpty == false) ? color : nil
                 let pinned = (entry["pinned"] as? Bool) ?? false
+                // Daemon-originated workspaces (typical path: iOS created a
+                // workspace via workspace.open_pane) carry a live pane with
+                // a daemon-minted session id. Adopt it so the new mac tab
+                // attaches to the running shell rather than minting a
+                // second pane via createSurface's openPane fallback.
+                let adoptedSessionID: String? = {
+                    if let panes = entry["panes"] as? [[String: Any]],
+                       let first = panes.first,
+                       let sid = first["session_id"] as? String,
+                       !sid.isEmpty {
+                        return sid
+                    }
+                    if let sid = entry["session_id"] as? String, !sid.isEmpty {
+                        return sid
+                    }
+                    return nil
+                }()
                 tabManager.addWorkspaceFromDaemon(
                     id: id,
                     title: title,
                     directory: directory.isEmpty ? nil : directory,
                     color: normalizedColor,
-                    pinned: pinned
+                    pinned: pinned,
+                    adoptedDaemonSessionID: adoptedSessionID
                 )
             }
         }

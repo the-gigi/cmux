@@ -2065,14 +2065,16 @@ class TabManager: ObservableObject {
         title: String,
         directory: String?,
         color: String?,
-        pinned: Bool
+        pinned: Bool,
+        adoptedDaemonSessionID: String? = nil
     ) -> Workspace {
         let resolvedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "Terminal" : title
         let workspace = Workspace(
             id: id,
             title: resolvedTitle,
-            workingDirectory: directory
+            workingDirectory: directory,
+            adoptedDaemonSessionID: adoptedDaemonSessionID
         )
         workspace.owningTabManager = self
         if pinned {

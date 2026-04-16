@@ -569,9 +569,7 @@ extension Workspace {
     private static func retryPreCreate(workspaceID: UUID, panelInfo: [(surfaceID: UUID, savedSessionID: String?)], attempts: Int) {
         DispatchQueue.main.asyncAfter(deadline: .now() + (attempts == 0 ? 0.5 : 1.0)) {
             let daemonRunning = MobileDaemonBridgeInline.shared.isRunning
-            let daemonPath = MobileDaemonBridgeInline.shared.daemonSocketPath
-            if let socket = daemonPath, daemonRunning {
-                _ = socket
+            if daemonRunning {
                 dlog("preCreateDaemonSessions.ready workspace=\(workspaceID.uuidString.prefix(8)) attempts=\(attempts)")
                 for info in panelInfo {
                     // Only pre-create when we have a persisted daemon
@@ -7698,7 +7696,8 @@ final class Workspace: Identifiable, ObservableObject {
         portOrdinal: Int = 0,
         configTemplate: CmuxSurfaceConfigTemplate? = nil,
         initialTerminalCommand: String? = nil,
-        initialTerminalEnvironment: [String: String] = [:]
+        initialTerminalEnvironment: [String: String] = [:],
+        adoptedDaemonSessionID: String? = nil
     ) {
         self.id = id
         self.portOrdinal = portOrdinal
@@ -7748,6 +7747,13 @@ final class Workspace: Identifiable, ObservableObject {
             intendedInitialCommand: initialTerminalCommand,
             initialEnvironmentOverrides: initialTerminalEnvironment
         )
+        // When materializing a daemon-originated workspace (e.g. iOS created
+        // it), adopt the daemon's existing session id so the bridge attaches
+        // to the running shell instead of asking the daemon to mint a fresh
+        // one via openPane.
+        if let adoptedDaemonSessionID {
+            terminalPanel.surface.savedDaemonSessionID = adoptedDaemonSessionID
+        }
         configureTerminalPanel(terminalPanel)
         panels[terminalPanel.id] = terminalPanel
         panelTitles[terminalPanel.id] = terminalPanel.displayTitle
