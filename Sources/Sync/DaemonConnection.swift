@@ -394,10 +394,21 @@ final class DaemonConnection: @unchecked Sendable {
 
     func unsubscribeTerminal(sessionID: String) {
         stateLock.lock()
-        terminalHandlers.removeValue(forKey: sessionID)
+        let removed = terminalHandlers.removeValue(forKey: sessionID)
         let connected = fd >= 0
         stateLock.unlock()
         if connected {
+            // Release our attachment first so the daemon's effective-size
+            // aggregation drops our natural contribution immediately. Without
+            // this the attachment lingers on the daemon side (terminal.unsubscribe
+            // only stops output delivery) and keeps pinning the session to the
+            // min of a ghost client's last-reported size.
+            if let attachmentID = removed?.attachmentID {
+                sendRPCAsync(method: "session.detach", params: [
+                    "session_id": sessionID,
+                    "attachment_id": attachmentID,
+                ], completion: nil)
+            }
             sendRPCAsync(method: "terminal.unsubscribe", params: ["session_id": sessionID], completion: nil)
         }
     }

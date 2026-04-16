@@ -4343,6 +4343,12 @@ final class TerminalSurface: Identifiable, ObservableObject {
                         self?.savedDaemonSessionID = sid
                         bridge?.assignSessionID(sid)
                         dlog("surface.openPane.success workspace=\(workspaceID.uuidString.prefix(8)) surface=\(surfaceID.uuidString.prefix(8)) session=\(sid)")
+                        // openPane's attach landed with the 80x24 default
+                        // that bridge.start fired (surface isn't measured
+                        // at that point). Correct the daemon's view of our
+                        // natural capacity immediately so its aggregation
+                        // isn't pinned to that placeholder.
+                        self?.reportNaturalToDaemon(reason: "assignSessionID")
                         // Nudge workspace.sync: without this the next sync
                         // might still be the one scheduled before openPane
                         // landed, filtered of this pane, which the daemon's
@@ -4407,18 +4413,15 @@ final class TerminalSurface: Identifiable, ObservableObject {
             let cols = Int(size.columns)
             let rows = Int(size.rows)
             bridge.start(cols: cols > 0 ? cols : 80, rows: rows > 0 ? rows : 24)
-            // The surface may not have its final layout yet at this point.
-            // Schedule a deferred resize after layout so the daemon gets
-            // the real dimensions. Without this, the PTY keeps its initial
-            // size (default 80x24 when openPane minted it) and line wrapping breaks.
+            // The surface and container may not have their final layout at
+            // this point. Schedule a corrective report after the first
+            // main-queue drain so the daemon swaps the 80x24 default for
+            // our real natural capacity as soon as hostedView bounds and
+            // cell metrics are populated. Without this, the daemon's
+            // effective-size aggregation keeps the 80x24 placeholder
+            // contribution and pins line-wrap behavior to it.
             DispatchQueue.main.async { [weak self] in
-                guard let self, let surface = self.surface, let bridge = self.daemonBridge else { return }
-                let realSize = ghostty_surface_size(surface)
-                let realCols = Int(realSize.columns)
-                let realRows = Int(realSize.rows)
-                if realCols > 0 && realRows > 0 && (realCols != cols || realRows != rows) {
-                    bridge.resize(cols: realCols, rows: realRows)
-                }
+                self?.reportNaturalToDaemon(reason: "surface.created.deferred")
             }
         }
         #endif
@@ -4546,12 +4549,23 @@ final class TerminalSurface: Identifiable, ObservableObject {
 
         let scaleChanged = !scaleApproximatelyEqual(xScale, lastXScale) || !scaleApproximatelyEqual(yScale, lastYScale)
         let sizeChanged = wpx != lastPixelWidth || hpx != lastPixelHeight
+        // Re-run the measure block when we still haven't captured the
+        // cell metrics. `ghostty_surface_size` can return 0x0 immediately
+        // after a freshly-created surface, leaving cachedCellPixelSize
+        // at zero. Subsequent updateSize calls with the same container
+        // rect have sizeChanged=false and skip the measure, which keeps
+        // applyCurrentViewSize short-circuiting on `cell_not_measured`
+        // even after the daemon pushes an authoritative view_size. That
+        // keeps the Ghostty grid pinned to the container's natural cols
+        // while the PTY wraps at the daemon's narrower min-of-clients —
+        // shell echo falls off the visible line and clobbers.
+        let cellNeedsMeasure = cachedCellPixelSize == .zero
 
         #if DEBUG
-        Self.sizeLog("updateSize-call surface=\(id.uuidString.prefix(8)) size=\(wpx)x\(hpx) prev=\(lastPixelWidth)x\(lastPixelHeight) changed=\((scaleChanged || sizeChanged) ? 1 : 0)")
+        Self.sizeLog("updateSize-call surface=\(id.uuidString.prefix(8)) size=\(wpx)x\(hpx) prev=\(lastPixelWidth)x\(lastPixelHeight) changed=\((scaleChanged || sizeChanged) ? 1 : 0) cellNeedsMeasure=\(cellNeedsMeasure ? 1 : 0)")
         #endif
 
-        guard scaleChanged || sizeChanged else { return false }
+        guard scaleChanged || sizeChanged || cellNeedsMeasure else { return false }
 
         #if DEBUG
         if sizeChanged {
@@ -4566,10 +4580,12 @@ final class TerminalSurface: Identifiable, ObservableObject {
             lastYScale = yScale
         }
 
-        if sizeChanged {
-            lastPixelWidth = wpx
-            lastPixelHeight = hpx
-            containerPixelSize = CGSize(width: CGFloat(wpx), height: CGFloat(hpx))
+        if sizeChanged || cellNeedsMeasure {
+            if sizeChanged {
+                lastPixelWidth = wpx
+                lastPixelHeight = hpx
+                containerPixelSize = CGSize(width: CGFloat(wpx), height: CGFloat(hpx))
+            }
 
             // Ask Ghostty to lay out at the container size just to
             // measure cell metrics — immediately follow with the
@@ -4587,16 +4603,15 @@ final class TerminalSurface: Identifiable, ObservableObject {
             }
 
             #if DEBUG
-            dlog("surface.updateSize surface=\(id.uuidString.prefix(8)) containerPx=\(wpx)x\(hpx) containerGrid=\(measured.columns)x\(measured.rows) daemonViewSize=\(daemonViewSize.map { "\($0.cols)x\($0.rows)" } ?? "nil") cachedCell=\(cachedCellPixelSize.width)x\(cachedCellPixelSize.height)")
+            dlog("surface.updateSize surface=\(id.uuidString.prefix(8)) containerPx=\(wpx)x\(hpx) containerGrid=\(measured.columns)x\(measured.rows) daemonViewSize=\(daemonViewSize.map { "\($0.cols)x\($0.rows)" } ?? "nil") cachedCell=\(cachedCellPixelSize.width)x\(cachedCellPixelSize.height) trigger=\(sizeChanged ? "sizeChanged" : "cellNeedsMeasure")")
             #endif
 
-            // One-way reporting: tell the daemon this device's natural
-            // capacity. The daemon aggregates and pushes the resulting
-            // view_size back via `applyViewSize`. We never read the
-            // response to decide how to render.
-            if let bridge = daemonBridge, measured.columns > 0, measured.rows > 0 {
-                bridge.resize(cols: Int(measured.columns), rows: Int(measured.rows))
-            }
+            // Tell the daemon our natural capacity so its effective-size
+            // aggregation has a fresh data point. Always routes through
+            // `reportNaturalToDaemon`, which sources the cols/rows from
+            // the un-letterboxed scroll view so a pinned render never
+            // feeds back into what we report.
+            reportNaturalToDaemon(reason: "updateSize")
 
             // Apply whatever the daemon most recently said. On the very
             // first layout this is still nil and we leave the surface at
@@ -4624,6 +4639,15 @@ final class TerminalSurface: Identifiable, ObservableObject {
         dlog("viewSize.apply surface=\(id.uuidString.prefix(8)) cols=\(cols) rows=\(rows)")
         #endif
         applyCurrentViewSize()
+        // If applyCurrentViewSize bailed because cachedCellPixelSize is
+        // still zero (ghostty_surface_size returned 0x0 on the first
+        // updateSize pass after creation), nudge a fresh updateSize.
+        // updateSize's measure block now re-runs whenever the cell is
+        // zero, even without a container size change, so the authoritative
+        // pin eventually lands once Ghostty reports real metrics.
+        if cachedCellPixelSize == .zero {
+            _ = hostedView.reconcileGeometryNow()
+        }
     }
 
     /// Execute the currently-known daemon view size on the Ghostty
@@ -4638,17 +4662,27 @@ final class TerminalSurface: Identifiable, ObservableObject {
               let view = attachedView,
               let pin = daemonViewSize,
               pin.cols > 0, pin.rows > 0 else {
+            #if DEBUG
+            dlog("viewSize.skip surface=\(id.uuidString.prefix(8)) reason=guard_failed hasSurface=\(self.surface != nil) hasAttachedView=\(attachedView != nil) pin=\(daemonViewSize.map { "\($0.cols)x\($0.rows)" } ?? "nil")")
+            #endif
             attachedView?.letterboxRect = nil
             return
         }
         guard cachedCellPixelSize.width > 0, cachedCellPixelSize.height > 0 else {
             // We haven't measured yet — the daemon beat AppKit. The
             // first `updateSize` pass will call us back once it runs.
+            #if DEBUG
+            dlog("viewSize.skip surface=\(id.uuidString.prefix(8)) reason=cell_not_measured pin=\(pin.cols)x\(pin.rows)")
+            #endif
             return
         }
         let pinnedPxW = UInt32(max(1, Int((CGFloat(pin.cols) * cachedCellPixelSize.width).rounded(.down))))
         let pinnedPxH = UInt32(max(1, Int((CGFloat(pin.rows) * cachedCellPixelSize.height).rounded(.down))))
         ghostty_surface_set_size(surface, pinnedPxW, pinnedPxH)
+        #if DEBUG
+        let postSetSize = ghostty_surface_size(surface)
+        dlog("viewSize.setSize surface=\(id.uuidString.prefix(8)) requestedPin=\(pin.cols)x\(pin.rows) actualGrid=\(postSetSize.columns)x\(postSetSize.rows) actualPx=\(postSetSize.width_px)x\(postSetSize.height_px)")
+        #endif
         ghostty_surface_refresh(surface)
         let scale = max(view.window?.backingScaleFactor ?? 2.0, 1.0)
         let widthPts = CGFloat(pinnedPxW) / scale
@@ -4664,6 +4698,51 @@ final class TerminalSurface: Identifiable, ObservableObject {
         #if DEBUG
         dlog("viewSize.snap surface=\(id.uuidString.prefix(8)) containerPx=\(lastPixelWidth)x\(lastPixelHeight) pinnedPx=\(pinnedPxW)x\(pinnedPxH) pinnedPt=\(widthPts)x\(heightPts)")
         #endif
+    }
+
+    /// Report this surface's un-letterboxed natural capacity (how many
+    /// cols × rows the device could display at full size with the current
+    /// font) to the daemon so its min-of-clients aggregation has an
+    /// authoritative data point. Decoupled from the current render grid
+    /// by design — we always source the dimensions from the enclosing
+    /// scroll view / hostedView bounds (never from `ghostty_surface_size`
+    /// while letterboxed), so a daemon-pinned render can't feed back into
+    /// what we report and latch the session permanently small.
+    ///
+    /// No-ops when:
+    ///   - no daemon bridge (release builds, daemon not running)
+    ///   - cell metrics haven't been measured yet (ghostty_surface_size
+    ///     returned 0 on first layout); `updateSize` will call us again
+    ///     once metrics land
+    ///   - container bounds are zero (view not laid out yet)
+    ///
+    /// Always fires the RPC when computable — daemon-side aggregation is
+    /// idempotent, and dropping updates risks skipping the corrective
+    /// resize on reconnect or after openPane's initial 80x24 attach.
+    func reportNaturalToDaemon(reason: String) {
+        guard let bridge = daemonBridge else { return }
+        guard cachedCellPixelSize.width > 0, cachedCellPixelSize.height > 0 else {
+            #if DEBUG
+            dlog("resize.report.skip surface=\(id.uuidString.prefix(8)) reason=\(reason) cause=cell_not_measured")
+            #endif
+            return
+        }
+        let containerBounds = hostedView.bounds.size
+        guard containerBounds.width > 0, containerBounds.height > 0 else {
+            #if DEBUG
+            dlog("resize.report.skip surface=\(id.uuidString.prefix(8)) reason=\(reason) cause=zero_bounds")
+            #endif
+            return
+        }
+        let scale = max(hostedView.window?.backingScaleFactor ?? 2.0, 1.0)
+        let wpx = containerBounds.width * scale
+        let hpx = containerBounds.height * scale
+        let cols = max(1, Int((wpx / cachedCellPixelSize.width).rounded(.down)))
+        let rows = max(1, Int((hpx / cachedCellPixelSize.height).rounded(.down)))
+        #if DEBUG
+        dlog("resize.report surface=\(id.uuidString.prefix(8)) reason=\(reason) session=\(bridge.sessionID ?? "pending") natural=\(cols)x\(rows) daemonViewSize=\(daemonViewSize.map { "\($0.cols)x\($0.rows)" } ?? "nil")")
+        #endif
+        bridge.resize(cols: cols, rows: rows)
     }
 
     /// Invalidate the cached cell pixel metrics so the next `updateSize`

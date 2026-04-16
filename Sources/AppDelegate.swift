@@ -3010,6 +3010,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationWillTerminate(_ notification: Notification) {
         isTerminatingApp = true
         #if DEBUG
+        // Release every live daemon bridge attachment before the daemon
+        // socket closes. session.detach here lets the daemon drop our
+        // contribution from effective-size aggregation immediately; without
+        // this, ghost attachments linger and pin the next session that
+        // reuses the socket to our last-reported cols/rows.
+        detachAllTerminalBridges()
         MobileDaemonBridgeInline.shared.stop(killDaemon: shouldKillDaemonOnQuit)
         #endif
         _ = saveSessionSnapshot(includeScrollback: true, removeWhenEmpty: false)
@@ -3024,6 +3030,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         notificationStore?.clearAll()
         enableSuddenTerminationIfNeeded()
     }
+
+    #if DEBUG
+    private func detachAllTerminalBridges() {
+        forEachTerminalPanel { terminalPanel in
+            terminalPanel.surface.daemonBridge?.stop()
+        }
+    }
+    #endif
 
     func applicationWillResignActive(_ notification: Notification) {
         guard !isTerminatingApp else { return }
