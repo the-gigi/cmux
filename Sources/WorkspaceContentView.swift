@@ -296,7 +296,7 @@ struct WorkspaceContentView: View {
         let renderSnapshot = workspace.makeLayoutRenderSnapshot(context: renderContext)
 
         let splitView = WorkspaceLayoutView(
-            host: workspace,
+            host: workspace.layoutInteractionHandlers,
             renderSnapshot: renderSnapshot,
             surfaceRegistry: workspace.surfaceRegistry
         )

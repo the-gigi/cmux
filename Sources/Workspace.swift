@@ -11622,86 +11622,75 @@ final class Workspace: Identifiable, ObservableObject {
 
 }
 
-// MARK: - WorkspaceLayoutHost
+// MARK: - WorkspaceLayoutInteractionHandlers
 
-extension Workspace: WorkspaceLayoutHost {
-    func notifyGeometryChange(isDragging: Bool) {
-        splitController.notifyGeometryChange(isDragging: isDragging)
-    }
-
-    func setContainerFrame(_ frame: CGRect) {
-        splitController.setContainerFrame(frame)
-    }
-
-    @discardableResult
-    func setDividerPosition(_ position: CGFloat, forSplit splitId: UUID) -> Bool {
-        setDividerPosition(Double(position), forSplit: splitId)
-    }
-
-    func selectTab(_ tabId: TabID) {
-        splitController.selectTab(tabId)
-    }
-
-    @discardableResult
-    func requestCloseTab(_ tabId: TabID, inPane paneId: PaneID) -> Bool {
-        markExplicitClose(surfaceId: tabId)
-        return splitController.closeTab(tabId, inPane: paneId)
-    }
-
-    @discardableResult
-    func togglePaneZoom(inPane paneId: PaneID) -> Bool {
-        if let panelId = selectedSurfaceId(inPane: paneId) {
-            return toggleSplitZoom(panelId: panelId)
-        }
-        return splitController.togglePaneZoom(inPane: paneId)
-    }
-
-    func requestTabContextAction(_ action: TabContextAction, for tabId: TabID, inPane paneId: PaneID) {
-        workspaceSplit(didRequestTabContextAction: action, for: tabId, inPane: paneId)
-    }
-
-    func requestNewTab(kind: PanelType, inPane paneId: PaneID) {
-        workspaceSplit(didRequestNewTab: kind, inPane: paneId)
-    }
-
-    @discardableResult
-    func splitPane(_ paneId: PaneID?, orientation: SplitOrientation) -> PaneID? {
-        splitController.splitPane(paneId, orientation: orientation)
-    }
-
-    @discardableResult
-    func splitPane(
-        _ paneId: PaneID?,
-        orientation: SplitOrientation,
-        movingTab tabId: TabID,
-        insertFirst: Bool,
-        focusNewPane: Bool
-    ) -> PaneID? {
-        splitController.splitPane(
-            paneId,
-            orientation: orientation,
-            movingTab: tabId,
-            insertFirst: insertFirst,
-            focusNewPane: focusNewPane
+extension Workspace {
+    var layoutInteractionHandlers: WorkspaceLayoutInteractionHandlers {
+        WorkspaceLayoutInteractionHandlers(
+            notifyGeometryChangeHandler: { [weak self] isDragging in
+                self?.splitController.notifyGeometryChange(isDragging: isDragging)
+            },
+            setContainerFrameHandler: { [weak self] frame in
+                self?.splitController.setContainerFrame(frame)
+            },
+            setDividerPositionHandler: { [weak self] position, splitId in
+                self?.setDividerPosition(Double(position), forSplit: splitId) ?? false
+            },
+            consumeSplitEntryAnimationHandler: { [weak self] splitId in
+                self?.consumeSplitEntryAnimation(splitId)
+            },
+            beginTabDragHandler: { [weak self] tabId, sourcePaneId in
+                self?.splitController.beginTabDrag(tabId: tabId, sourcePaneId: sourcePaneId)
+            },
+            clearDragStateHandler: { [weak self] in
+                self?.splitController.clearDragState()
+            },
+            focusPaneHandler: { [weak self] paneId in
+                self?.focusPane(paneId) ?? false
+            },
+            selectTabHandler: { [weak self] tabId in
+                self?.splitController.selectTab(tabId)
+            },
+            requestCloseTabHandler: { [weak self] tabId, paneId in
+                guard let self else { return false }
+                self.markExplicitClose(surfaceId: tabId)
+                return self.splitController.closeTab(tabId, inPane: paneId)
+            },
+            togglePaneZoomHandler: { [weak self] paneId in
+                guard let self else { return false }
+                if let panelId = self.selectedSurfaceId(inPane: paneId) {
+                    return self.toggleSplitZoom(panelId: panelId)
+                }
+                return self.splitController.togglePaneZoom(inPane: paneId)
+            },
+            requestTabContextActionHandler: { [weak self] action, tabId, paneId in
+                self?.workspaceSplit(didRequestTabContextAction: action, for: tabId, inPane: paneId)
+            },
+            requestNewTabHandler: { [weak self] kind, paneId in
+                self?.workspaceSplit(didRequestNewTab: kind, inPane: paneId)
+            },
+            splitPaneHandler: { [weak self] paneId, orientation in
+                self?.splitController.splitPane(paneId, orientation: orientation)
+            },
+            splitPaneMovingTabHandler: { [weak self] paneId, orientation, tabId, insertFirst, focusNewPane in
+                self?.splitController.splitPane(
+                    paneId,
+                    orientation: orientation,
+                    movingTab: tabId,
+                    insertFirst: insertFirst,
+                    focusNewPane: focusNewPane
+                )
+            },
+            moveTabHandler: { [weak self] tabId, paneId, index in
+                self?.splitController.moveTab(tabId, toPane: paneId, atIndex: index) ?? false
+            },
+            handleExternalTabDropHandler: { [weak self] request in
+                self?.handleExternalTabDrop(request) ?? false
+            },
+            handleFileDropHandler: { [weak self] urls, paneId in
+                self?.handlePaneFileDrop(urls: urls, in: paneId) ?? false
+            }
         )
-    }
-
-    @discardableResult
-    func moveTab(_ tabId: TabID, toPane paneId: PaneID, atIndex index: Int?) -> Bool {
-        splitController.moveTab(tabId, toPane: paneId, atIndex: index)
-    }
-
-    func beginTabDrag(tabId: TabID, sourcePaneId: PaneID) {
-        splitController.beginTabDrag(tabId: tabId, sourcePaneId: sourcePaneId)
-    }
-
-    func clearDragState() {
-        splitController.clearDragState()
-    }
-
-    @discardableResult
-    func handleFileDrop(_ urls: [URL], in paneId: PaneID) -> Bool {
-        handlePaneFileDrop(urls: urls, in: paneId)
     }
 }
 

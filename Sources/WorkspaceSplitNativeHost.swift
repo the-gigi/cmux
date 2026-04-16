@@ -271,12 +271,12 @@ private enum WorkspaceLayoutTabChromeTitleSource: String {
 
 @MainActor
 struct WorkspaceLayoutNativeHost: NSViewRepresentable {
-    private let hostBridge: any WorkspaceLayoutHost
+    private let hostBridge: WorkspaceLayoutInteractionHandlers
     private let renderSnapshot: WorkspaceLayoutRenderSnapshot
     private let surfaceRegistry: WorkspaceSurfaceRegistry
 
     init(
-        hostBridge: any WorkspaceLayoutHost,
+        hostBridge: WorkspaceLayoutInteractionHandlers,
         renderSnapshot: WorkspaceLayoutRenderSnapshot,
         surfaceRegistry: WorkspaceSurfaceRegistry
     ) {
@@ -306,7 +306,7 @@ struct WorkspaceLayoutNativeHost: NSViewRepresentable {
 
 @MainActor
 final class WorkspaceLayoutRootHostView: NSView {
-    private var hostBridge: any WorkspaceLayoutHost
+    private var hostBridge: WorkspaceLayoutInteractionHandlers
     private var renderSnapshot: WorkspaceLayoutRenderSnapshot
     private let surfaceRegistry: WorkspaceSurfaceRegistry
 
@@ -318,7 +318,7 @@ final class WorkspaceLayoutRootHostView: NSView {
     private var lastContainerFrame: CGRect = .zero
 
     init(
-        hostBridge: any WorkspaceLayoutHost,
+        hostBridge: WorkspaceLayoutInteractionHandlers,
         renderSnapshot: WorkspaceLayoutRenderSnapshot,
         surfaceRegistry: WorkspaceSurfaceRegistry
     ) {
@@ -338,7 +338,7 @@ final class WorkspaceLayoutRootHostView: NSView {
     }
 
     func update(
-        hostBridge: any WorkspaceLayoutHost,
+        hostBridge: WorkspaceLayoutInteractionHandlers,
         renderSnapshot: WorkspaceLayoutRenderSnapshot,
         surfaceRegistry: WorkspaceSurfaceRegistry
     ) {
@@ -492,7 +492,7 @@ final class WorkspaceLayoutRootHostView: NSView {
 
 @MainActor
 private final class WorkspaceLayoutNativeSplitView: NSSplitView, NSSplitViewDelegate {
-    private let hostBridge: any WorkspaceLayoutHost
+    private let hostBridge: WorkspaceLayoutInteractionHandlers
     private weak var rootHost: WorkspaceLayoutRootHostView?
     private var splitId: UUID
     private var splitOrientation: SplitOrientation
@@ -513,7 +513,7 @@ private final class WorkspaceLayoutNativeSplitView: NSSplitView, NSSplitViewDele
 
     init(
         snapshot: WorkspaceLayoutSplitRenderSnapshot,
-        hostBridge: any WorkspaceLayoutHost,
+        hostBridge: WorkspaceLayoutInteractionHandlers,
         rootHost: WorkspaceLayoutRootHostView,
         firstChild: NSView,
         secondChild: NSView,
@@ -550,7 +550,7 @@ private final class WorkspaceLayoutNativeSplitView: NSSplitView, NSSplitViewDele
 
     func update(
         snapshot: WorkspaceLayoutSplitRenderSnapshot,
-        hostBridge: any WorkspaceLayoutHost,
+        hostBridge: WorkspaceLayoutInteractionHandlers,
         rootHost: WorkspaceLayoutRootHostView,
         firstChild: NSView,
         secondChild: NSView,
@@ -742,7 +742,7 @@ private final class WorkspaceLayoutNativeSplitView: NSSplitView, NSSplitViewDele
 private final class WorkspaceLayoutPaneHostView: NSView {
     private weak var rootHost: WorkspaceLayoutRootHostView?
     private var snapshot: WorkspaceLayoutPaneRenderSnapshot
-    private let hostBridge: any WorkspaceLayoutHost
+    private let hostBridge: WorkspaceLayoutInteractionHandlers
     private var presentation: WorkspaceLayoutPresentationSnapshot
     private let surfaceRegistry: WorkspaceSurfaceRegistry
 
@@ -756,7 +756,7 @@ private final class WorkspaceLayoutPaneHostView: NSView {
     init(
         rootHost: WorkspaceLayoutRootHostView,
         snapshot: WorkspaceLayoutPaneRenderSnapshot,
-        hostBridge: any WorkspaceLayoutHost,
+        hostBridge: WorkspaceLayoutInteractionHandlers,
         presentation: WorkspaceLayoutPresentationSnapshot,
         surfaceRegistry: WorkspaceSurfaceRegistry
     ) {
@@ -790,7 +790,7 @@ private final class WorkspaceLayoutPaneHostView: NSView {
 
     func update(
         snapshot: WorkspaceLayoutPaneRenderSnapshot,
-        hostBridge: any WorkspaceLayoutHost,
+        hostBridge: WorkspaceLayoutInteractionHandlers,
         presentation: WorkspaceLayoutPresentationSnapshot
     ) {
         self.snapshot = snapshot
@@ -959,7 +959,7 @@ private struct WorkspaceLayoutMountedTabEntry {
 @MainActor
 private final class WorkspaceLayoutNativeTabBarView: NSView {
     private var snapshot: WorkspaceLayoutPaneChromeSnapshot?
-    private var hostBridge: (any WorkspaceLayoutHost)?
+    private var hostBridge: (WorkspaceLayoutInteractionHandlers)?
     private var presentation: WorkspaceLayoutPresentationSnapshot?
 
     private let scrollView = NSScrollView(frame: .zero)
@@ -1029,7 +1029,7 @@ private final class WorkspaceLayoutNativeTabBarView: NSView {
 
     func update(
         snapshot: WorkspaceLayoutPaneChromeSnapshot,
-        hostBridge: any WorkspaceLayoutHost,
+        hostBridge: WorkspaceLayoutInteractionHandlers,
         presentation: WorkspaceLayoutPresentationSnapshot
     ) {
         self.snapshot = snapshot
@@ -1317,7 +1317,7 @@ private final class ClosureSleeve: NSObject {
 @MainActor
 private final class WorkspaceLayoutTabDocumentView: NSView {
     private var snapshot: WorkspaceLayoutPaneChromeSnapshot?
-    private var hostBridge: (any WorkspaceLayoutHost)?
+    private var hostBridge: (WorkspaceLayoutInteractionHandlers)?
     private var presentation: WorkspaceLayoutPresentationSnapshot?
     private var tabButtons: [WorkspaceLayoutNativeTabButtonView] = []
     private let dropIndicatorView = NSView(frame: .zero)
@@ -1344,7 +1344,7 @@ private final class WorkspaceLayoutTabDocumentView: NSView {
 
     func update(
         snapshot: WorkspaceLayoutPaneChromeSnapshot,
-        hostBridge: any WorkspaceLayoutHost,
+        hostBridge: WorkspaceLayoutInteractionHandlers,
         presentation: WorkspaceLayoutPresentationSnapshot
     ) {
         self.snapshot = snapshot
@@ -2554,7 +2554,7 @@ final class WorkspaceLayoutNativeTabButtonView: NSView, NSDraggingSource {
 @MainActor
 private final class WorkspaceLayoutPaneDropOverlayView: NSView {
     private var paneId: PaneID?
-    private var hostBridge: (any WorkspaceLayoutHost)?
+    private var hostBridge: (WorkspaceLayoutInteractionHandlers)?
     private var presentation: WorkspaceLayoutPresentationSnapshot?
     private var onZoneChanged: ((DropZone?) -> Void)?
     private var onDropPerformed: (() -> Void)?
@@ -2595,7 +2595,7 @@ private final class WorkspaceLayoutPaneDropOverlayView: NSView {
 
     func update(
         paneId: PaneID,
-        hostBridge: any WorkspaceLayoutHost,
+        hostBridge: WorkspaceLayoutInteractionHandlers,
         presentation: WorkspaceLayoutPresentationSnapshot,
         activeDropZone: DropZone?,
         onZoneChanged: @escaping (DropZone?) -> Void,
