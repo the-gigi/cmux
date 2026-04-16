@@ -2916,8 +2916,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         _ = saveSessionSnapshot(includeScrollback: true, removeWhenEmpty: false)
 
         // Tagged DEV builds are ephemeral, but ask about the daemon if one is running.
+        // Skip the alert when an automation path already confirmed (e.g. the
+        // debug.app.quit_keep_daemon socket action).
         #if DEBUG
-        if SocketControlSettings.isTaggedDevBuild() && MobileDaemonBridgeInline.shared.isRunning {
+        if SocketControlSettings.isTaggedDevBuild() && MobileDaemonBridgeInline.shared.isRunning && !isQuitWarningConfirmed {
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 alert.alertStyle = .informational
@@ -14777,9 +14779,18 @@ final class MobileDaemonBridgeInline {
         // No existing daemon — start fresh.
         killDaemonOnSocket(socketPath: daemonSocket)
 
+        // Spawn the daemon in a NEW session via perl's POSIX::setsid, then
+        // exec the daemon binary. This makes the daemon a session leader
+        // of its own session, so macOS can't send session-scope signals
+        // through the mac app's lifecycle into it. Foundation.Process
+        // keeps the child under our process tree and macOS appears to
+        // cull our subprocesses when the app quits even with keep-daemon
+        // intent — setsid breaks that coupling because the child is no
+        // longer in our session.
+        let perlScript = "use POSIX; POSIX::setsid() or die \"setsid: $!\"; exec @ARGV or die \"exec: $!\";"
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: binaryPath)
-        proc.arguments = ["serve", "--unix", "--socket", daemonSocket, "--ws-port", String(port), "--ws-secret", secret]
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+        proc.arguments = ["-e", perlScript, binaryPath, "serve", "--unix", "--socket", daemonSocket, "--ws-port", String(port), "--ws-secret", secret]
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
         proc.terminationHandler = { [weak self] _ in self?.cleanup() }
@@ -14833,6 +14844,12 @@ final class MobileDaemonBridgeInline {
     #endif
 
     func stop(killDaemon shouldKill: Bool = false) {
+        let traceLine = "[\(Date().timeIntervalSince1970)] stop killDaemon=\(shouldKill) processRunning=\(process?.isRunning == true) processPid=\(process?.processIdentifier ?? -1)\n"
+        if let data = traceLine.data(using: .utf8) {
+            let fp = fopen("/tmp/cmux-daemonstop-trace.log", "a")
+            if let fp { fwrite((traceLine as NSString).utf8String, 1, data.count, fp); fclose(fp) }
+        }
+        NSLog("📱 MobileBridge: stop begin killDaemon=%d process.isRunning=%d", shouldKill ? 1 : 0, process?.isRunning == true ? 1 : 0)
         if shouldKill, let p = process, p.isRunning {
             p.terminate()
             NSLog("📱 MobileBridge: terminated daemon pid=%d on quit", p.processIdentifier)
@@ -14843,11 +14860,19 @@ final class MobileDaemonBridgeInline {
             tailscaleManager = nil
         }
         #endif
-        process = nil
+        // KEEP the Process reference when the user asked us to keep the daemon
+        // alive. macOS-side behavior of Foundation.Process can SIGKILL the
+        // child on Process object teardown when the parent is exiting. Leaving
+        // `process` non-nil so ARC keeps the NSTask around until the mac
+        // app's real exit() fires; the child is then reparented to launchd.
+        if shouldKill {
+            process = nil
+        }
         wsPort = nil
         daemonSocketPath = nil
         wsSecret = nil
         cleanup()
+        NSLog("📱 MobileBridge: stop end")
     }
 
     private func cleanup() {
