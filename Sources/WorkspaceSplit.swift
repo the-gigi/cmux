@@ -1590,7 +1590,11 @@ func workspaceSplitContextMenuState(
     paneId: PaneID,
     tabs: [WorkspaceLayout.Tab],
     at index: Int,
-    controller: WorkspaceLayoutController
+    canMoveToLeftPane: Bool,
+    canMoveToRightPane: Bool,
+    isZoomed: Bool,
+    hasSplits: Bool,
+    shortcuts: TabContextMenuShortcuts
 ) -> TabContextMenuState {
     let leftTabs = tabs.prefix(index)
     let canCloseToLeft = leftTabs.contains(where: { !$0.isPinned })
@@ -1612,11 +1616,11 @@ func workspaceSplitContextMenuState(
         canCloseToLeft: canCloseToLeft,
         canCloseToRight: canCloseToRight,
         canCloseOthers: canCloseOthers,
-        canMoveToLeftPane: controller.adjacentPane(to: paneId, direction: .left) != nil,
-        canMoveToRightPane: controller.adjacentPane(to: paneId, direction: .right) != nil,
-        isZoomed: controller.zoomedPaneId == paneId,
-        hasSplits: controller.allPaneIds.count > 1,
-        shortcuts: controller.contextMenuShortcuts
+        canMoveToLeftPane: canMoveToLeftPane,
+        canMoveToRightPane: canMoveToRightPane,
+        isZoomed: isZoomed,
+        hasSplits: hasSplits,
+        shortcuts: shortcuts
     )
 }
 

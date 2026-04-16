@@ -2552,6 +2552,54 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         XCTAssertNil(clearedSnapshot.presentation.localTabDrag)
     }
 
+    func testRenderSnapshotProjectsContextMenuStateFromWorkspaceFacts() throws {
+        let workspace = Workspace()
+        guard let panelId = workspace.focusedPanelId else {
+            XCTFail("Expected focused panel in new workspace")
+            return
+        }
+
+        let result = workspace.performLayoutCommand(
+            .splitTerminal(fromPanelId: panelId, orientation: .horizontal)
+        )
+        XCTAssertNotNil(result.terminalPanel, "Expected split terminal panel")
+
+        let snapshot = workspace.makeLayoutRenderSnapshot(
+            context: WorkspaceLayoutRenderContext(
+                notificationStore: nil,
+                isWorkspaceVisible: true,
+                isWorkspaceInputActive: true,
+                isMinimalMode: false,
+                appearance: PanelAppearance(
+                    dividerColor: .clear,
+                    unfocusedOverlayNSColor: .clear,
+                    unfocusedOverlayOpacity: 0
+                ),
+                workspacePortalPriority: 0,
+                usesWorkspacePaneOverlay: false,
+                showSplitButtons: true
+            )
+        )
+
+        guard let split = firstSplitSnapshot(from: snapshot),
+              case .pane(let firstPane) = split.first,
+              case .pane(let secondPane) = split.second,
+              let firstContext = firstPane.chrome.tabs.first?.contextMenuState,
+              let secondContext = secondPane.chrome.tabs.first?.contextMenuState else {
+            XCTFail("Expected split snapshot with pane-level context menu state")
+            return
+        }
+
+        XCTAssertTrue(firstContext.hasSplits)
+        XCTAssertTrue(secondContext.hasSplits)
+        XCTAssertFalse(firstContext.canMoveToLeftPane)
+        XCTAssertTrue(firstContext.canMoveToRightPane)
+        XCTAssertTrue(secondContext.canMoveToLeftPane)
+        XCTAssertFalse(secondContext.canMoveToRightPane)
+        XCTAssertFalse(firstContext.isZoomed)
+        XCTAssertFalse(secondContext.isZoomed)
+    }
+
     func testProgrammaticDividerUpdatePublishesCachedGeometrySnapshot() throws {
         let workspace = Workspace()
         guard let panelId = workspace.focusedPanelId else {

@@ -8250,6 +8250,11 @@ final class Workspace: Identifiable, ObservableObject {
     ) -> WorkspaceLayoutPaneChromeSnapshot {
         let selectedTabId = pane.selectedTabId ?? pane.tabIds.first
         let paneId = pane.id
+        let canMoveToLeftPane = splitController.adjacentPane(to: paneId, direction: .left) != nil
+        let canMoveToRightPane = splitController.adjacentPane(to: paneId, direction: .right) != nil
+        let isZoomed = splitController.zoomedPaneId == paneId
+        let hasSplits = splitController.allPaneIds.count > 1
+        let contextMenuShortcuts = splitController.contextMenuShortcuts
         let renderedTabs = pane.tabIds.map { surfaceId in
             let baseTab = layoutTabSnapshot(for: TabID(id: surfaceId))
                 ?? WorkspaceLayout.Tab(id: TabID(id: surfaceId), title: "Tab")
@@ -8263,10 +8268,14 @@ final class Workspace: Identifiable, ObservableObject {
                     paneId: paneId,
                     tabs: renderedTabs,
                     at: index,
-                    controller: splitController
+                    canMoveToLeftPane: canMoveToLeftPane,
+                    canMoveToRightPane: canMoveToRightPane,
+                    isZoomed: isZoomed,
+                    hasSplits: hasSplits,
+                    shortcuts: contextMenuShortcuts
                 ),
                 isSelected: selectedTabId == tab.id.id,
-                showsZoomIndicator: splitController.zoomedPaneId == paneId && selectedTabId == tab.id.id
+                showsZoomIndicator: isZoomed && selectedTabId == tab.id.id
             )
         }
         return WorkspaceLayoutPaneChromeSnapshot(
