@@ -6696,7 +6696,12 @@ final class Workspace: Identifiable, ObservableObject {
         }
     }
     var agentListeningPorts: [Int] = []
-    @Published var remoteConfiguration: WorkspaceRemoteConfiguration?
+    @Published var remoteConfiguration: WorkspaceRemoteConfiguration? {
+        didSet {
+            guard (remoteConfiguration != nil) != (oldValue != nil) else { return }
+            markSessionSnapshotDirty(reason: "remoteConfiguration")
+        }
+    }
     @Published var remoteConnectionState: WorkspaceRemoteConnectionState = .disconnected
     @Published var remoteConnectionDetail: String?
     @Published var remoteDaemonStatus: WorkspaceRemoteDaemonStatus = WorkspaceRemoteDaemonStatus()

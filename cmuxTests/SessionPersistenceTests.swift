@@ -72,6 +72,33 @@ final class SessionPersistenceTests: XCTestCase {
         XCTAssertTrue(panelSnapshot.listeningPorts.isEmpty)
     }
 
+    @MainActor
+    func testTabManagerSessionSnapshotReflectsRemoteWorkspaceTransitions() throws {
+        let tabManager = TabManager()
+        let workspace = try XCTUnwrap(tabManager.tabs.first)
+
+        XCTAssertEqual(tabManager.sessionSnapshot(includeScrollback: false).workspaces.count, 1)
+
+        let configuration = WorkspaceRemoteConfiguration(
+            destination: "cmux-macmini",
+            port: nil,
+            identityFile: nil,
+            sshOptions: [],
+            localProxyPort: nil,
+            relayPort: 64001,
+            relayID: "relay-test",
+            relayToken: String(repeating: "c", count: 64),
+            localSocketPath: "/tmp/cmux-test.sock",
+            terminalStartupCommand: "ssh cmux-macmini"
+        )
+
+        workspace.remoteConfiguration = configuration
+        XCTAssertEqual(tabManager.sessionSnapshot(includeScrollback: false).workspaces.count, 0)
+
+        workspace.remoteConfiguration = nil
+        XCTAssertEqual(tabManager.sessionSnapshot(includeScrollback: false).workspaces.count, 1)
+    }
+
     func testSaveAndLoadRoundTripWithCustomSnapshotPath() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("cmux-session-tests-\(UUID().uuidString)", isDirectory: true)
