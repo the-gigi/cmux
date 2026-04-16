@@ -14769,15 +14769,9 @@ final class MobileDaemonBridgeInline {
         // No existing daemon — start fresh.
         killDaemonOnSocket(socketPath: daemonSocket)
 
-        // Wrap the spawn in `/usr/bin/nohup` so the daemon ignores SIGHUP.
-        // Swift's Process keeps the child in the mac app's process group —
-        // when the mac app exits (Cmd+Q, force quit, crash) the kernel
-        // sends SIGHUP to the process group. Without nohup the daemon dies
-        // there, even when the user explicitly chose "Keep Daemon", losing
-        // every running shell/TUI the daemon was holding.
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
-        proc.arguments = [binaryPath, "serve", "--unix", "--socket", daemonSocket, "--ws-port", String(port), "--ws-secret", secret]
+        proc.executableURL = URL(fileURLWithPath: binaryPath)
+        proc.arguments = ["serve", "--unix", "--socket", daemonSocket, "--ws-port", String(port), "--ws-secret", secret]
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
         proc.terminationHandler = { [weak self] _ in self?.cleanup() }

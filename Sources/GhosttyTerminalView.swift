@@ -4383,21 +4383,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
         #if DEBUG
         if let bridge = daemonBridge, let surface {
             bridge.onOutput = { [weak self] data in
-                guard let self else {
-                    #if DEBUG
-                    dlog("bridge.onOutput drop reason=self_nil bytes=\(data.count)")
-                    #endif
-                    return
-                }
-                guard let surface = self.surface else {
-                    #if DEBUG
-                    dlog("bridge.onOutput drop surface=\(self.id.uuidString.prefix(8)) reason=surface_nil bytes=\(data.count)")
-                    #endif
-                    return
-                }
-                #if DEBUG
-                dlog("bridge.onOutput surface=\(self.id.uuidString.prefix(8)) bytes=\(data.count)")
-                #endif
+                guard let self, let surface = self.surface else { return }
                 data.withUnsafeBytes { buffer in
                     guard let baseAddress = buffer.baseAddress else { return }
                     let pointer = baseAddress.assumingMemoryBound(to: CChar.self)
