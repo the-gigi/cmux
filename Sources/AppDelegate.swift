@@ -2400,7 +2400,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     // Set to true when the user has already confirmed quit via the warning dialog,
     // so applicationShouldTerminate does not show a second alert.
     private var isQuitWarningConfirmed = false
-    private var shouldKillDaemonOnQuit = false
     private var didInstallLifecycleSnapshotObservers = false
     private var didDisableSuddenTermination = false
     private var commandPaletteVisibilityByWindowId: [UUID: Bool] = [:]
@@ -2915,55 +2914,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         isTerminatingApp = true
         _ = saveSessionSnapshot(includeScrollback: true, removeWhenEmpty: false)
 
-        // Tagged DEV builds are ephemeral, but ask about the daemon if one is running.
-        // Skip the alert when an automation path already confirmed (e.g. the
-        // debug.app.quit_keep_daemon socket action).
-        #if DEBUG
-        if SocketControlSettings.isTaggedDevBuild() && MobileDaemonBridgeInline.shared.isRunning && !isQuitWarningConfirmed {
-            DispatchQueue.main.async {
-                let alert = NSAlert()
-                alert.alertStyle = .informational
-                alert.messageText = String(
-                    localized: "dialog.quitDev.title",
-                    defaultValue: "Quit cmux DEV?"
-                )
-                alert.informativeText = String(
-                    localized: "dialog.quitDev.daemonMessage",
-                    defaultValue: "A sync daemon is running for iOS. You can keep it running so your terminal sessions persist, or stop it now."
-                )
-                alert.addButton(withTitle: String(
-                    localized: "dialog.quitDev.quitKeepDaemon",
-                    defaultValue: "Quit (Keep Daemon)"
-                ))
-                alert.addButton(withTitle: String(
-                    localized: "dialog.quitDev.quitStopDaemon",
-                    defaultValue: "Quit & Stop Daemon"
-                ))
-                alert.addButton(withTitle: String(
-                    localized: "common.cancel",
-                    defaultValue: "Cancel"
-                ))
-
-                let response = alert.runModal()
-                switch response {
-                case .alertFirstButtonReturn:
-                    // Quit, keep daemon running
-                    self.isQuitWarningConfirmed = true
-                    NSApp.reply(toApplicationShouldTerminate: true)
-                case .alertSecondButtonReturn:
-                    // Quit and stop daemon
-                    self.shouldKillDaemonOnQuit = true
-                    self.isQuitWarningConfirmed = true
-                    NSApp.reply(toApplicationShouldTerminate: true)
-                default:
-                    self.isTerminatingApp = false
-                    NSApp.reply(toApplicationShouldTerminate: false)
-                }
-            }
-            return .terminateLater
-        }
-        #endif
-
         if SocketControlSettings.isTaggedDevBuild() {
             return .terminateNow
         }
@@ -3009,24 +2959,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return .terminateLater
     }
 
-    /// Bypass the Cmd+Q warning dialog from an automation socket so the next
-    /// NSApp.terminate() goes straight to applicationWillTerminate with the
-    /// keep-daemon default (shouldKillDaemonOnQuit = false).
-    func suppressQuitWarningForAutomation() {
-        isQuitWarningConfirmed = true
-        shouldKillDaemonOnQuit = false
-    }
-
     func applicationWillTerminate(_ notification: Notification) {
         isTerminatingApp = true
         #if DEBUG
-        // Release every live daemon bridge attachment before the daemon
-        // socket closes. session.detach here lets the daemon drop our
-        // contribution from effective-size aggregation immediately; without
-        // this, ghost attachments linger and pin the next session that
-        // reuses the socket to our last-reported cols/rows.
-        detachAllTerminalBridges()
-        MobileDaemonBridgeInline.shared.stop(killDaemon: shouldKillDaemonOnQuit)
+        // Daemon is tightly coupled to the mac app lifecycle — macOS reaps
+        // our Process-spawned child on quit regardless, so we stop
+        // pretending "keep daemon" is a thing and explicitly terminate it.
+        // Sessions don't survive app quit; users get fresh shells next
+        // launch. Linux deployments will run cmuxd-remote under systemd
+        // or similar, outside this coupling.
+        MobileDaemonBridgeInline.shared.stop()
         #endif
         _ = saveSessionSnapshot(includeScrollback: true, removeWhenEmpty: false)
         stopSessionAutosaveTimer()
@@ -3040,14 +2982,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         notificationStore?.clearAll()
         enableSuddenTerminationIfNeeded()
     }
-
-    #if DEBUG
-    private func detachAllTerminalBridges() {
-        forEachTerminalPanel { terminalPanel in
-            terminalPanel.surface.daemonBridge?.stop()
-        }
-    }
-    #endif
 
     func applicationWillResignActive(_ notification: Notification) {
         guard !isTerminatingApp else { return }
@@ -14715,15 +14649,12 @@ final class MobileDaemonBridgeInline {
     private(set) var wsPort: Int?
     private(set) var daemonSocketPath: String?
     private(set) var wsSecret: String?
-    private var daemonReused = false
 
-    /// True when a daemon is available, whether we spawned it or reused
-    /// an existing one. Does a live socket check for reused daemons to
-    /// avoid treating a dead daemon as running.
+    /// True when our spawned daemon is still running. The daemon's
+    /// lifecycle is tied to the mac app — no reuse across app restarts,
+    /// no "keep daemon" persistence feature.
     var isRunning: Bool {
-        if process?.isRunning == true { return true }
-        guard daemonReused, let path = daemonSocketPath else { return false }
-        return isReachableSocket(path)
+        process?.isRunning == true
     }
 
     private init() {}
@@ -14759,38 +14690,15 @@ final class MobileDaemonBridgeInline {
         let port = resolvePort(env)
         let secret = loadOrGenerateSecret()
 
-        // If an existing daemon is already listening on this socket, reuse
-        // it. This preserves PTY sessions across macOS app restarts (the
-        // daemon intentionally survives quit so iOS clients keep their
-        // terminals). Only start a new daemon if nothing is listening.
-        if isReachableSocket(daemonSocket) {
-            self.wsPort = port
-            self.daemonSocketPath = daemonSocket
-            self.wsSecret = secret
-            let debugSocketPath = SocketControlSettings.socketPath()
-            let wsportPath = debugSocketPath.replacingOccurrences(of: ".sock", with: ".wsport")
-            try? String(port).write(toFile: wsportPath, atomically: true, encoding: .utf8)
-            wsPortFilePath = wsportPath
-            daemonReused = true
-            NSLog("📱 MobileBridge: reusing existing daemon on %@", daemonSocket)
-            return
-        }
-
-        // No existing daemon — start fresh.
+        // Kill any stale daemon still listening on the socket (prior
+        // mac app instance that crashed mid-shutdown, etc.) so we always
+        // start from a clean slate. The daemon is owned by this app
+        // instance and dies with it.
         killDaemonOnSocket(socketPath: daemonSocket)
 
-        // Spawn the daemon in a NEW session via perl's POSIX::setsid, then
-        // exec the daemon binary. This makes the daemon a session leader
-        // of its own session, so macOS can't send session-scope signals
-        // through the mac app's lifecycle into it. Foundation.Process
-        // keeps the child under our process tree and macOS appears to
-        // cull our subprocesses when the app quits even with keep-daemon
-        // intent — setsid breaks that coupling because the child is no
-        // longer in our session.
-        let perlScript = "use POSIX; POSIX::setsid() or die \"setsid: $!\"; exec @ARGV or die \"exec: $!\";"
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
-        proc.arguments = ["-e", perlScript, binaryPath, "serve", "--unix", "--socket", daemonSocket, "--ws-port", String(port), "--ws-secret", secret]
+        proc.executableURL = URL(fileURLWithPath: binaryPath)
+        proc.arguments = ["serve", "--unix", "--socket", daemonSocket, "--ws-port", String(port), "--ws-secret", secret]
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
         proc.terminationHandler = { [weak self] _ in self?.cleanup() }
@@ -14843,16 +14751,11 @@ final class MobileDaemonBridgeInline {
     }
     #endif
 
-    func stop(killDaemon shouldKill: Bool = false) {
-        let traceLine = "[\(Date().timeIntervalSince1970)] stop killDaemon=\(shouldKill) processRunning=\(process?.isRunning == true) processPid=\(process?.processIdentifier ?? -1)\n"
-        if let data = traceLine.data(using: .utf8) {
-            let fp = fopen("/tmp/cmux-daemonstop-trace.log", "a")
-            if let fp { fwrite((traceLine as NSString).utf8String, 1, data.count, fp); fclose(fp) }
-        }
-        NSLog("📱 MobileBridge: stop begin killDaemon=%d process.isRunning=%d", shouldKill ? 1 : 0, process?.isRunning == true ? 1 : 0)
-        if shouldKill, let p = process, p.isRunning {
+    /// Terminate the daemon. Always called on mac app quit; the daemon's
+    /// lifecycle is coupled to ours by design.
+    func stop() {
+        if let p = process, p.isRunning {
             p.terminate()
-            NSLog("📱 MobileBridge: terminated daemon pid=%d on quit", p.processIdentifier)
         }
         #if canImport(TailscaleKit)
         if let manager = tailscaleManager {
@@ -14860,19 +14763,11 @@ final class MobileDaemonBridgeInline {
             tailscaleManager = nil
         }
         #endif
-        // KEEP the Process reference when the user asked us to keep the daemon
-        // alive. macOS-side behavior of Foundation.Process can SIGKILL the
-        // child on Process object teardown when the parent is exiting. Leaving
-        // `process` non-nil so ARC keeps the NSTask around until the mac
-        // app's real exit() fires; the child is then reparented to launchd.
-        if shouldKill {
-            process = nil
-        }
+        process = nil
         wsPort = nil
         daemonSocketPath = nil
         wsSecret = nil
         cleanup()
-        NSLog("📱 MobileBridge: stop end")
     }
 
     private func cleanup() {
