@@ -1024,7 +1024,7 @@ class TerminalController {
             guard let workspace = tabManager.tabs.first(where: { $0.id == workspaceId }) else { return }
             let validSurfaceIds = Set(workspace.panels.keys)
             guard validSurfaceIds.contains(panelId) else { return }
-            workspace.surfaceListeningPorts[panelId] = ports.isEmpty ? nil : ports
+            workspace.setSurfaceListeningPorts(panelId: panelId, ports: ports)
             workspace.recomputeListeningPorts()
         }
         PortScanner.shared.onAgentPortsUpdated = { [weak self] workspaceId, ports in
@@ -2696,8 +2696,9 @@ class TerminalController {
            let wsId = v2UUIDAny(callerObj["workspace_id"]) {
             let surfaceId = v2UUIDAny(callerObj["surface_id"]) ?? v2UUIDAny(callerObj["tab_id"])
             v2MainSync {
-                let callerTabManager = AppDelegate.shared?.tabManagerFor(tabId: wsId) ?? tabManager
-                if let ws = callerTabManager.tabs.first(where: { $0.id == wsId }) {
+                if let owner = self.resolvedWorkspaceOwner(workspaceId: wsId) {
+                    let callerTabManager = owner.tabManager
+                    let ws = owner.workspace
                     let callerWindowId = v2ResolveWindowId(tabManager: callerTabManager)
                     var payload: [String: Any] = [
                         "window_id": v2OrNull(callerWindowId?.uuidString),
@@ -2883,7 +2884,7 @@ class TerminalController {
                 "pane_id": v2OrNull(paneUUID?.uuidString),
                 "pane_ref": v2Ref(kind: .pane, uuid: paneUUID),
                 "index_in_pane": v2OrNull(indexInPaneByPanelId[panel.id]),
-                "tty": v2OrNull(workspace.surfaceTTYNames[panel.id])
+                "tty": v2OrNull(workspace.surfaceTTYName(panelId: panel.id))
             ]
 
             if panel.panelType == .browser, let browserPanel = panel as? BrowserPanel {
@@ -3209,6 +3210,36 @@ class TerminalController {
 
     // MARK: - V2 Context Resolution
 
+    private func resolvedWorkspaceOwner(
+        workspaceId: UUID,
+        preferredTabManager: TabManager? = nil
+    ) -> (tabManager: TabManager, workspace: Workspace)? {
+        if let preferredTabManager,
+           let workspace = preferredTabManager.tabs.first(where: { $0.id == workspaceId }) {
+            return (preferredTabManager, workspace)
+        }
+        if let tabManager,
+           preferredTabManager !== tabManager,
+           let workspace = tabManager.tabs.first(where: { $0.id == workspaceId }) {
+            return (tabManager, workspace)
+        }
+        if let owner = AppDelegate.shared?.tabManagerFor(tabId: workspaceId),
+           owner !== preferredTabManager,
+           owner !== tabManager,
+           let workspace = owner.tabs.first(where: { $0.id == workspaceId }) {
+            return (owner, workspace)
+        }
+        return nil
+    }
+
+    private func resolvedTabManager(surfaceId: UUID) -> TabManager? {
+        if let tabManager,
+           tabManager.tabs.contains(where: { $0.panels[surfaceId] != nil }) {
+            return tabManager
+        }
+        return AppDelegate.shared?.locateSurface(surfaceId: surfaceId)?.tabManager
+    }
+
     private func v2ResolveTabManager(params: [String: Any]) -> TabManager? {
         // Prefer explicit window_id routing. Fall back to global lookup by workspace_id/surface_id/tab_id,
         // and finally to the active window's TabManager.
@@ -3216,12 +3247,12 @@ class TerminalController {
             return v2MainSync { AppDelegate.shared?.tabManagerFor(windowId: windowId) }
         }
         if let wsId = v2UUID(params, "workspace_id") {
-            if let tm = v2MainSync({ AppDelegate.shared?.tabManagerFor(tabId: wsId) }) {
+            if let tm = v2MainSync({ self.resolvedWorkspaceOwner(workspaceId: wsId)?.tabManager }) {
                 return tm
             }
         }
         if let surfaceId = v2UUID(params, "surface_id") ?? v2UUID(params, "tab_id") {
-            if let tm = v2MainSync({ AppDelegate.shared?.locateSurface(surfaceId: surfaceId)?.tabManager }) {
+            if let tm = v2MainSync({ self.resolvedTabManager(surfaceId: surfaceId) }) {
                 return tm
             }
         }
@@ -3544,7 +3575,7 @@ class TerminalController {
 
         var result: V2CallResult = .err(code: "internal_error", message: "Failed to move workspace", data: nil)
         v2MainSync {
-            guard let srcTM = AppDelegate.shared?.tabManagerFor(tabId: wsId) else {
+            guard let srcTM = self.resolvedWorkspaceOwner(workspaceId: wsId)?.tabManager else {
                 result = .err(code: "not_found", message: "Workspace not found", data: ["workspace_id": wsId.uuidString])
                 return
             }
@@ -3867,10 +3898,10 @@ class TerminalController {
 
         // Must run on main for v2MainSync because Workspace.configureRemoteConnection mutates TabManager/UI-owned workspace state.
         v2MainSync {
-            guard let owner = AppDelegate.shared?.tabManagerFor(tabId: workspaceId),
-                  let workspace = owner.tabs.first(where: { $0.id == workspaceId }) else {
+            guard let owner = self.resolvedWorkspaceOwner(workspaceId: workspaceId) else {
                 return
             }
+            let workspace = owner.workspace
 
             let config = WorkspaceRemoteConfiguration(
                 destination: destination,
@@ -3887,7 +3918,7 @@ class TerminalController {
             )
             workspace.configureRemoteConnection(config, autoConnect: autoConnect)
 
-            let windowId = v2ResolveWindowId(tabManager: owner)
+            let windowId = v2ResolveWindowId(tabManager: owner.tabManager)
             result = .ok([
                 "window_id": v2OrNull(windowId?.uuidString),
                 "window_ref": v2Ref(kind: .window, uuid: windowId),
@@ -3919,13 +3950,13 @@ class TerminalController {
 
         // Must run on main for v2MainSync because disconnect mutates TabManager/UI-owned workspace state.
         v2MainSync {
-            guard let owner = AppDelegate.shared?.tabManagerFor(tabId: workspaceId),
-                  let workspace = owner.tabs.first(where: { $0.id == workspaceId }) else {
+            guard let owner = self.resolvedWorkspaceOwner(workspaceId: workspaceId) else {
                 return
             }
+            let workspace = owner.workspace
 
             workspace.disconnectRemoteConnection(clearConfiguration: clearConfiguration)
-            let windowId = v2ResolveWindowId(tabManager: owner)
+            let windowId = v2ResolveWindowId(tabManager: owner.tabManager)
             result = .ok([
                 "window_id": v2OrNull(windowId?.uuidString),
                 "window_ref": v2Ref(kind: .window, uuid: windowId),
@@ -3956,10 +3987,10 @@ class TerminalController {
 
         // Must run on main for v2MainSync because reconnect mutates TabManager/UI-owned workspace state.
         v2MainSync {
-            guard let owner = AppDelegate.shared?.tabManagerFor(tabId: workspaceId),
-                  let workspace = owner.tabs.first(where: { $0.id == workspaceId }) else {
+            guard let owner = self.resolvedWorkspaceOwner(workspaceId: workspaceId) else {
                 return
             }
+            let workspace = owner.workspace
 
             guard workspace.remoteConfiguration != nil else {
                 result = .err(code: "invalid_state", message: "Remote workspace is not configured", data: [
@@ -3970,7 +4001,7 @@ class TerminalController {
             }
 
             workspace.reconnectRemoteConnection()
-            let windowId = v2ResolveWindowId(tabManager: owner)
+            let windowId = v2ResolveWindowId(tabManager: owner.tabManager)
             result = .ok([
                 "window_id": v2OrNull(windowId?.uuidString),
                 "window_ref": v2Ref(kind: .window, uuid: windowId),
@@ -4003,13 +4034,13 @@ class TerminalController {
 
         // Must run on main for v2MainSync because this may arm a pending connect or start reconnecting immediately.
         v2MainSync {
-            guard let owner = AppDelegate.shared?.tabManagerFor(tabId: workspaceId),
-                  let workspace = owner.tabs.first(where: { $0.id == workspaceId }) else {
+            guard let owner = self.resolvedWorkspaceOwner(workspaceId: workspaceId) else {
                 return
             }
+            let workspace = owner.workspace
 
             workspace.notifyRemoteForegroundAuthenticationReady(token: foregroundAuthToken)
-            let windowId = v2ResolveWindowId(tabManager: owner)
+            let windowId = v2ResolveWindowId(tabManager: owner.tabManager)
             result = .ok([
                 "window_id": v2OrNull(windowId?.uuidString),
                 "window_ref": v2Ref(kind: .window, uuid: windowId),
@@ -4040,11 +4071,11 @@ class TerminalController {
 
         // Must run on main for v2MainSync because Workspace.remoteStatusPayload reads TabManager/UI-owned state.
         v2MainSync {
-            guard let owner = AppDelegate.shared?.tabManagerFor(tabId: workspaceId),
-                  let workspace = owner.tabs.first(where: { $0.id == workspaceId }) else {
+            guard let owner = self.resolvedWorkspaceOwner(workspaceId: workspaceId) else {
                 return
             }
-            let windowId = v2ResolveWindowId(tabManager: owner)
+            let workspace = owner.workspace
+            let windowId = v2ResolveWindowId(tabManager: owner.tabManager)
             result = .ok([
                 "window_id": v2OrNull(windowId?.uuidString),
                 "window_ref": v2Ref(kind: .window, uuid: windowId),
@@ -4079,12 +4110,12 @@ class TerminalController {
         ])
 
         v2MainSync {
-            guard let owner = AppDelegate.shared?.tabManagerFor(tabId: workspaceId),
-                  let workspace = owner.tabs.first(where: { $0.id == workspaceId }) else {
+            guard let owner = self.resolvedWorkspaceOwner(workspaceId: workspaceId) else {
                 return
             }
+            let workspace = owner.workspace
             workspace.markRemoteTerminalSessionEnded(surfaceId: surfaceId, relayPort: relayPort)
-            let windowId = v2ResolveWindowId(tabManager: owner)
+            let windowId = v2ResolveWindowId(tabManager: owner.tabManager)
             result = .ok([
                 "window_id": v2OrNull(windowId?.uuidString),
                 "window_ref": v2Ref(kind: .window, uuid: windowId),
@@ -4162,7 +4193,7 @@ class TerminalController {
                 return
             }
 
-            tab.surfaceTTYNames[surfaceId] = ttyName
+            tab.setSurfaceTTYName(panelId: surfaceId, ttyName: ttyName)
             if tab.isRemoteWorkspace {
                 tab.syncRemotePortScanTTYs()
                 _ = tab.applyPendingRemoteSurfacePortKickIfNeeded(to: surfaceId)
@@ -4770,10 +4801,16 @@ class TerminalController {
 
     private func v2ResolveWorkspace(params: [String: Any], tabManager: TabManager) -> Workspace? {
         if let wsId = v2UUID(params, "workspace_id") {
-            return tabManager.tabs.first(where: { $0.id == wsId })
+            return resolvedWorkspaceOwner(workspaceId: wsId, preferredTabManager: tabManager)?.workspace
         }
         if let surfaceId = v2UUID(params, "surface_id") ?? v2UUID(params, "tab_id") {
-            return tabManager.tabs.first(where: { $0.panels[surfaceId] != nil })
+            if let workspace = tabManager.tabs.first(where: { $0.panels[surfaceId] != nil }) {
+                return workspace
+            }
+            if let located = AppDelegate.shared?.locateSurface(surfaceId: surfaceId) {
+                return located.tabManager.tabs.first(where: { $0.id == located.workspaceId })
+            }
+            return nil
         }
         guard let wsId = tabManager.selectedTabId else { return nil }
         return tabManager.tabs.first(where: { $0.id == wsId })
@@ -5532,13 +5569,14 @@ class TerminalController {
                 let panelId = mapped?.terminalPanel.id ?? terminalSurface.id
                 let portalState = hostedView.portalBindingGuardState()
                 let portalHostLease = terminalSurface.debugPortalHostLease()
-                let gitBranchState = workspace?.panelGitBranches[panelId]
-                let listeningPorts = (workspace?.surfaceListeningPorts[panelId] ?? []).sorted()
+                let surfaceState = workspace?.surfaceStateSnapshot(panelId: panelId)
+                let gitBranchState = surfaceState?.gitBranch
+                let listeningPorts = (surfaceState?.listeningPorts ?? []).sorted()
                 let title = workspace?.panelTitle(panelId: panelId)
                 let paneId = mapped?.paneId
                 let treeVisible = mapped?.splitTabId != nil && paneId != nil
-                let ttyName = workspace?.surfaceTTYNames[panelId]
-                let currentDirectory = nonEmpty(workspace?.panelDirectories[panelId] ?? mapped?.terminalPanel.directory)
+                let ttyName = workspace?.surfaceTTYName(panelId: panelId)
+                let currentDirectory = nonEmpty(workspace?.panelDirectory(panelId: panelId) ?? mapped?.terminalPanel.directory)
                 let teardownRequest = terminalSurface.debugTeardownRequest()
                 let lastKnownWorkspaceId = terminalSurface.debugLastKnownWorkspaceId()
 
@@ -12453,7 +12491,7 @@ class TerminalController {
         var ok = false
         let focus = socketCommandAllowsInAppFocusMutations()
         v2MainSync {
-            guard let srcTM = AppDelegate.shared?.tabManagerFor(tabId: wsId),
+            guard let srcTM = self.resolvedWorkspaceOwner(workspaceId: wsId)?.tabManager,
                   let dstTM = AppDelegate.shared?.tabManagerFor(windowId: windowId),
                   let ws = srcTM.detachWorkspace(tabId: wsId) else {
                 ok = false
@@ -13695,8 +13733,10 @@ class TerminalController {
         var success = false
         var error: String?
         DispatchQueue.main.sync {
-            guard let targetManager = AppDelegate.shared?.tabManagerFor(tabId: workspaceId)
-                ?? (tabManager.tabs.contains(where: { $0.id == workspaceId }) ? tabManager : nil) else {
+            guard let targetManager = self.resolvedWorkspaceOwner(
+                workspaceId: workspaceId,
+                preferredTabManager: tabManager
+            )?.tabManager else {
                 error = "ERROR: Workspace not found"
                 return
             }
@@ -14460,9 +14500,8 @@ class TerminalController {
                 return tab
             }
             // The tab may belong to a different window — search all contexts.
-            if let uuid = UUID(uuidString: tabArg.trimmingCharacters(in: .whitespacesAndNewlines)),
-               let otherManager = AppDelegate.shared?.tabManagerFor(tabId: uuid) {
-                return otherManager.tabs.first(where: { $0.id == uuid })
+            if let uuid = UUID(uuidString: tabArg.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return resolvedWorkspaceOwner(workspaceId: uuid)?.workspace
             }
             return nil
         }
@@ -14517,13 +14556,7 @@ class TerminalController {
     }
 
     private func tabForSidebarMutation(id: UUID) -> Tab? {
-        if let tab = tabManager?.tabs.first(where: { $0.id == id }) {
-            return tab
-        }
-        if let otherManager = AppDelegate.shared?.tabManagerFor(tabId: id) {
-            return otherManager.tabs.first(where: { $0.id == id })
-        }
-        return nil
+        resolvedWorkspaceOwner(workspaceId: id)?.workspace
     }
 
     private func parseSidebarMetadataFormat(_ raw: String) -> SidebarMetadataFormat? {
@@ -15051,10 +15084,11 @@ class TerminalController {
         // block socket handlers and starve subsequent branch updates.
         if let scope = Self.explicitSocketScope(options: parsed.options) {
             DispatchQueue.main.async {
-                guard let tabManager = AppDelegate.shared?.tabManagerFor(tabId: scope.workspaceId),
-                      let tab = tabManager.tabs.first(where: { $0.id == scope.workspaceId }) else {
+                guard let owner = self.resolvedWorkspaceOwner(workspaceId: scope.workspaceId) else {
                     return
                 }
+                let tabManager = owner.tabManager
+                let tab = owner.workspace
                 let validSurfaceIds = Set(tab.panels.keys)
                 tab.pruneSurfaceMetadata(validSurfaceIds: validSurfaceIds)
                 guard validSurfaceIds.contains(scope.panelId) else { return }
@@ -15087,10 +15121,11 @@ class TerminalController {
         // block socket handlers and starve subsequent branch updates.
         if let scope = Self.explicitSocketScope(options: parsed.options) {
             DispatchQueue.main.async {
-                guard let tabManager = AppDelegate.shared?.tabManagerFor(tabId: scope.workspaceId),
-                      let tab = tabManager.tabs.first(where: { $0.id == scope.workspaceId }) else {
+                guard let owner = self.resolvedWorkspaceOwner(workspaceId: scope.workspaceId) else {
                     return
                 }
+                let tabManager = owner.tabManager
+                let tab = owner.workspace
                 let validSurfaceIds = Set(tab.panels.keys)
                 tab.pruneSurfaceMetadata(validSurfaceIds: validSurfaceIds)
                 guard validSurfaceIds.contains(scope.panelId) else { return }
@@ -15151,7 +15186,7 @@ class TerminalController {
             missingPanelUsage: "report_pr <number> <url> [--label=PR] [--state=open|merged|closed] [--branch=<name>] [--tab=X] [--panel=Y]"
         ) { tab, surfaceId in
             guard Self.shouldReplacePullRequest(
-                current: tab.panelPullRequests[surfaceId],
+                current: tab.surfaceStateSnapshot(panelId: surfaceId).pullRequest,
                 number: number,
                 label: label,
                 url: url,
@@ -15231,7 +15266,7 @@ class TerminalController {
                 return
             }
 
-            tab.surfaceListeningPorts[surfaceId] = ports
+            tab.setSurfaceListeningPorts(panelId: surfaceId, ports: ports)
             tab.recomputeListeningPorts()
         }
         return result
@@ -15247,10 +15282,11 @@ class TerminalController {
         let directory = parsed.positional.joined(separator: " ")
         if let scope = Self.explicitSocketScope(options: parsed.options) {
             DispatchQueue.main.async {
-                guard let tabManager = AppDelegate.shared?.tabManagerFor(tabId: scope.workspaceId),
-                      let tab = tabManager.tabs.first(where: { $0.id == scope.workspaceId }) else {
+                guard let owner = self.resolvedWorkspaceOwner(workspaceId: scope.workspaceId) else {
                     return
                 }
+                let tabManager = owner.tabManager
+                let tab = owner.workspace
                 let validSurfaceIds = Set(tab.panels.keys)
                 tab.pruneSurfaceMetadata(validSurfaceIds: validSurfaceIds)
                 guard validSurfaceIds.contains(scope.panelId) else { return }
@@ -15316,7 +15352,7 @@ class TerminalController {
                 return "OK"
             }
             DispatchQueue.main.async {
-                guard let tabManager = AppDelegate.shared?.tabManagerFor(tabId: scope.workspaceId) else { return }
+                guard let tabManager = self.resolvedWorkspaceOwner(workspaceId: scope.workspaceId)?.tabManager else { return }
                 tabManager.updateSurfaceShellActivity(tabId: scope.workspaceId, surfaceId: scope.panelId, state: state)
             }
             return "OK"
@@ -15382,7 +15418,7 @@ class TerminalController {
             options: parsed.options,
             missingPanelUsage: "report_pr_action <merge|close|reopen|create|checkout|ready|edit|view> [--target=X] [--tab=X] [--panel=Y]"
         ) { tab, surfaceId in
-            guard let tabManager = AppDelegate.shared?.tabManagerFor(tabId: tab.id) else { return }
+            guard let tabManager = self.resolvedWorkspaceOwner(workspaceId: tab.id)?.tabManager else { return }
             tabManager.handleWorkspacePullRequestCommandHint(
                 tabId: tab.id,
                 surfaceId: surfaceId,
@@ -15418,9 +15454,9 @@ class TerminalController {
                     result = "ERROR: Panel not found '\(surfaceId.uuidString)'"
                     return
                 }
-                tab.surfaceListeningPorts.removeValue(forKey: surfaceId)
+                tab.setSurfaceListeningPorts(panelId: surfaceId, ports: [])
             } else {
-                tab.surfaceListeningPorts.removeAll()
+                tab.clearAllSurfaceListeningPorts()
             }
             tab.recomputeListeningPorts()
         }
@@ -15435,14 +15471,14 @@ class TerminalController {
 
         if let scope = Self.explicitSocketScope(options: parsed.options) {
             DispatchQueue.main.async {
-                guard let tabManager = AppDelegate.shared?.tabManagerFor(tabId: scope.workspaceId),
-                      let tab = tabManager.tabs.first(where: { $0.id == scope.workspaceId }) else {
+                guard let owner = self.resolvedWorkspaceOwner(workspaceId: scope.workspaceId) else {
                     return
                 }
+                let tab = owner.workspace
                 let validSurfaceIds = Set(tab.panels.keys)
                 tab.pruneSurfaceMetadata(validSurfaceIds: validSurfaceIds)
                 guard validSurfaceIds.contains(scope.panelId) else { return }
-                tab.surfaceTTYNames[scope.panelId] = ttyName
+                tab.setSurfaceTTYName(panelId: scope.panelId, ttyName: ttyName)
                 if tab.isRemoteWorkspace {
                     tab.syncRemotePortScanTTYs()
                     _ = tab.applyPendingRemoteSurfacePortKickIfNeeded(to: scope.panelId)
@@ -15486,7 +15522,7 @@ class TerminalController {
                 return
             }
 
-            tab.surfaceTTYNames[surfaceId] = ttyName
+            tab.setSurfaceTTYName(panelId: surfaceId, ttyName: ttyName)
             if tab.isRemoteWorkspace {
                 tab.syncRemotePortScanTTYs()
                 _ = tab.applyPendingRemoteSurfacePortKickIfNeeded(to: surfaceId)
@@ -15511,10 +15547,10 @@ class TerminalController {
 
         if let scope = Self.explicitSocketScope(options: parsed.options) {
             DispatchQueue.main.async {
-                guard let tabManager = AppDelegate.shared?.tabManagerFor(tabId: scope.workspaceId),
-                      let tab = tabManager.tabs.first(where: { $0.id == scope.workspaceId }) else {
+                guard let owner = self.resolvedWorkspaceOwner(workspaceId: scope.workspaceId) else {
                     return
                 }
+                let tab = owner.workspace
                 let validSurfaceIds = Set(tab.panels.keys)
                 tab.pruneSurfaceMetadata(validSurfaceIds: validSurfaceIds)
                 guard validSurfaceIds.contains(scope.panelId) else { return }
@@ -15577,7 +15613,7 @@ class TerminalController {
             lines.append("cwd=\(tab.currentDirectory)")
 
             if let focused = tab.focusedPanelId,
-               let focusedDir = tab.panelDirectories[focused] {
+               let focusedDir = tab.panelDirectory(panelId: focused) {
                 lines.append("focused_cwd=\(focusedDir)")
                 lines.append("focused_panel=\(focused.uuidString)")
             } else {

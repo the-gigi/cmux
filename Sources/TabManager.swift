@@ -1219,12 +1219,16 @@ class TabManager: ObservableObject {
         var validKeys: Set<WorkspaceGitProbeKey> = []
 
         for workspace in tabs {
-            for panelId in Set(workspace.panelGitBranches.keys).union(workspace.panelPullRequests.keys) {
+            let surfaceStates = workspace.surfaceStatesSnapshot()
+            let trackedPanelIds = Set(surfaceStates.compactMap { panelId, state in
+                (state.gitBranch != nil || state.pullRequest != nil) ? panelId : nil
+            })
+            for panelId in trackedPanelIds {
                 let key = WorkspaceGitProbeKey(workspaceId: workspace.id, panelId: panelId)
                 validKeys.insert(key)
                 let branch = Self.normalizedBranchName(
-                    workspace.panelGitBranches[panelId]?.branch
-                        ?? workspace.panelPullRequests[panelId]?.branch
+                    surfaceStates[panelId]?.gitBranch?.branch
+                        ?? surfaceStates[panelId]?.pullRequest?.branch
                 )
                 guard let branch else {
                     clearWorkspacePullRequestTracking(for: key)
@@ -1240,7 +1244,7 @@ class TabManager: ObservableObject {
                 guard shouldRefreshWorkspacePullRequest(
                     key: key,
                     now: now,
-                    currentPullRequest: workspace.panelPullRequests[panelId]
+                    currentPullRequest: surfaceStates[panelId]?.pullRequest
                 ) else {
                     continue
                 }
@@ -1422,7 +1426,7 @@ class TabManager: ObservableObject {
                 continue
             }
 
-            let priorPullRequest = workspace.panelPullRequests[result.panelId]
+            let priorPullRequest = workspace.surfaceStateSnapshot(panelId: result.panelId).pullRequest
             let countsAsTerminalSweep = priorPullRequest.map { $0.status != .open } ?? false
 
             switch result.resolution {
@@ -1444,20 +1448,20 @@ class TabManager: ObservableObject {
             case .notFound:
                 workspacePullRequestTransientFailureCountByKey[key] = 0
                 workspacePullRequestLastTerminalStateRefreshAtByKey.removeValue(forKey: key)
-                if workspace.panelPullRequests[result.panelId] != nil {
+                if workspace.surfaceStateSnapshot(panelId: result.panelId).pullRequest != nil {
                     workspace.clearPanelPullRequest(panelId: result.panelId)
                 }
             case .unsupportedRepository:
                 workspacePullRequestTransientFailureCountByKey[key] = 0
                 workspacePullRequestLastTerminalStateRefreshAtByKey.removeValue(forKey: key)
-                if workspace.panelPullRequests[result.panelId] != nil {
+                if workspace.surfaceStateSnapshot(panelId: result.panelId).pullRequest != nil {
                     workspace.clearPanelPullRequest(panelId: result.panelId)
                 }
             case .transientFailure:
                 let nextFailureCount = (workspacePullRequestTransientFailureCountByKey[key] ?? 0) + 1
                 workspacePullRequestTransientFailureCountByKey[key] = nextFailureCount
                 if nextFailureCount >= 3,
-                   let currentPullRequest = workspace.panelPullRequests[result.panelId] {
+                   let currentPullRequest = workspace.surfaceStateSnapshot(panelId: result.panelId).pullRequest {
                     workspace.updatePanelPullRequest(
                         panelId: result.panelId,
                         number: currentPullRequest.number,
@@ -1689,8 +1693,10 @@ class TabManager: ObservableObject {
         in workspace: Workspace,
         activeProbeKeys: Set<WorkspaceGitProbeKey>
     ) -> Set<UUID> {
-        var candidatePanelIds = Set(workspace.panelGitBranches.keys)
-        candidatePanelIds.formUnion(workspace.panelPullRequests.keys)
+        let surfaceStates = workspace.surfaceStatesSnapshot()
+        var candidatePanelIds = Set(surfaceStates.compactMap { panelId, state in
+            (state.gitBranch != nil || state.pullRequest != nil) ? panelId : nil
+        })
         // Only keep background polling panels whose current directory has already
         // proven to yield sidebar git metadata. Initial multi-attempt probes handle
         // startup races; this avoids polling non-repo directories forever.
@@ -1753,7 +1759,7 @@ class TabManager: ObservableObject {
     private func gitProbeDirectory(for workspace: Workspace, panelId: UUID) -> String? {
         // Match the sidebar directory fallback chain so hidden/background panels can
         // still probe git metadata before OSC 7 has reported a live cwd.
-        let rawDirectory = workspace.panelDirectories[panelId]
+        let rawDirectory = workspace.panelDirectory(panelId: panelId)
             ?? workspace.terminalPanel(for: panelId)?.requestedWorkingDirectory
             ?? (workspace.focusedPanelId == panelId ? workspace.currentDirectory : nil)
         return rawDirectory.flatMap(normalizedWorkingDirectory)
@@ -2348,7 +2354,7 @@ class TabManager: ObservableObject {
                 isStale: false
             )
         case .notFound:
-            if workspace.panelPullRequests[probeKey.panelId] != nil {
+            if workspace.surfaceStateSnapshot(panelId: probeKey.panelId).pullRequest != nil {
                 workspace.clearPanelPullRequest(panelId: probeKey.panelId)
             }
         case .deferred, .unsupportedRepository, .transientFailure:
@@ -3510,7 +3516,7 @@ class TabManager: ObservableObject {
             return currentDirectory
         }
 
-        return workspace.panelDirectories.values.lazy.compactMap { directory in
+        return workspace.surfaceStatesSnapshot().values.lazy.compactMap(\.directory).compactMap { directory in
             self.normalizedWorkingDirectory(directory)
         }.first
     }
@@ -3668,7 +3674,7 @@ class TabManager: ObservableObject {
         isDirty: Bool
     ) {
         guard let tab = tabs.first(where: { $0.id == tabId }) else { return }
-        let current = tab.panelGitBranches[surfaceId]
+        let current = tab.surfaceStateSnapshot(panelId: surfaceId).gitBranch
         let normalizedBranch = Self.normalizedBranchName(branch) ?? branch
         guard current?.branch != normalizedBranch || current?.isDirty != isDirty else { return }
         tab.updatePanelGitBranch(panelId: surfaceId, branch: normalizedBranch, isDirty: isDirty)
@@ -3690,8 +3696,9 @@ class TabManager: ObservableObject {
 
     func clearSurfaceGitBranch(tabId: UUID, surfaceId: UUID) {
         guard let tab = tabs.first(where: { $0.id == tabId }) else { return }
-        let hadBranch = tab.panelGitBranches[surfaceId] != nil
-        let hadPullRequest = tab.panelPullRequests[surfaceId] != nil
+        let surfaceState = tab.surfaceStateSnapshot(panelId: surfaceId)
+        let hadBranch = surfaceState.gitBranch != nil
+        let hadPullRequest = surfaceState.pullRequest != nil
         guard hadBranch || hadPullRequest else { return }
         clearWorkspacePullRequestTracking(
             for: WorkspaceGitProbeKey(workspaceId: tabId, panelId: surfaceId)
@@ -3747,7 +3754,7 @@ class TabManager: ObservableObject {
         action: String,
         target: String?
     ) {
-        guard let currentPullRequest = workspace.panelPullRequests[panelId],
+        guard let currentPullRequest = workspace.surfaceStateSnapshot(panelId: panelId).pullRequest,
               pullRequestCommandTargetMatchesCurrentPullRequest(
                 target,
                 currentPullRequest: currentPullRequest
@@ -4597,10 +4604,10 @@ class TabManager: ObservableObject {
 
     private func updatePanelTitle(tabId: UUID, panelId: UUID, title: String) {
         guard let tab = tabs.first(where: { $0.id == tabId }) else { return }
-        let previousTitle = tab.panelTitles[panelId]
+        let previousTitle = tab.surfaceStateSnapshot(panelId: panelId).title
         let didChange = tab.updatePanelTitle(panelId: panelId, title: title)
 #if DEBUG
-        let nextTitle = tab.panelTitles[panelId]
+        let nextTitle = tab.surfaceStateSnapshot(panelId: panelId).title
         dlog(
             "dbg.title.tabManager.apply tab=\(tabId.uuidString.prefix(8)) " +
             "panel=\(panelId.uuidString.prefix(8)) " +
@@ -4629,7 +4636,7 @@ class TabManager: ObservableObject {
     func focusedSurfaceTitleDidChange(tabId: UUID) {
         guard let tab = tabs.first(where: { $0.id == tabId }),
               let focusedPanelId = tab.focusedPanelId,
-              let title = tab.panelTitles[focusedPanelId] else { return }
+              let title = tab.surfaceStateSnapshot(panelId: focusedPanelId).title else { return }
         tab.applyProcessTitle(title)
         if selectedTabId == tabId {
             updateWindowTitle(for: tab)
@@ -6767,6 +6774,7 @@ extension TabManager {
         hasher.combine(tabs.count)
 
         for workspace in tabs.prefix(SessionPersistencePolicy.maxWorkspacesPerWindow) {
+            let surfaceStates = workspace.surfaceStatesSnapshot()
             hasher.combine(workspace.id)
             hasher.combine(workspace.focusedPanelId)
             hasher.combine(workspace.currentDirectory)
@@ -6778,11 +6786,11 @@ extension TabManager {
             hasher.combine(workspace.statusEntries.count)
             hasher.combine(workspace.metadataBlocks.count)
             hasher.combine(workspace.logEntries.count)
-            hasher.combine(workspace.panelDirectories.count)
-            hasher.combine(workspace.panelTitles.count)
-            hasher.combine(workspace.panelPullRequests.count)
-            hasher.combine(workspace.panelGitBranches.count)
-            hasher.combine(workspace.surfaceListeningPorts.count)
+            hasher.combine(surfaceStates.values.lazy.filter { $0.directory != nil }.count)
+            hasher.combine(surfaceStates.values.lazy.filter { $0.title != nil }.count)
+            hasher.combine(surfaceStates.values.lazy.filter { $0.pullRequest != nil }.count)
+            hasher.combine(surfaceStates.values.lazy.filter { $0.gitBranch != nil }.count)
+            hasher.combine(surfaceStates.values.lazy.filter { !$0.listeningPorts.isEmpty }.count)
 
             if let progress = workspace.progress {
                 hasher.combine(Int((progress.value * 1000).rounded()))

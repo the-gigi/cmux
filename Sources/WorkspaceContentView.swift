@@ -320,7 +320,7 @@ struct WorkspaceContentView: View {
                         forTabId: workspace.id,
                         surfaceId: panel.id
                     ),
-                    isManuallyUnread: workspace.manualUnreadPanelIds.contains(panel.id)
+                    isManuallyUnread: workspace.isPanelManuallyUnread(panel.id)
                 )
 
                 if let terminalPanel = panel as? TerminalPanel {
@@ -376,7 +376,7 @@ struct WorkspaceContentView: View {
                         forTabId: workspace.id,
                         surfaceId: panel.id
                     ),
-                    isManuallyUnread: workspace.manualUnreadPanelIds.contains(panel.id)
+                    isManuallyUnread: workspace.isPanelManuallyUnread(panel.id)
                 )
                 PanelContentView(
                     panel: panel,
@@ -557,7 +557,7 @@ struct WorkspaceContentView: View {
                     forTabId: workspace.id,
                     surfaceId: panelId
                 ),
-                isManuallyUnread: workspace.manualUnreadPanelIds.contains(panelId)
+                isManuallyUnread: workspace.isPanelManuallyUnread(panelId)
             )
             guard shouldShowUnread else { return nil }
 

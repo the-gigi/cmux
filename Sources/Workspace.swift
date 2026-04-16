@@ -490,7 +490,7 @@ extension Workspace {
 
     private func sessionPanelSnapshot(panelId: UUID, includeScrollback: Bool) -> SessionPanelSnapshot? {
         guard let panel = panels[panelId] else { return nil }
-        let surfaceState = surfaceState(panelId: panelId)
+        let surfaceState = surfaceStateSnapshot(panelId: panelId)
 
         let panelTitle = panelTitle(panelId: panelId)
         let customTitle = surfaceState.customTitle
@@ -6710,26 +6710,6 @@ final class Workspace: Identifiable, ObservableObject {
     @Published var remoteLastHeartbeatAt: Date?
     @Published var listeningPorts: [Int] = []
     @Published private(set) var activeRemoteTerminalSessionCount: Int = 0
-    var surfaceTTYNames: [UUID: String] {
-        get {
-            surfaceStatesByPanelId.compactMapValues { state in
-                let ttyName = state.ttyName?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return ttyName?.isEmpty == false ? ttyName : nil
-            }
-        }
-        set {
-            mutateSurfaceStates { states in
-                var next = states
-                for id in Set(next.keys).union(newValue.keys) {
-                    var state = next[id] ?? WorkspaceSurfaceState()
-                    let ttyName = newValue[id]?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    state.ttyName = ttyName?.isEmpty == false ? ttyName : nil
-                    next[id] = state
-                }
-                return next
-            }
-        }
-    }
     private var remoteSessionController: WorkspaceRemoteSessionController?
     private var pendingRemoteForegroundAuthToken: String?
     fileprivate var activeRemoteSessionControllerID: UUID?
@@ -6759,163 +6739,6 @@ final class Workspace: Identifiable, ObservableObject {
     var agentPIDs: [String: pid_t] = [:]
     private var restoredTerminalScrollbackByPanelId: [UUID: String] = [:]
 
-    var panelDirectories: [UUID: String] {
-        get { surfaceStatesByPanelId.compactMapValues(\.directory) }
-        set {
-            mutateSurfaceStates { states in
-                var next = states
-                for id in Set(next.keys).union(newValue.keys) {
-                    var state = next[id] ?? WorkspaceSurfaceState()
-                    state.directory = newValue[id]
-                    next[id] = state
-                }
-                return next
-            }
-        }
-    }
-
-    var panelTitles: [UUID: String] {
-        get { surfaceStatesByPanelId.compactMapValues(\.title) }
-        set {
-            mutateSurfaceStates { states in
-                var next = states
-                for id in Set(next.keys).union(newValue.keys) {
-                    var state = next[id] ?? WorkspaceSurfaceState()
-                    state.title = newValue[id]
-                    next[id] = state
-                }
-                return next
-            }
-        }
-    }
-
-    var panelCustomTitles: [UUID: String] {
-        get { surfaceStatesByPanelId.compactMapValues(\.customTitle) }
-        set {
-            mutateSurfaceStates { states in
-                var next = states
-                for id in Set(next.keys).union(newValue.keys) {
-                    var state = next[id] ?? WorkspaceSurfaceState()
-                    state.customTitle = newValue[id]
-                    next[id] = state
-                }
-                return next
-            }
-        }
-    }
-
-    var pinnedPanelIds: Set<UUID> {
-        get { Set(surfaceStatesByPanelId.lazy.compactMap { $0.value.isPinned ? $0.key : nil }) }
-        set {
-            mutateSurfaceStates { states in
-                var next = states
-                for id in Set(next.keys).union(newValue) {
-                    var state = next[id] ?? WorkspaceSurfaceState()
-                    state.isPinned = newValue.contains(id)
-                    next[id] = state
-                }
-                return next
-            }
-        }
-    }
-
-    var manualUnreadPanelIds: Set<UUID> {
-        get { Set(surfaceStatesByPanelId.lazy.compactMap { $0.value.isManuallyUnread ? $0.key : nil }) }
-        set {
-            mutateSurfaceStates { states in
-                var next = states
-                let now = Date()
-                for id in Set(next.keys).union(newValue) {
-                    var state = next[id] ?? WorkspaceSurfaceState()
-                    let isUnread = newValue.contains(id)
-                    state.isManuallyUnread = isUnread
-                    state.manualUnreadMarkedAt = isUnread ? (state.manualUnreadMarkedAt ?? now) : nil
-                    next[id] = state
-                }
-                return next
-            }
-        }
-    }
-
-    var browserTabChromeStateByPanelId: [UUID: WorkspaceBrowserTabChromeState] {
-        get { surfaceStatesByPanelId.compactMapValues(\.browserTabChromeState) }
-        set {
-            mutateSurfaceStates { states in
-                var next = states
-                for id in Set(next.keys).union(newValue.keys) {
-                    var state = next[id] ?? WorkspaceSurfaceState()
-                    state.browserTabChromeState = newValue[id]
-                    next[id] = state
-                }
-                return next
-            }
-        }
-    }
-
-    var panelGitBranches: [UUID: SidebarGitBranchState] {
-        get { surfaceStatesByPanelId.compactMapValues(\.gitBranch) }
-        set {
-            mutateSurfaceStates { states in
-                var next = states
-                for id in Set(next.keys).union(newValue.keys) {
-                    var state = next[id] ?? WorkspaceSurfaceState()
-                    state.gitBranch = newValue[id]
-                    next[id] = state
-                }
-                return next
-            }
-        }
-    }
-
-    var panelPullRequests: [UUID: SidebarPullRequestState] {
-        get { surfaceStatesByPanelId.compactMapValues(\.pullRequest) }
-        set {
-            mutateSurfaceStates { states in
-                var next = states
-                for id in Set(next.keys).union(newValue.keys) {
-                    var state = next[id] ?? WorkspaceSurfaceState()
-                    state.pullRequest = newValue[id]
-                    next[id] = state
-                }
-                return next
-            }
-        }
-    }
-
-    var surfaceListeningPorts: [UUID: [Int]] {
-        get { surfaceStatesByPanelId.compactMapValues { $0.listeningPorts.isEmpty ? nil : $0.listeningPorts } }
-        set {
-            mutateSurfaceStates { states in
-                var next = states
-                for id in Set(next.keys).union(newValue.keys) {
-                    var state = next[id] ?? WorkspaceSurfaceState()
-                    state.listeningPorts = newValue[id] ?? []
-                    next[id] = state
-                }
-                return next
-            }
-        }
-    }
-
-    private var manualUnreadMarkedAt: [UUID: Date] {
-        get { surfaceStatesByPanelId.compactMapValues(\.manualUnreadMarkedAt) }
-        set {
-            mutateSurfaceStates { states in
-                var next = states
-                for id in Set(next.keys).union(newValue.keys) {
-                    var state = next[id] ?? WorkspaceSurfaceState()
-                    state.manualUnreadMarkedAt = newValue[id]
-                    state.isManuallyUnread = newValue[id] != nil || state.isManuallyUnread
-                    if newValue[id] == nil, !state.isManuallyUnread {
-                        state.manualUnreadMarkedAt = nil
-                    }
-                    next[id] = state
-                }
-                return next
-            }
-        }
-    }
-
     private func mutateSurfaceStates(
         _ transform: ([UUID: WorkspaceSurfaceState]) -> [UUID: WorkspaceSurfaceState]
     ) {
@@ -6926,8 +6749,57 @@ final class Workspace: Identifiable, ObservableObject {
         surfaceStatesByPanelId = next
     }
 
-    private func surfaceState(panelId: UUID) -> WorkspaceSurfaceState {
+    func surfaceStateSnapshot(panelId: UUID) -> WorkspaceSurfaceState {
         surfaceStatesByPanelId[panelId] ?? WorkspaceSurfaceState()
+    }
+
+    func surfaceStatesSnapshot() -> [UUID: WorkspaceSurfaceState] {
+        surfaceStatesByPanelId
+    }
+
+    func panelDirectory(panelId: UUID) -> String? {
+        surfaceStateSnapshot(panelId: panelId).directory
+    }
+
+    func surfaceTTYName(panelId: UUID) -> String? {
+        let ttyName = surfaceStateSnapshot(panelId: panelId).ttyName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return ttyName?.isEmpty == false ? ttyName : nil
+    }
+
+    func setSurfaceTTYName(panelId: UUID, ttyName: String?) {
+        let trimmedTTYName = ttyName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        updateSurfaceState(panelId: panelId) { state in
+            state.ttyName = trimmedTTYName?.isEmpty == false ? trimmedTTYName : nil
+        }
+    }
+
+    func surfaceListeningPorts(panelId: UUID) -> [Int] {
+        surfaceStateSnapshot(panelId: panelId).listeningPorts
+    }
+
+    func setSurfaceListeningPorts(panelId: UUID, ports: [Int]) {
+        updateSurfaceState(panelId: panelId) { state in
+            state.listeningPorts = ports
+        }
+    }
+
+    func clearAllSurfaceListeningPorts() {
+        mutateSurfaceStates { states in
+            var next = states
+            for id in next.keys {
+                next[id]?.listeningPorts = []
+            }
+            return next
+        }
+    }
+
+    func isPanelManuallyUnread(_ panelId: UUID) -> Bool {
+        surfaceStateSnapshot(panelId: panelId).isManuallyUnread
+    }
+
+    func hasPanelCustomTitle(panelId: UUID) -> Bool {
+        surfaceStateSnapshot(panelId: panelId).customTitle != nil
     }
 
     private func updateSurfaceState(
@@ -7032,10 +6904,6 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     var focusedSurfaceId: UUID? { focusedPanelId }
-    var surfaceDirectories: [UUID: String] {
-        get { panelDirectories }
-        set { panelDirectories = newValue }
-    }
 
     private var processTitle: String
 
@@ -7500,7 +7368,7 @@ final class Workspace: Identifiable, ObservableObject {
     private func resolvedPanelTitle(panelId: UUID, fallback: String) -> String {
         let trimmedFallback = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
         let fallbackTitle = trimmedFallback.isEmpty ? "Tab" : trimmedFallback
-        if let custom = surfaceState(panelId: panelId).customTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if let custom = surfaceStateSnapshot(panelId: panelId).customTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
            !custom.isEmpty {
             return custom
         }
@@ -7508,7 +7376,7 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     private func syncPinnedStateForTab(_ tabId: TabID, panelId: UUID) {
-        let isPinned = surfaceState(panelId: panelId).isPinned
+        let isPinned = surfaceStateSnapshot(panelId: panelId).isPinned
         splitController.updateTab(tabId, isPinned: isPinned)
     }
 
@@ -7522,7 +7390,7 @@ final class Workspace: Identifiable, ObservableObject {
             iconImageData: browserPanel.faviconPNGData,
             isLoading: browserPanel.isLoading
         )
-        if surfaceState(panelId: panelId).browserTabChromeState != nextState {
+        if surfaceStateSnapshot(panelId: panelId).browserTabChromeState != nextState {
             updateSurfaceState(panelId: panelId) { $0.browserTabChromeState = nextState }
         }
     }
@@ -7559,8 +7427,8 @@ final class Workspace: Identifiable, ObservableObject {
         defer { isNormalizingPinnedTabOrder = false }
 
         let tabs = splitController.tabs(inPane: paneId)
-        let pinnedTabs = tabs.filter { surfaceState(panelId: $0.id.id).isPinned }
-        let unpinnedTabs = tabs.filter { !surfaceState(panelId: $0.id.id).isPinned }
+        let pinnedTabs = tabs.filter { surfaceStateSnapshot(panelId: $0.id.id).isPinned }
+        let unpinnedTabs = tabs.filter { !surfaceStateSnapshot(panelId: $0.id.id).isPinned }
         let desiredOrder = pinnedTabs + unpinnedTabs
 
         for (index, desiredTab) in desiredOrder.enumerated() {
@@ -7576,7 +7444,7 @@ final class Workspace: Identifiable, ObservableObject {
         let tabs = splitController.tabs(inPane: paneId)
         guard let anchorIndex = tabs.firstIndex(where: { $0.id == anchorTabId }) else { return tabs.count }
         let pinnedCount = tabs.reduce(into: 0) { count, tab in
-            if surfaceState(panelId: tab.id.id).isPinned {
+            if surfaceStateSnapshot(panelId: tab.id.id).isPinned {
                 count += 1
             }
         }
@@ -7587,7 +7455,7 @@ final class Workspace: Identifiable, ObservableObject {
     func setPanelCustomTitle(panelId: UUID, title: String?) {
         guard panels[panelId] != nil else { return }
         let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let previous = surfaceState(panelId: panelId).customTitle
+        let previous = surfaceStateSnapshot(panelId: panelId).customTitle
         if trimmed.isEmpty {
             guard previous != nil else { return }
             updateSurfaceState(panelId: panelId) { $0.customTitle = nil }
@@ -7601,7 +7469,7 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     func isPanelPinned(_ panelId: UUID) -> Bool {
-        surfaceState(panelId: panelId).isPinned
+        surfaceStateSnapshot(panelId: panelId).isPinned
     }
 
     func panelKind(panelId: UUID) -> PanelType? {
@@ -7615,7 +7483,7 @@ final class Workspace: Identifiable, ObservableObject {
         let entriesByPanelId = panels.reduce(into: [UUID: WorkspaceTabChromeProjectionState.Entry]()) { result, item in
             let panelId = item.key
             let panel = item.value
-            let surfaceState = surfaceState(panelId: panelId)
+            let surfaceState = surfaceStateSnapshot(panelId: panelId)
             let fallbackTitle = surfaceState.title ?? panel.displayTitle
             let browserState = surfaceState.browserTabChromeState
             let hasUnreadNotification =
@@ -7725,13 +7593,13 @@ final class Workspace: Identifiable, ObservableObject {
 
     func panelTitle(panelId: UUID) -> String? {
         guard let panel = panels[panelId] else { return nil }
-        let fallback = surfaceState(panelId: panelId).title ?? panel.displayTitle
+        let fallback = surfaceStateSnapshot(panelId: panelId).title ?? panel.displayTitle
         return resolvedPanelTitle(panelId: panelId, fallback: fallback)
     }
 
     func setPanelPinned(panelId: UUID, pinned: Bool) {
         guard panels[panelId] != nil else { return }
-        let wasPinned = surfaceState(panelId: panelId).isPinned
+        let wasPinned = surfaceStateSnapshot(panelId: panelId).isPinned
         guard wasPinned != pinned else { return }
         updateSurfaceState(panelId: panelId) { $0.isPinned = pinned }
 
@@ -7743,7 +7611,7 @@ final class Workspace: Identifiable, ObservableObject {
 
     func markPanelUnread(_ panelId: UUID) {
         guard panels[panelId] != nil else { return }
-        guard !surfaceState(panelId: panelId).isManuallyUnread else { return }
+        guard !surfaceStateSnapshot(panelId: panelId).isManuallyUnread else { return }
         updateSurfaceState(panelId: panelId) {
             $0.isManuallyUnread = true
             $0.manualUnreadMarkedAt = Date()
@@ -7757,7 +7625,7 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     func clearManualUnread(panelId: UUID) {
-        let didRemoveUnread = surfaceState(panelId: panelId).isManuallyUnread
+        let didRemoveUnread = surfaceStateSnapshot(panelId: panelId).isManuallyUnread
         updateSurfaceState(panelId: panelId) {
             $0.isManuallyUnread = false
             $0.manualUnreadMarkedAt = nil
@@ -7859,7 +7727,7 @@ final class Workspace: Identifiable, ObservableObject {
     func updatePanelDirectory(panelId: UUID, directory: String) {
         let trimmed = directory.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let previousDirectory = surfaceState(panelId: panelId).directory
+        let previousDirectory = surfaceStateSnapshot(panelId: panelId).directory
         if previousDirectory != trimmed {
             updateSurfaceState(panelId: panelId) { $0.directory = trimmed }
         }
@@ -7880,10 +7748,10 @@ final class Workspace: Identifiable, ObservableObject {
         nextDirectory: String
     ) {
         guard let terminalPanel = panels[panelId] as? TerminalPanel else { return }
-        guard surfaceState(panelId: panelId).customTitle == nil else { return }
+        guard surfaceStateSnapshot(panelId: panelId).customTitle == nil else { return }
         guard let nextDirectoryTitle = Self.derivedTerminalTitle(fromDirectory: nextDirectory) else { return }
 
-        let currentTitle = (surfaceState(panelId: panelId).title ?? terminalPanel.displayTitle)
+        let currentTitle = (surfaceStateSnapshot(panelId: panelId).title ?? terminalPanel.displayTitle)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let genericTitle = terminalPanel.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let previousDirectoryTitle = Self.derivedTerminalTitle(fromDirectory: previousDirectory)
@@ -7940,13 +7808,13 @@ final class Workspace: Identifiable, ObservableObject {
 
     func updatePanelGitBranch(panelId: UUID, branch: String, isDirty: Bool) {
         let state = SidebarGitBranchState(branch: branch, isDirty: isDirty)
-        let existing = surfaceState(panelId: panelId).gitBranch
+        let existing = surfaceStateSnapshot(panelId: panelId).gitBranch
         let branchChanged = existing?.branch != nil && existing?.branch != branch
         if existing?.branch != branch || existing?.isDirty != isDirty {
             updateSurfaceState(panelId: panelId) { $0.gitBranch = state }
         }
         if branchChanged {
-            if surfaceState(panelId: panelId).pullRequest != nil {
+            if surfaceStateSnapshot(panelId: panelId).pullRequest != nil {
                 updateSurfaceState(panelId: panelId) { $0.pullRequest = nil }
             }
             if panelId == focusedPanelId, pullRequest != nil {
@@ -7959,7 +7827,7 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     func clearPanelGitBranch(panelId: UUID) {
-        let state = surfaceState(panelId: panelId)
+        let state = surfaceStateSnapshot(panelId: panelId)
         if state.gitBranch != nil || state.pullRequest != nil {
             updateSurfaceState(panelId: panelId) {
                 $0.gitBranch = nil
@@ -7985,9 +7853,9 @@ final class Workspace: Identifiable, ObservableObject {
         branch: String? = nil,
         isStale: Bool = false
     ) {
-        let existing = surfaceState(panelId: panelId).pullRequest
+        let existing = surfaceStateSnapshot(panelId: panelId).pullRequest
         let normalizedBranch = normalizedSidebarBranchName(branch)
-        let currentPanelBranch = normalizedSidebarBranchName(surfaceState(panelId: panelId).gitBranch?.branch)
+        let currentPanelBranch = normalizedSidebarBranchName(surfaceStateSnapshot(panelId: panelId).gitBranch?.branch)
         let resolvedBranch: String? = {
             if let normalizedBranch {
                 return normalizedBranch
@@ -8021,7 +7889,7 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     func clearPanelPullRequest(panelId: UUID) {
-        if surfaceState(panelId: panelId).pullRequest != nil {
+        if surfaceStateSnapshot(panelId: panelId).pullRequest != nil {
             updateSurfaceState(panelId: panelId) { $0.pullRequest = nil }
         }
         if panelId == focusedPanelId, pullRequest != nil {
@@ -8076,7 +7944,7 @@ final class Workspace: Identifiable, ObservableObject {
         guard !trimmed.isEmpty else { return false }
         var didMutate = false
 
-        if surfaceState(panelId: panelId).title != trimmed {
+        if surfaceStateSnapshot(panelId: panelId).title != trimmed {
             updateSurfaceState(panelId: panelId) { $0.title = trimmed }
             didMutate = true
         }
@@ -8108,7 +7976,7 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     func recomputeListeningPorts() {
-        let unique = Set(surfaceListeningPorts.values.flatMap { $0 })
+        let unique = Set(surfaceStatesByPanelId.values.flatMap(\.listeningPorts))
             .union(agentListeningPorts)
             .union(remoteDetectedPorts)
             .union(remoteForwardedPorts)
@@ -8156,7 +8024,7 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     private func sidebarResolvedDirectory(for panelId: UUID) -> String? {
-        if let directory = normalizedSidebarDirectory(surfaceState(panelId: panelId).directory) {
+        if let directory = normalizedSidebarDirectory(surfaceStateSnapshot(panelId: panelId).directory) {
             return directory
         }
         if let requestedDirectory = normalizedSidebarDirectory(
@@ -8327,7 +8195,11 @@ final class Workspace: Identifiable, ObservableObject {
 
     func syncRemotePortScanTTYs() {
         guard isRemoteWorkspace else { return }
-        remoteSessionController?.updateRemotePortScanTTYs(surfaceTTYNames)
+        let ttyNames = surfaceStatesByPanelId.compactMapValues { state in
+            let ttyName = state.ttyName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return ttyName?.isEmpty == false ? ttyName : nil
+        }
+        remoteSessionController?.updateRemotePortScanTTYs(ttyNames)
     }
 
     func kickRemotePortScan(panelId: UUID, reason: WorkspaceRemoteSessionController.PortScanKickReason = .command) {
@@ -8625,7 +8497,7 @@ final class Workspace: Identifiable, ObservableObject {
            requestedSurfaceId != panelId {
             return false
         }
-        guard let ttyName = surfaceState(panelId: panelId).ttyName?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let ttyName = surfaceStateSnapshot(panelId: panelId).ttyName?.trimmingCharacters(in: .whitespacesAndNewlines),
               !ttyName.isEmpty else {
             return false
         }
@@ -9125,7 +8997,7 @@ final class Workspace: Identifiable, ObservableObject {
         // then its requested startup cwd if shell integration has not reported
         // back yet, and finally fall back to the workspace's current directory.
         let splitWorkingDirectory: String? = {
-            if let panelDirectory = surfaceState(panelId: panelId).directory?.trimmingCharacters(in: .whitespacesAndNewlines),
+            if let panelDirectory = surfaceStateSnapshot(panelId: panelId).directory?.trimmingCharacters(in: .whitespacesAndNewlines),
                !panelDirectory.isEmpty {
                 return panelDirectory
             }
@@ -9140,7 +9012,7 @@ final class Workspace: Identifiable, ObservableObject {
         }()
 #if DEBUG
         dlog(
-            "split.cwd panelId=\(panelId.uuidString.prefix(5)) panelDir=\(surfaceState(panelId: panelId).directory ?? "nil") requestedDir=\(terminalPanel(for: panelId)?.requestedWorkingDirectory ?? "nil") currentDir=\(currentDirectory) resolved=\(splitWorkingDirectory ?? "nil")"
+            "split.cwd panelId=\(panelId.uuidString.prefix(5)) panelDir=\(surfaceStateSnapshot(panelId: panelId).directory ?? "nil") requestedDir=\(terminalPanel(for: panelId)?.requestedWorkingDirectory ?? "nil") currentDir=\(currentDirectory) resolved=\(splitWorkingDirectory ?? "nil")"
         )
 #endif
 
@@ -9183,7 +9055,7 @@ final class Workspace: Identifiable, ObservableObject {
             focusNewPane: focus
         ) != nil else {
             panels.removeValue(forKey: newPanel.id)
-            panelTitles.removeValue(forKey: newPanel.id)
+            removeSurfaceState(panelId: newPanel.id)
             if remoteTerminalStartupCommand != nil {
                 untrackRemoteTerminalSurface(newPanel.id)
             }
@@ -9254,7 +9126,7 @@ final class Workspace: Identifiable, ObservableObject {
             select: shouldFocusNewTab
         ) else {
             panels.removeValue(forKey: newPanel.id)
-            panelTitles.removeValue(forKey: newPanel.id)
+            removeSurfaceState(panelId: newPanel.id)
             if remoteTerminalStartupCommand != nil {
                 untrackRemoteTerminalSurface(newPanel.id)
             }
@@ -10639,7 +10511,7 @@ final class Workspace: Identifiable, ObservableObject {
         }
 
         panels.removeValue(forKey: newPanel.id)
-        panelTitles.removeValue(forKey: newPanel.id)
+        removeSurfaceState(panelId: newPanel.id)
         terminalInheritanceFontPointsByPanelId.removeValue(forKey: newPanel.id)
         return nil
     }
@@ -10702,7 +10574,7 @@ final class Workspace: Identifiable, ObservableObject {
         if let terminalPanel = targetPanel as? TerminalPanel {
             terminalPanel.hostedView.ensureFocus(for: id, surfaceId: targetPanelId)
         }
-        let state = surfaceState(panelId: targetPanelId)
+        let state = surfaceStateSnapshot(panelId: targetPanelId)
         if let dir = state.directory {
             currentDirectory = dir
         }
@@ -10729,7 +10601,7 @@ final class Workspace: Identifiable, ObservableObject {
 
     private func closeTabs(_ tabIds: [TabID], skipPinned: Bool = true) {
         for tabId in tabIds {
-            if skipPinned, surfaceState(panelId: tabId.id).isPinned {
+            if skipPinned, surfaceStateSnapshot(panelId: tabId.id).isPinned {
                 continue
             }
             _ = splitController.closeTab(tabId)
@@ -10792,7 +10664,7 @@ final class Workspace: Identifiable, ObservableObject {
         let alert = NSAlert()
         alert.messageText = String(localized: "alert.renameTab.title", defaultValue: "Rename Tab")
         alert.informativeText = String(localized: "alert.renameTab.message", defaultValue: "Enter a custom name for this tab.")
-        let state = surfaceState(panelId: panelId)
+        let state = surfaceStateSnapshot(panelId: panelId)
         let currentTitle = state.customTitle ?? state.title ?? panel.displayTitle
         let input = NSTextField(string: currentTitle)
         input.placeholderString = String(localized: "alert.renameTab.placeholder", defaultValue: "Tab name")
@@ -10979,7 +10851,7 @@ extension Workspace: WorkspaceLayoutDelegate {
         let panelName: String? = {
             let panelId = tabId.id
             guard panels[panelId] != nil else { return nil }
-            let state = surfaceState(panelId: panelId)
+            let state = surfaceStateSnapshot(panelId: panelId)
             if let custom = state.customTitle, !custom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return custom
             }
@@ -11180,7 +11052,7 @@ extension Workspace: WorkspaceLayoutDelegate {
         if let terminalPanel = panel as? TerminalPanel {
             rememberTerminalConfigInheritanceSource(terminalPanel)
         }
-        let surfaceState = surfaceState(panelId: panelId)
+        let surfaceState = surfaceStateSnapshot(panelId: panelId)
         let isManuallyUnread = surfaceState.isManuallyUnread
         let markedAt = surfaceState.manualUnreadMarkedAt
         if Self.shouldClearManualUnread(
@@ -11391,7 +11263,7 @@ extension Workspace: WorkspaceLayoutDelegate {
             return true
         }
 
-        if surfaceState(panelId: tab.id.id).isPinned {
+        if surfaceStateSnapshot(panelId: tab.id.id).isPinned {
             clearStagedClosedBrowserRestoreSnapshot(for: tab.id)
             NSSound.beep()
             return false
@@ -11464,7 +11336,7 @@ extension Workspace: WorkspaceLayoutDelegate {
         let transferredRemoteCleanupConfiguration = transferredRemoteCleanupConfigurationsByPanelId.removeValue(forKey: panelId)
 
         if isDetaching {
-            let state = surfaceState(panelId: panelId)
+            let state = surfaceStateSnapshot(panelId: panelId)
             let cachedTitle = state.title
             let transferFallbackTitle = cachedTitle ?? panel.displayTitle
             pendingDetachedSurfaces[tabId] = DetachedSurfaceTransfer(
@@ -11794,7 +11666,7 @@ extension Workspace: WorkspaceLayoutDelegate {
             inPane: newPane
         ) else {
             panels.removeValue(forKey: newPanel.id)
-            panelTitles.removeValue(forKey: newPanel.id)
+            removeSurfaceState(panelId: newPanel.id)
             terminalInheritanceFontPointsByPanelId.removeValue(forKey: newPanel.id)
             return
         }
@@ -11863,7 +11735,7 @@ extension Workspace: WorkspaceLayoutDelegate {
             duplicateBrowserToRight(anchorTabId: tab.id, inPane: pane)
         case .togglePin:
             guard hasLivePanel(for: tab.id) else { return }
-            let shouldPin = !surfaceState(panelId: tab.id.id).isPinned
+            let shouldPin = !surfaceStateSnapshot(panelId: tab.id.id).isPinned
             setPanelPinned(panelId: tab.id.id, pinned: shouldPin)
         case .markAsRead:
             guard hasLivePanel(for: tab.id) else { return }

@@ -1859,7 +1859,7 @@ final class BrowserSessionHistoryRestoreTests: XCTestCase {
                 timestamp: Date()
             )
         )
-        workspace.surfaceListeningPorts[contextPanelId] = [3000]
+        workspace.setSurfaceListeningPorts(panelId: contextPanelId, ports: [3000])
         workspace.recomputeListeningPorts()
 
         XCTAssertTrue(browser.shouldRenderWebView)
@@ -1884,10 +1884,10 @@ final class BrowserSessionHistoryRestoreTests: XCTestCase {
         XCTAssertTrue(workspace.metadataBlocks.isEmpty)
         XCTAssertNil(workspace.progress)
         XCTAssertNil(workspace.gitBranch)
-        XCTAssertTrue(workspace.panelGitBranches.isEmpty)
+        XCTAssertTrue(workspace.surfaceStatesSnapshot().compactMapValues(\.gitBranch).isEmpty)
         XCTAssertNil(workspace.pullRequest)
-        XCTAssertTrue(workspace.panelPullRequests.isEmpty)
-        XCTAssertTrue(workspace.surfaceListeningPorts.isEmpty)
+        XCTAssertTrue(workspace.surfaceStatesSnapshot().compactMapValues(\.pullRequest).isEmpty)
+        XCTAssertTrue(workspace.surfaceStatesSnapshot().filter { !$0.value.listeningPorts.isEmpty }.isEmpty)
         XCTAssertTrue(workspace.listeningPorts.isEmpty)
         XCTAssertFalse(browser.shouldRenderWebView)
         XCTAssertNil(browser.preferredURLStringForOmnibar())

@@ -2152,18 +2152,18 @@ final class WorkspaceTeardownTests: XCTestCase {
         workspace.markPanelUnread(initialPanelId)
 
         XCTAssertFalse(workspace.panels.isEmpty)
-        XCTAssertFalse(workspace.panelTitles.isEmpty)
-        XCTAssertFalse(workspace.panelCustomTitles.isEmpty)
-        XCTAssertFalse(workspace.pinnedPanelIds.isEmpty)
-        XCTAssertFalse(workspace.manualUnreadPanelIds.isEmpty)
+        XCTAssertTrue(workspace.surfaceStatesSnapshot().values.contains { $0.title != nil })
+        XCTAssertTrue(workspace.surfaceStatesSnapshot().values.contains { $0.customTitle != nil })
+        XCTAssertTrue(workspace.surfaceStatesSnapshot().values.contains(where: \.isPinned))
+        XCTAssertTrue(workspace.surfaceStatesSnapshot().values.contains(where: \.isManuallyUnread))
 
         workspace.teardownAllPanels()
 
         XCTAssertTrue(workspace.panels.isEmpty)
-        XCTAssertTrue(workspace.panelTitles.isEmpty)
-        XCTAssertTrue(workspace.panelCustomTitles.isEmpty)
-        XCTAssertTrue(workspace.pinnedPanelIds.isEmpty)
-        XCTAssertTrue(workspace.manualUnreadPanelIds.isEmpty)
+        XCTAssertTrue(workspace.surfaceStatesSnapshot().values.allSatisfy { $0.title == nil })
+        XCTAssertTrue(workspace.surfaceStatesSnapshot().values.allSatisfy { $0.customTitle == nil })
+        XCTAssertTrue(workspace.surfaceStatesSnapshot().values.allSatisfy { !$0.isPinned })
+        XCTAssertTrue(workspace.surfaceStatesSnapshot().values.allSatisfy { !$0.isManuallyUnread })
     }
 }
 
@@ -2477,7 +2477,7 @@ final class WorkspaceSplitWorkingDirectoryTests: XCTestCase {
 
         XCTAssertEqual(sourcePanel.requestedWorkingDirectory, requestedDirectory)
         XCTAssertNil(
-            workspace.panelDirectories[sourcePanel.id],
+            workspace.panelDirectory(panelId: sourcePanel.id),
             "Expected requested cwd to exist before shell integration reports a live cwd"
         )
         XCTAssertEqual(

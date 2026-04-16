@@ -288,14 +288,14 @@ final class TabManagerWorkspaceOwnershipTests: XCTestCase {
 
         let externalWorkspace = Workspace(title: "External workspace")
         let externalPanelCountBefore = externalWorkspace.panels.count
-        let externalPanelTitlesBefore = externalWorkspace.panelTitles
+        let externalPanelTitlesBefore = externalWorkspace.surfaceStatesSnapshot().compactMapValues(\.title)
 
         manager.closeWorkspace(externalWorkspace)
 
         XCTAssertEqual(manager.tabs.map(\.id), initialTabIds)
         XCTAssertEqual(manager.selectedTabId, initialSelectedTabId)
         XCTAssertEqual(externalWorkspace.panels.count, externalPanelCountBefore)
-        XCTAssertEqual(externalWorkspace.panelTitles, externalPanelTitlesBefore)
+        XCTAssertEqual(externalWorkspace.surfaceStatesSnapshot().compactMapValues(\.title), externalPanelTitlesBefore)
     }
 
     func testClosingSelectedWorkspacePublishesTabsAfterSelectionMovesToSurvivor() {
@@ -548,7 +548,7 @@ final class TabManagerPullRequestProbeTests: XCTestCase {
                 manager.activeWorkspaceGitProbePanelIdsForTesting(workspaceId: workspace.id).isEmpty &&
                     manager.trackedWorkspaceGitMetadataPollCandidatePanelIdsForTesting(workspaceId: workspace.id)
                     .isEmpty &&
-                    workspace.panelGitBranches[panelId] == nil
+                    workspace.surfaceStateSnapshot(panelId: panelId).gitBranch == nil
             }
         )
     }
@@ -589,7 +589,7 @@ final class TabManagerPullRequestProbeTests: XCTestCase {
         XCTAssertNotEqual(manager.selectedTabId, backgroundWorkspace.id)
         XCTAssertTrue(
             waitForCondition {
-                backgroundWorkspace.panelGitBranches[backgroundPanelId]?.branch == "main"
+                backgroundWorkspace.surfaceStateSnapshot(panelId: backgroundPanelId).gitBranch?.branch == "main"
             }
         )
         XCTAssertEqual(backgroundWorkspace.sidebarGitBranchesInDisplayOrder().map(\.branch), ["main"])
@@ -633,7 +633,7 @@ final class TabManagerPullRequestProbeTests: XCTestCase {
 
         XCTAssertTrue(
             waitForCondition {
-                workspace.panelGitBranches[panelId]?.branch == "feature/sidebar-live-refresh"
+                workspace.surfaceStateSnapshot(panelId: panelId).gitBranch?.branch == "feature/sidebar-live-refresh"
             }
         )
         XCTAssertEqual(workspace.gitBranch?.branch, "feature/sidebar-live-refresh")
@@ -670,13 +670,13 @@ final class TabManagerPullRequestProbeTests: XCTestCase {
         manager.updateSurfaceGitBranch(tabId: workspace.id, surfaceId: panelId, branch: "main", isDirty: false)
         manager.clearSurfaceGitBranch(tabId: workspace.id, surfaceId: panelId)
 
-        XCTAssertNil(workspace.panelGitBranches[panelId])
+        XCTAssertNil(workspace.surfaceStateSnapshot(panelId: panelId).gitBranch)
 
         manager.refreshTrackedWorkspaceGitMetadataForTesting()
 
         XCTAssertTrue(
             waitForCondition {
-                workspace.panelGitBranches[panelId]?.branch == "main"
+                workspace.surfaceStateSnapshot(panelId: panelId).gitBranch?.branch == "main"
             }
         )
         XCTAssertEqual(workspace.sidebarGitBranchesInDisplayOrder().map(\.branch), ["main"])
@@ -786,8 +786,8 @@ final class TabManagerPullRequestProbeTests: XCTestCase {
             branch: "feature/sidebar-pr"
         )
 
-        XCTAssertEqual(workspace.panelGitBranches[panelId]?.branch, "feature/sidebar-pr")
-        XCTAssertEqual(workspace.panelPullRequests[panelId]?.number, 1052)
+        XCTAssertEqual(workspace.surfaceStateSnapshot(panelId: panelId).gitBranch?.branch, "feature/sidebar-pr")
+        XCTAssertEqual(workspace.surfaceStateSnapshot(panelId: panelId).pullRequest?.number, 1052)
         XCTAssertEqual(workspace.sidebarPullRequestsInDisplayOrder().map(\.number), [1052])
 
         try runGit(["checkout", "main"], in: repoURL)
@@ -796,8 +796,8 @@ final class TabManagerPullRequestProbeTests: XCTestCase {
 
         XCTAssertTrue(
             waitForCondition {
-                workspace.panelGitBranches[panelId]?.branch == "main"
-                    && workspace.panelPullRequests[panelId] == nil
+                workspace.surfaceStateSnapshot(panelId: panelId).gitBranch?.branch == "main"
+                    && workspace.surfaceStateSnapshot(panelId: panelId).pullRequest == nil
             }
         )
         XCTAssertEqual(workspace.gitBranch?.branch, "main")

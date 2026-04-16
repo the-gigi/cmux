@@ -1988,7 +1988,7 @@ struct ContentView: View {
                         forTabId: workspace.id,
                         surfaceId: panelId
                     ),
-                    isManuallyUnread: workspace.manualUnreadPanelIds.contains(panelId)
+                    isManuallyUnread: workspace.isPanelManuallyUnread(panelId)
                 )
                 guard shouldShowUnread else { return nil }
 
@@ -2881,7 +2881,7 @@ struct ContentView: View {
         }
         // Use focused panel's directory if available
         if let focusedPanelId = tab.focusedPanelId,
-           let panelDir = tab.panelDirectories[focusedPanelId] {
+           let panelDir = tab.panelDirectory(panelId: focusedPanelId) {
             let trimmed = panelDir.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
                 return trimmed
@@ -5650,9 +5650,10 @@ struct ContentView: View {
         for workspace: Workspace,
         panelId: UUID
     ) -> CommandPaletteSwitcherSearchMetadata {
-        let directories = [workspace.panelDirectories[panelId]].compactMap { $0 }
-        let branches = [workspace.panelGitBranches[panelId]?.branch].compactMap { $0 }
-        let ports = workspace.surfaceListeningPorts[panelId] ?? []
+        let surfaceState = workspace.surfaceStateSnapshot(panelId: panelId)
+        let directories = [surfaceState.directory].compactMap { $0 }
+        let branches = [surfaceState.gitBranch?.branch].compactMap { $0 }
+        let ports = surfaceState.listeningPorts
         return CommandPaletteSwitcherSearchMetadata(
             directories: directories,
             branches: branches,
@@ -5918,9 +5919,9 @@ struct ContentView: View {
             )
             snapshot.setBool(CommandPaletteContextKeys.panelIsBrowser, panelContext.panel.panelType == .browser)
             snapshot.setBool(CommandPaletteContextKeys.panelIsTerminal, panelIsTerminal)
-            snapshot.setBool(CommandPaletteContextKeys.panelHasCustomName, workspace.panelCustomTitles[panelId] != nil)
+            snapshot.setBool(CommandPaletteContextKeys.panelHasCustomName, workspace.hasPanelCustomTitle(panelId: panelId))
             snapshot.setBool(CommandPaletteContextKeys.panelShouldPin, !workspace.isPanelPinned(panelId))
-            let hasUnread = workspace.manualUnreadPanelIds.contains(panelId)
+            let hasUnread = workspace.isPanelManuallyUnread(panelId)
                 || notificationStore.hasUnreadNotification(forTabId: workspace.id, surfaceId: panelId)
             snapshot.setBool(CommandPaletteContextKeys.panelHasUnread, hasUnread)
 
@@ -6937,7 +6938,7 @@ struct ContentView: View {
                 NSSound.beep()
                 return
             }
-            let hasUnread = panelContext.workspace.manualUnreadPanelIds.contains(panelContext.panelId)
+            let hasUnread = panelContext.workspace.isPanelManuallyUnread(panelContext.panelId)
                 || notificationStore.hasUnreadNotification(forTabId: panelContext.workspace.id, surfaceId: panelContext.panelId)
             if hasUnread {
                 panelContext.workspace.markPanelRead(panelContext.panelId)
@@ -8366,7 +8367,7 @@ struct ContentView: View {
         guard let workspace = tabManager.selectedWorkspace else { return nil }
         let rawDirectory: String = {
             if let focusedPanelId = workspace.focusedPanelId,
-               let directory = workspace.panelDirectories[focusedPanelId] {
+               let directory = workspace.panelDirectory(panelId: focusedPanelId) {
                 return directory
             }
             return workspace.currentDirectory

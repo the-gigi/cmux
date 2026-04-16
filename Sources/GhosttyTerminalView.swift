@@ -7689,7 +7689,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         workspace: Workspace,
         terminalSurface: TerminalSurface
     ) -> String? {
-        if let dir = workspace.panelDirectories[terminalSurface.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if let dir = workspace.panelDirectory(panelId: terminalSurface.id)?.trimmingCharacters(in: .whitespacesAndNewlines),
            !dir.isEmpty {
             return dir
         }

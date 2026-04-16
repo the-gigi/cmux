@@ -40,15 +40,18 @@ Implemented on `issue-2289-appkit-split-host`:
 - `Workspace` now owns canonical per-surface runtime metadata in one `surfaceStatesByPanelId` map instead of parallel title, directory, pin, unread, browser chrome, git, PR, port, and tty stores
 - `Workspace` internals now read and mutate that canonical surface state directly for session restore, focus, close, detach/attach, sidebar ordering, browser/markdown creation, remote tty/port updates, and tab chrome projection
 - `WorkspaceContentView` no longer assembles tab chrome projection state locally, and `Workspace` now builds the layout render snapshot that the AppKit host applies
+- `TabManager`, `ContentView`, `WorkspaceContentView`, `TerminalController`, `AppleScriptSupport`, `GhosttyTerminalView`, and `TerminalImageTransfer` now consume canonical surface snapshots/accessors instead of wrapper-shaped metadata dictionaries
+- the old wrapper-shaped surface metadata API is gone from `Workspace`, so production code no longer reaches into parallel `panelTitles`-style stores
+- `TerminalController` workspace resolution now prefers its attached `TabManager` and only falls back to `AppDelegate` window contexts for cross-window routing, which keeps socket and telemetry ownership aligned with the runtime workspace owner
+- focused behavior coverage for the ownership cut passes, including workspace state, content visibility, socket security, session persistence, sidebar ordering, browser config, and remote connection suites
 
-Current remaining work is the fresh architecture pass:
+No required architecture work from this simplification plan remains on this branch.
 
-1. make `Workspace` the single main-actor owner of workspace runtime state, instead of splitting selection and visibility responsibility across `TabManager`, `ContentView`, and the host
-2. reduce `WorkspaceLayoutState` to pure layout facts only, with no runtime chrome payload
-3. move surface chrome into workspace-owned surface models keyed by canonical `SurfaceID`
-4. make the AppKit host a pure snapshot applier over retained surface views
-5. push browser portal and similar surface-specific behavior behind surface-local adapters, not the shell
-6. add behavior-level coverage for split, close, move, and selection invariants once the ownership cut lands
+Optional follow-up work, outside the scope of this refactor:
+
+1. continue Swift 6 actor-isolation cleanup in unrelated legacy areas such as delegate conformances and AppDelegate notification glue
+2. add broader e2e coverage for workspace shell behavior once the next user-visible workflow needs it
+3. introduce a dedicated retained-surface registry only if future surface kinds outgrow `Workspace.panels` as the lifetime boundary
 
 `TabItem.title` remains intentionally as the serialized fallback title used by layout snapshots, placeholders, and export/debug paths. Runtime tab chrome truth no longer depends on it.
 

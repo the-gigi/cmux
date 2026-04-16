@@ -921,10 +921,10 @@ final class WorkspaceRemoteConnectionTests: XCTestCase {
         let panelID = try XCTUnwrap(source.focusedTerminalPanel?.id)
         let sourcePaneID = try XCTUnwrap(source.paneId(forPanelId: panelID))
         let destinationPaneID = try XCTUnwrap(destination.splitController.allPaneIds.first)
-        source.surfaceTTYNames[panelID] = "/dev/ttys004"
+        source.setSurfaceTTYName(panelId: panelID, ttyName: "/dev/ttys004")
 
         let detached = try XCTUnwrap(source.detachSurface(panelId: panelID))
-        XCTAssertEqual(source.surfaceTTYNames[panelID], nil)
+        XCTAssertEqual(source.surfaceTTYName(panelId: panelID), nil)
 
         let restoredPanelID = destination.attachDetachedSurface(
             detached,
@@ -933,7 +933,7 @@ final class WorkspaceRemoteConnectionTests: XCTestCase {
         )
 
         XCTAssertEqual(restoredPanelID, panelID)
-        XCTAssertEqual(destination.surfaceTTYNames[panelID], "/dev/ttys004")
+        XCTAssertEqual(destination.surfaceTTYName(panelId: panelID), "/dev/ttys004")
         XCTAssertEqual(source.splitController.tabs(inPane: sourcePaneID).count, 0)
     }
 

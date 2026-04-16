@@ -30,8 +30,9 @@ final class WorkspacePullRequestSidebarTests: XCTestCase {
         let panelId = UUID()
         let staleURL = try XCTUnwrap(URL(string: "https://github.com/manaflow-ai/cmux/pull/1640"))
 
-        workspace.panelGitBranches[panelId] = SidebarGitBranchState(branch: "main", isDirty: false)
-        workspace.panelPullRequests[panelId] = SidebarPullRequestState(
+        workspace.updatePanelGitBranch(panelId: panelId, branch: "main", isDirty: false)
+        workspace.updatePanelPullRequest(
+            panelId: panelId,
             number: 1640,
             label: "PR",
             url: staleURL,
@@ -48,9 +49,10 @@ final class WorkspacePullRequestSidebarTests: XCTestCase {
         let secondPanelId = UUID()
         let url = try XCTUnwrap(URL(string: "https://github.com/manaflow-ai/cmux/pull/1640"))
 
-        workspace.panelGitBranches[firstPanelId] = SidebarGitBranchState(branch: "feature/work", isDirty: false)
-        workspace.panelGitBranches[secondPanelId] = SidebarGitBranchState(branch: "feature/work", isDirty: false)
-        workspace.panelPullRequests[firstPanelId] = SidebarPullRequestState(
+        workspace.updatePanelGitBranch(panelId: firstPanelId, branch: "feature/work", isDirty: false)
+        workspace.updatePanelGitBranch(panelId: secondPanelId, branch: "feature/work", isDirty: false)
+        workspace.updatePanelPullRequest(
+            panelId: firstPanelId,
             number: 1640,
             label: "PR",
             url: url,
@@ -58,7 +60,8 @@ final class WorkspacePullRequestSidebarTests: XCTestCase {
             branch: "feature/work",
             isStale: true
         )
-        workspace.panelPullRequests[secondPanelId] = SidebarPullRequestState(
+        workspace.updatePanelPullRequest(
+            panelId: secondPanelId,
             number: 1640,
             label: "PR",
             url: url,
