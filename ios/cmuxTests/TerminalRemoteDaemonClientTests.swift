@@ -138,6 +138,8 @@ final class TerminalRemoteDaemonClientTests: XCTestCase {
 private actor InMemoryDaemonTransport: TerminalRemoteDaemonTransport {
     private(set) var writtenLines: [String] = []
     private var responses: [String]
+    private var deliveredCount = 0
+    private var readWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(responses: [String]) {
         self.responses = responses
@@ -145,6 +147,9 @@ private actor InMemoryDaemonTransport: TerminalRemoteDaemonTransport {
 
     func writeLine(_ line: String) async throws {
         writtenLines.append(line)
+        if !readWaiters.isEmpty {
+            readWaiters.removeFirst().resume()
+        }
     }
 
     func firstWrittenLine() -> String? {
@@ -156,9 +161,23 @@ private actor InMemoryDaemonTransport: TerminalRemoteDaemonTransport {
     }
 
     func readLine() async throws -> String {
+        // Block until the caller has issued one more writeLine than
+        // we've paired to a response. This models the real daemon, which
+        // only emits a reply in response to an actual request, and stops
+        // the dispatcher from draining queued responses before
+        // sendRequest's pendingRequests slot even exists.
+        while writtenLines.count <= deliveredCount {
+            if responses.isEmpty {
+                throw TestTransportError.noResponseQueued
+            }
+            await withCheckedContinuation { continuation in
+                readWaiters.append(continuation)
+            }
+        }
         guard !responses.isEmpty else {
             throw TestTransportError.noResponseQueued
         }
+        deliveredCount += 1
         return responses.removeFirst()
     }
 }

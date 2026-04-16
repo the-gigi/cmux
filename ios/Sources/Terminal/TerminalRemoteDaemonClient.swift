@@ -302,12 +302,25 @@ enum TerminalRemoteDaemonClientError: LocalizedError, Equatable {
     }
 }
 
+/// State for an in-flight RPC request slot. The slot is created
+/// synchronously in `sendRequest` before the transport.writeLine await
+/// so a response that arrives while the caller is between writeLine and
+/// the continuation install can be buffered (`.arrived`) and consumed as
+/// soon as the caller suspends on its continuation. Without this, the
+/// dispatcher's `response for unknown id` drop path was racing every
+/// RPC under load and under the in-memory test transport.
+private enum PendingRequestSlot {
+    case reserved
+    case awaiting(CheckedContinuation<String, Error>)
+    case arrived(String)
+}
+
 actor TerminalRemoteDaemonClient {
     private let transport: any TerminalRemoteDaemonTransport
     private let decoder: JSONDecoder
     private let rpcTimeoutSeconds: TimeInterval
     private var nextRequestID = 1
-    private var pendingRequests: [Int: CheckedContinuation<String, Error>] = [:]
+    private var pendingRequests: [Int: PendingRequestSlot] = [:]
     private var pushHandlers: [String: @Sendable (TerminalPushEvent) -> Void] = [:]
     private var workspaceEventHandler: (@Sendable (String) -> Void)?
     /// Buffered workspace.* push lines that arrived before the handler was
@@ -607,7 +620,24 @@ actor TerminalRemoteDaemonClient {
         let requestID = nextRequestID
         nextRequestID += 1
 
-        try await transport.writeLine(try encodeRequestLine(id: requestID, method: method, params: params))
+        let encoded: String
+        do {
+            encoded = try encodeRequestLine(id: requestID, method: method, params: params)
+        } catch {
+            throw error
+        }
+
+        // Reserve the slot synchronously so the dispatcher can either
+        // resume an installed continuation or buffer the response into
+        // `.arrived` if it beats sendRequest to the slot swap.
+        pendingRequests[requestID] = .reserved
+
+        do {
+            try await transport.writeLine(encoded)
+        } catch {
+            pendingRequests.removeValue(forKey: requestID)
+            throw error
+        }
 
         let timeoutTask = Task { [weak self, rpcTimeoutSeconds] in
             try? await Task.sleep(nanoseconds: UInt64(rpcTimeoutSeconds * 1_000_000_000))
@@ -616,11 +646,17 @@ actor TerminalRemoteDaemonClient {
         defer { timeoutTask.cancel() }
 
         let responseLine: String = try await withCheckedThrowingContinuation { continuation in
-            if let transportFailure {
-                continuation.resume(throwing: transportFailure)
-                return
+            switch pendingRequests[requestID] {
+            case .arrived(let line):
+                pendingRequests.removeValue(forKey: requestID)
+                continuation.resume(returning: line)
+            case .reserved:
+                pendingRequests[requestID] = .awaiting(continuation)
+            case .awaiting, nil:
+                // failPending swept the slot (or the state got into an
+                // unexpected shape). Either way, surface the failure.
+                continuation.resume(throwing: transportFailure ?? TerminalRemoteDaemonClientError.transportClosed)
             }
-            pendingRequests[requestID] = continuation
         }
 
         return try Self.decodeResponse(from: responseLine, decoder: decoder, as: responseType)
@@ -655,9 +691,15 @@ actor TerminalRemoteDaemonClient {
         }
 
         if let requestID = (json["id"] as? Int) ?? (json["id"] as? NSNumber)?.intValue {
-            if let continuation = pendingRequests.removeValue(forKey: requestID) {
+            switch pendingRequests[requestID] {
+            case .awaiting(let continuation):
+                pendingRequests.removeValue(forKey: requestID)
                 continuation.resume(returning: line)
-            } else {
+            case .reserved:
+                // Response raced ahead of sendRequest's continuation
+                // install; buffer it so the caller can consume on resume.
+                pendingRequests[requestID] = .arrived(line)
+            case .arrived, nil:
                 log.debug("dispatcher: response for unknown id \(requestID, privacy: .public)")
             }
             return
@@ -767,7 +809,11 @@ actor TerminalRemoteDaemonClient {
     }
 
     private func timeoutPending(id: Int) {
-        guard let continuation = pendingRequests.removeValue(forKey: id) else { return }
+        // Only time out slots that actually have a continuation parked on
+        // them. Reserved/arrived slots are mid-handoff and sendRequest
+        // will finish them as soon as it reacquires the actor.
+        guard case .awaiting(let continuation) = pendingRequests[id] else { return }
+        pendingRequests.removeValue(forKey: id)
         continuation.resume(throwing: TerminalRemoteDaemonClientError.rpcTimeout)
     }
 
@@ -777,8 +823,13 @@ actor TerminalRemoteDaemonClient {
         }
         let snapshot = pendingRequests
         pendingRequests.removeAll()
-        for (_, continuation) in snapshot {
-            continuation.resume(throwing: error)
+        for (_, slot) in snapshot {
+            if case .awaiting(let continuation) = slot {
+                continuation.resume(throwing: error)
+            }
+            // .reserved and .arrived slots are picked up by sendRequest's
+            // continuation closure, which will see transportFailure is
+            // now set and throw via the `.awaiting, nil` fallback path.
         }
         let closeSnapshot = closeWaiters
         closeWaiters.removeAll()
