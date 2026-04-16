@@ -298,6 +298,7 @@ extension Workspace {
             customDescription: customDescription,
             customColor: customColor,
             isPinned: isPinned,
+            terminalScrollBarHidden: terminalScrollBarHidden ? true : nil,
             currentDirectory: currentDirectory,
             focusedPanelId: focusedPanelId,
             layout: layout,
@@ -338,6 +339,7 @@ extension Workspace {
         setCustomDescription(snapshot.customDescription)
         setCustomColor(snapshot.customColor)
         isPinned = snapshot.isPinned
+        setTerminalScrollBarHidden(snapshot.terminalScrollBarHidden ?? false)
 
         // Status entries and agent PIDs are ephemeral runtime state tied to running
         // processes (e.g. claude_code "Running"). Don't restore them across app
@@ -6039,12 +6041,6 @@ enum SidebarPullRequestStatus: String {
     case closed
 }
 
-enum SidebarPullRequestChecksStatus: String {
-    case pass
-    case fail
-    case pending
-}
-
 private func normalizedSidebarBranchName(_ branch: String?) -> String? {
     guard let branch else { return nil }
     let trimmed = branch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -6057,7 +6053,7 @@ struct SidebarPullRequestState: Equatable {
     let url: URL
     let status: SidebarPullRequestStatus
     let branch: String?
-    let checks: SidebarPullRequestChecksStatus?
+    let isStale: Bool
 
     init(
         number: Int,
@@ -6065,14 +6061,14 @@ struct SidebarPullRequestState: Equatable {
         url: URL,
         status: SidebarPullRequestStatus,
         branch: String? = nil,
-        checks: SidebarPullRequestChecksStatus? = nil
+        isStale: Bool = false
     ) {
         self.number = number
         self.label = label
         self.url = url
         self.status = status
         self.branch = normalizedSidebarBranchName(branch)
-        self.checks = checks
+        self.isStale = isStale
     }
 }
 
@@ -6317,13 +6313,8 @@ enum SidebarBranchOrdering {
             }
         }
 
-        func checksPriority(_ checks: SidebarPullRequestChecksStatus?) -> Int {
-            switch checks {
-            case .fail: return 3
-            case .pending: return 2
-            case .pass: return 1
-            case nil: return 0
-            }
+        func freshnessPriority(_ isStale: Bool) -> Int {
+            isStale ? 0 : 1
         }
 
         func normalizedReviewURLKey(for url: URL) -> String {
@@ -6360,10 +6351,10 @@ enum SidebarBranchOrdering {
                 continue
             }
             guard let existing = pullRequestsByKey[key] else { continue }
-            if statusPriority(state.status) > statusPriority(existing.status) {
+            if freshnessPriority(state.isStale) > freshnessPriority(existing.isStale) {
                 pullRequestsByKey[key] = state
-            } else if state.status == existing.status,
-                      checksPriority(state.checks) > checksPriority(existing.checks) {
+            } else if freshnessPriority(state.isStale) == freshnessPriority(existing.isStale),
+                      statusPriority(state.status) > statusPriority(existing.status) {
                 pullRequestsByKey[key] = state
             }
         }
@@ -6491,12 +6482,17 @@ struct ClosedBrowserPanelRestoreSnapshot {
 /// Each workspace contains one BonsplitController that manages split panes and nested surfaces.
 @MainActor
 final class Workspace: Identifiable, ObservableObject {
+    static let terminalScrollBarHiddenDidChangeNotification = Notification.Name(
+        "cmux.workspaceTerminalScrollBarHiddenDidChange"
+    )
+
     let id: UUID
     @Published var title: String
     @Published var customTitle: String?
     @Published var customDescription: String?
     @Published var isPinned: Bool = false
     @Published var customColor: String?  // hex string, e.g. "#C0392B"
+    @Published private(set) var terminalScrollBarHidden: Bool = false
     @Published var currentDirectory: String
     private(set) var preferredBrowserProfileID: UUID?
 
@@ -6641,6 +6637,7 @@ final class Workspace: Identifiable, ObservableObject {
             sidebarObservationSignal($customDescription),
             sidebarObservationSignal($isPinned),
             sidebarObservationSignal($customColor),
+            sidebarObservationSignal($terminalScrollBarHidden),
         ]
 
         return Publishers.MergeMany(publishers).eraseToAnyPublisher()
@@ -7533,6 +7530,15 @@ final class Workspace: Identifiable, ObservableObject {
         }
     }
 
+    func setTerminalScrollBarHidden(_ hidden: Bool) {
+        guard terminalScrollBarHidden != hidden else { return }
+        terminalScrollBarHidden = hidden
+        NotificationCenter.default.post(
+            name: Self.terminalScrollBarHiddenDidChangeNotification,
+            object: self
+        )
+    }
+
     private static func normalizedCustomDescription(_ description: String?) -> String? {
         let normalizedLineEndings = description?
             .replacingOccurrences(of: "\r\n", with: "\n")
@@ -7653,7 +7659,7 @@ final class Workspace: Identifiable, ObservableObject {
         url: URL,
         status: SidebarPullRequestStatus,
         branch: String? = nil,
-        checks: SidebarPullRequestChecksStatus? = nil
+        isStale: Bool = false
     ) {
         let existing = panelPullRequests[panelId]
         let normalizedBranch = normalizedSidebarBranchName(branch)
@@ -7674,26 +7680,13 @@ final class Workspace: Identifiable, ObservableObject {
             }
             return existing.branch
         }()
-        let resolvedChecks: SidebarPullRequestChecksStatus? = {
-            if let checks {
-                return checks
-            }
-            guard let existing,
-                  existing.number == number,
-                  existing.label == label,
-                  existing.url == url,
-                  existing.status == status else {
-                return nil
-            }
-            return existing.checks
-        }()
         let state = SidebarPullRequestState(
             number: number,
             label: label,
             url: url,
             status: status,
             branch: resolvedBranch,
-            checks: resolvedChecks
+            isStale: isStale
         )
         if existing != state {
             panelPullRequests[panelId] = state
@@ -9185,6 +9178,34 @@ final class Workspace: Identifiable, ObservableObject {
         return browserPanel
     }
 
+    /// Open the markdown viewer for `filePath`, reusing an existing
+    /// `MarkdownPanel` in this workspace that already shows the same file.
+    /// Paths are compared after symlink resolution so `./README.md` and a
+    /// symlink pointing at the same file focus the same viewer.
+    /// Returns `nil` when no existing viewer matches and split creation
+    /// fails, so callers can fall back to the preferred editor / system opener.
+    @discardableResult
+    func openOrFocusMarkdownSplit(
+        from panelId: UUID,
+        filePath: String
+    ) -> MarkdownPanel? {
+        let canonical = (filePath as NSString).resolvingSymlinksInPath
+        for (existingId, panel) in panels {
+            guard let md = panel as? MarkdownPanel else { continue }
+            if (md.filePath as NSString).resolvingSymlinksInPath == canonical {
+                focusPanel(existingId)
+                return md
+            }
+        }
+        return newMarkdownSplit(
+            from: panelId,
+            orientation: .horizontal,
+            insertFirst: false,
+            filePath: filePath,
+            focus: true
+        )
+    }
+
     func newMarkdownSplit(
         from panelId: UUID,
         orientation: SplitOrientation,
@@ -9296,6 +9317,12 @@ final class Workspace: Identifiable, ObservableObject {
     /// Called before the workspace is removed from TabManager to ensure child
     /// processes receive SIGHUP even if ARC deallocation is delayed.
     func teardownAllPanels() {
+        // Hide portal-hosted content up front so a workspace being torn down
+        // cannot keep drawing above the next selected/restored workspace while
+        // panel close work is still unwinding.
+        hideAllTerminalPortalViews()
+        hideAllBrowserPortalViews()
+
         let panelEntries = Array(panels)
         for (panelId, panel) in panelEntries {
             panelSubscriptions.removeValue(forKey: panelId)

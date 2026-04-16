@@ -389,8 +389,7 @@ class TerminalController {
         label: String,
         url: URL,
         status: SidebarPullRequestStatus,
-        branch: String?,
-        checks: SidebarPullRequestChecksStatus?
+        branch: String?
     ) -> Bool {
         guard let current else { return true }
         let normalizedBranch = branch?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -406,24 +405,12 @@ class TerminalController {
             }
             return current.branch
         }()
-        let effectiveChecks: SidebarPullRequestChecksStatus? = {
-            if let checks {
-                return checks
-            }
-            guard current.number == number,
-                  current.label == label,
-                  current.url == url,
-                  current.status == status else {
-                return nil
-            }
-            return current.checks
-        }()
         return current.number != number
             || current.label != label
             || current.url != url
             || current.status != status
             || current.branch != effectiveBranch
-            || current.checks != effectiveChecks
+            || current.isStale
     }
 
     nonisolated static func shouldReplacePorts(current: [Int]?, next: [Int]) -> Bool {
@@ -3406,18 +3393,36 @@ class TerminalController {
         let title = (requestedTitle?.isEmpty == false) ? requestedTitle : nil
         let description = v2RawString(params, "description")
 
+        // Decode optional layout param (same JSON schema as cmux.json layout field).
+        // Validate before creating the workspace so malformed layouts fail fast.
+        var layoutNode: CmuxLayoutNode?
+        if let rawLayout = params["layout"] {
+            guard JSONSerialization.isValidJSONObject(rawLayout),
+                  let layoutData = try? JSONSerialization.data(withJSONObject: rawLayout) else {
+                return .err(code: "invalid_params", message: "layout must be a valid JSON object", data: nil)
+            }
+            do {
+                layoutNode = try JSONDecoder().decode(CmuxLayoutNode.self, from: layoutData)
+            } catch {
+                return .err(code: "invalid_params", message: "Invalid layout: \(error.localizedDescription)", data: nil)
+            }
+        }
+
         var newId: UUID?
         let shouldFocus = v2FocusAllowed()
         v2MainSync {
             let ws = tabManager.addWorkspace(
                 title: title,
                 workingDirectory: cwd,
-                initialTerminalCommand: initialCommand,
-                initialTerminalEnvironment: initialEnv,
+                initialTerminalCommand: layoutNode == nil ? initialCommand : nil,
+                initialTerminalEnvironment: layoutNode == nil ? initialEnv : [:],
                 select: shouldFocus,
                 eagerLoadTerminal: !shouldFocus
             )
             ws.setCustomDescription(description)
+            if let layoutNode {
+                ws.applyCustomLayout(layoutNode, baseCwd: cwd ?? ws.currentDirectory)
+            }
             newId = ws.id
         }
 
@@ -11432,8 +11437,8 @@ class TerminalController {
           clear_progress [--tab=X] - Clear progress bar
           report_git_branch <branch> [--status=dirty] [--tab=X] [--panel=Y] - Report git branch
           clear_git_branch [--tab=X] [--panel=Y] - Clear git branch
-          report_pr <number> <url> [--label=PR] [--state=open|merged|closed] [--branch=<name>] [--checks=pass|fail|pending] [--tab=X] [--panel=Y] - Report pull request / review item
-          report_review <number> <url> [--label=MR] [--state=open|merged|closed] [--checks=pass|fail|pending] [--tab=X] [--panel=Y] - Alias for provider-specific review item
+          report_pr <number> <url> [--label=PR] [--state=open|merged|closed] [--branch=<name>] [--tab=X] [--panel=Y] - Report pull request / review item
+          report_review <number> <url> [--label=MR] [--state=open|merged|closed] [--tab=X] [--panel=Y] - Alias for provider-specific review item
           clear_pr [--tab=X] [--panel=Y] - Clear pull request
           report_ports <port1> [port2...] [--tab=X] [--panel=Y] - Report listening ports
           report_tty <tty_name> [--tab=X] [--panel=Y] - Register TTY for batched port scanning
@@ -15127,7 +15132,7 @@ class TerminalController {
     private func reportPullRequest(_ args: String) -> String {
         let parsed = parseOptions(args)
         guard parsed.positional.count >= 2 else {
-            return "ERROR: Missing pull request number or URL — usage: report_pr <number> <url> [--label=PR] [--state=open|merged|closed] [--branch=<name>] [--checks=pass|fail|pending] [--tab=X] [--panel=Y]"
+            return "ERROR: Missing pull request number or URL — usage: report_pr <number> <url> [--label=PR] [--state=open|merged|closed] [--branch=<name>] [--tab=X] [--panel=Y]"
         }
 
         let rawNumber = parsed.positional[0].trimmingCharacters(in: .whitespacesAndNewlines)
@@ -15148,20 +15153,13 @@ class TerminalController {
             return "ERROR: Invalid pull request state '\(statusRaw)' — use: open, merged, closed"
         }
         let branch = normalizedOptionValue(parsed.options["branch"])
-
-        let checks: SidebarPullRequestChecksStatus?
-        if let rawChecks = normalizedOptionValue(parsed.options["checks"]) {
-            guard let parsedChecks = SidebarPullRequestChecksStatus(rawValue: rawChecks.lowercased()) else {
-                return "ERROR: Invalid pull request checks '\(rawChecks)' — use: pass, fail, pending"
-            }
-            checks = parsedChecks
-        } else {
-            checks = nil
+        if normalizedOptionValue(parsed.options["checks"]) != nil {
+            return "ERROR: Unsupported option '--checks' — pull request checks are no longer tracked"
         }
 
         let labelRaw = normalizedOptionValue(parsed.options["label"]) ?? "PR"
         guard !labelRaw.isEmpty else {
-            return "ERROR: Invalid review label — usage: report_pr <number> <url> [--label=PR] [--state=open|merged|closed] [--branch=<name>] [--checks=pass|fail|pending] [--tab=X] [--panel=Y]"
+            return "ERROR: Invalid review label — usage: report_pr <number> <url> [--label=PR] [--state=open|merged|closed] [--branch=<name>] [--tab=X] [--panel=Y]"
         }
         let label = String(labelRaw.prefix(16))
 
@@ -15170,7 +15168,7 @@ class TerminalController {
         return schedulePanelMetadataMutation(
             args: args,
             options: parsed.options,
-            missingPanelUsage: "report_pr <number> <url> [--label=PR] [--state=open|merged|closed] [--branch=<name>] [--checks=pass|fail|pending] [--tab=X] [--panel=Y]"
+            missingPanelUsage: "report_pr <number> <url> [--label=PR] [--state=open|merged|closed] [--branch=<name>] [--tab=X] [--panel=Y]"
         ) { tab, surfaceId in
             guard Self.shouldReplacePullRequest(
                 current: tab.panelPullRequests[surfaceId],
@@ -15178,8 +15176,7 @@ class TerminalController {
                 label: label,
                 url: url,
                 status: status,
-                branch: branch,
-                checks: checks
+                branch: branch
             ) else {
                 return
             }
@@ -15190,8 +15187,7 @@ class TerminalController {
                 label: label,
                 url: url,
                 status: status,
-                branch: branch,
-                checks: checks
+                branch: branch
             )
         }
     }
@@ -15618,11 +15614,9 @@ class TerminalController {
             if let pr = tab.sidebarPullRequestsInDisplayOrder().first {
                 lines.append("pr=#\(pr.number) \(pr.status.rawValue) \(pr.url.absoluteString)")
                 lines.append("pr_label=\(pr.label)")
-                lines.append("pr_checks=\(pr.checks?.rawValue ?? "none")")
             } else {
                 lines.append("pr=none")
                 lines.append("pr_label=none")
-                lines.append("pr_checks=none")
             }
 
             if tab.listeningPorts.isEmpty {

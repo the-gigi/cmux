@@ -333,6 +333,7 @@ final class KeyboardShortcutSettingsFileStoreTests: XCTestCase {
 
     override func tearDown() {
         KeyboardShortcutSettings.settingsFileStore = originalSettingsFileStore
+        AppIconSettings.resetLiveEnvironmentProviderForTesting()
         KeyboardShortcutSettings.resetAll()
         super.tearDown()
     }
@@ -374,6 +375,165 @@ final class KeyboardShortcutSettingsFileStoreTests: XCTestCase {
             StoredShortcut(key: "b", command: false, shift: false, option: false, control: true, chordKey: "1")
         )
         XCTAssertEqual(store.activeSourcePath, settingsFileURL.path)
+    }
+
+    func testSettingsFileStoreDoesNotApplyAutomaticAppIconDuringStartupReplay() throws {
+        let defaults = UserDefaults.standard
+        let previousMode = defaults.object(forKey: AppIconSettings.modeKey)
+        let previousBackups = defaults.data(forKey: settingsFileBackupsDefaultsKey)
+        defer {
+            if let previousMode {
+                defaults.set(previousMode, forKey: AppIconSettings.modeKey)
+            } else {
+                defaults.removeObject(forKey: AppIconSettings.modeKey)
+            }
+
+            if let previousBackups {
+                defaults.set(previousBackups, forKey: settingsFileBackupsDefaultsKey)
+            } else {
+                defaults.removeObject(forKey: settingsFileBackupsDefaultsKey)
+            }
+        }
+
+        defaults.removeObject(forKey: AppIconSettings.modeKey)
+        defaults.removeObject(forKey: settingsFileBackupsDefaultsKey)
+
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let settingsFileURL = directoryURL.appendingPathComponent("settings.json", isDirectory: false)
+        try writeSettingsFile(
+            """
+            {
+              "app": {
+                "appIcon": "automatic"
+              }
+            }
+            """,
+            to: settingsFileURL
+        )
+
+        var startObservationCallCount = 0
+        var stopObservationCallCount = 0
+        var imageRequestCount = 0
+        var runtimeIconSetCount = 0
+        var dockTileNotificationCount = 0
+        AppIconSettings.setLiveEnvironmentProviderForTesting {
+            AppIconSettings.Environment(
+                isApplicationFinishedLaunching: { false },
+                imageForMode: { _ in
+                    imageRequestCount += 1
+                    return nil
+                },
+                setApplicationIconImage: { _ in
+                    runtimeIconSetCount += 1
+                },
+                startAppearanceObservation: {
+                    startObservationCallCount += 1
+                },
+                stopAppearanceObservation: {
+                    stopObservationCallCount += 1
+                },
+                notifyDockTilePlugin: {
+                    dockTileNotificationCount += 1
+                }
+            )
+        }
+
+        _ = KeyboardShortcutSettingsFileStore(
+            primaryPath: settingsFileURL.path,
+            fallbackPath: nil,
+            startWatching: false
+        )
+
+        XCTAssertEqual(defaults.string(forKey: AppIconSettings.modeKey), AppIconMode.automatic.rawValue)
+        XCTAssertEqual(startObservationCallCount, 0)
+        XCTAssertEqual(stopObservationCallCount, 0)
+        XCTAssertEqual(imageRequestCount, 0)
+        XCTAssertEqual(runtimeIconSetCount, 0)
+        XCTAssertEqual(dockTileNotificationCount, 0)
+    }
+
+    func testSettingsFileStoreCanReplayAutomaticAppIconSettingTwiceWithoutTouchingAppKit() throws {
+        let defaults = UserDefaults.standard
+        let previousMode = defaults.object(forKey: AppIconSettings.modeKey)
+        let previousBackups = defaults.data(forKey: settingsFileBackupsDefaultsKey)
+        defer {
+            if let previousMode {
+                defaults.set(previousMode, forKey: AppIconSettings.modeKey)
+            } else {
+                defaults.removeObject(forKey: AppIconSettings.modeKey)
+            }
+
+            if let previousBackups {
+                defaults.set(previousBackups, forKey: settingsFileBackupsDefaultsKey)
+            } else {
+                defaults.removeObject(forKey: settingsFileBackupsDefaultsKey)
+            }
+        }
+
+        defaults.removeObject(forKey: AppIconSettings.modeKey)
+        defaults.removeObject(forKey: settingsFileBackupsDefaultsKey)
+
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let settingsFileURL = directoryURL.appendingPathComponent("settings.json", isDirectory: false)
+        try writeSettingsFile(
+            """
+            {
+              "app": {
+                "appIcon": "automatic"
+              }
+            }
+            """,
+            to: settingsFileURL
+        )
+
+        var startObservationCallCount = 0
+        var stopObservationCallCount = 0
+        var imageRequestCount = 0
+        var runtimeIconSetCount = 0
+        var dockTileNotificationCount = 0
+        AppIconSettings.setLiveEnvironmentProviderForTesting {
+            AppIconSettings.Environment(
+                isApplicationFinishedLaunching: { false },
+                imageForMode: { _ in
+                    imageRequestCount += 1
+                    return nil
+                },
+                setApplicationIconImage: { _ in
+                    runtimeIconSetCount += 1
+                },
+                startAppearanceObservation: {
+                    startObservationCallCount += 1
+                },
+                stopAppearanceObservation: {
+                    stopObservationCallCount += 1
+                },
+                notifyDockTilePlugin: {
+                    dockTileNotificationCount += 1
+                }
+            )
+        }
+
+        _ = KeyboardShortcutSettingsFileStore(
+            primaryPath: settingsFileURL.path,
+            fallbackPath: nil,
+            startWatching: false
+        )
+        _ = KeyboardShortcutSettingsFileStore(
+            primaryPath: settingsFileURL.path,
+            fallbackPath: nil,
+            startWatching: false
+        )
+
+        XCTAssertEqual(defaults.string(forKey: AppIconSettings.modeKey), AppIconMode.automatic.rawValue)
+        XCTAssertEqual(startObservationCallCount, 0)
+        XCTAssertEqual(stopObservationCallCount, 0)
+        XCTAssertEqual(imageRequestCount, 0)
+        XCTAssertEqual(runtimeIconSetCount, 0)
+        XCTAssertEqual(dockTileNotificationCount, 0)
     }
 
     func testSettingsFileStoreRejectsModifierFreeFirstStroke() throws {
@@ -574,6 +734,73 @@ final class KeyboardShortcutSettingsFileStoreTests: XCTestCase {
 
         XCTAssertFalse(KeyboardShortcutSettings.isManagedBySettingsFile(.newTab))
         XCTAssertEqual(KeyboardShortcutSettings.shortcut(for: .newTab), persistedShortcut)
+    }
+
+    func testSystemWideHotkeySettingsPreserveInvalidManagedShortcutWithoutFallingBackToDefault() throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let settingsFileURL = directoryURL.appendingPathComponent("settings.json", isDirectory: false)
+        try writeSettingsFile(
+            """
+            {
+              "shortcuts": {
+                "showHideAllWindows": ["ctrl+b", "c"]
+              }
+            }
+            """,
+            to: settingsFileURL
+        )
+
+        KeyboardShortcutSettings.settingsFileStore = KeyboardShortcutSettingsFileStore(
+            primaryPath: settingsFileURL.path,
+            fallbackPath: nil,
+            startWatching: false
+        )
+
+        let invalidShortcut = StoredShortcut(
+            key: "b",
+            command: false,
+            shift: false,
+            option: false,
+            control: true,
+            chordKey: "c"
+        )
+
+        XCTAssertEqual(
+            KeyboardShortcutSettings.settingsFileStore.override(for: .showHideAllWindows),
+            invalidShortcut
+        )
+        XCTAssertTrue(SystemWideHotkeySettings.isManagedBySettingsFile())
+        XCTAssertEqual(SystemWideHotkeySettings.shortcut(), invalidShortcut)
+        XCTAssertNotEqual(SystemWideHotkeySettings.shortcut(), SystemWideHotkeySettings.defaultShortcut)
+        XCTAssertNil(SystemWideHotkeySettings.shortcut().carbonHotKeyRegistration)
+    }
+
+    func testSystemWideHotkeyLegacyMigrationPreservesInvalidShortcut() throws {
+        let invalidShortcut = StoredShortcut(
+            key: "b",
+            command: false,
+            shift: false,
+            option: false,
+            control: true,
+            chordKey: "c"
+        )
+        let encodedShortcut = try XCTUnwrap(try? JSONEncoder().encode(invalidShortcut))
+        let defaults = UserDefaults.standard
+        defaults.set(encodedShortcut, forKey: SystemWideHotkeySettings.legacyShortcutKey)
+
+        let migratedShortcut = SystemWideHotkeySettings.shortcut()
+
+        XCTAssertEqual(migratedShortcut, invalidShortcut)
+        XCTAssertNil(defaults.object(forKey: SystemWideHotkeySettings.legacyShortcutKey))
+
+        let migratedData = try XCTUnwrap(
+            defaults.data(forKey: KeyboardShortcutSettings.Action.showHideAllWindows.defaultsKey)
+        )
+        let storedShortcut = try XCTUnwrap(try? JSONDecoder().decode(StoredShortcut.self, from: migratedData))
+        XCTAssertEqual(storedShortcut, invalidShortcut)
+        XCTAssertNil(storedShortcut.carbonHotKeyRegistration)
     }
 
     func testBootstrapCreatesCommentedTemplateWhenPrimaryAndFallbackAreMissing() throws {
@@ -1076,6 +1303,121 @@ final class KeyboardShortcutSettingsFileStoreTests: XCTestCase {
 
     private func writeSettingsFile(_ contents: String, to url: URL) throws {
         try contents.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
+final class StoredShortcutMatchingTests: XCTestCase {
+    func testMatchingIgnoresCapsLock() {
+        let shortcut = StoredShortcut(key: "q", command: true, shift: false, option: false, control: false)
+
+        XCTAssertTrue(
+            shortcut.matches(
+                keyCode: 12,
+                modifierFlags: [.command, .capsLock],
+                eventCharacter: "q",
+                layoutCharacterProvider: { _, _ in nil }
+            )
+        )
+    }
+
+    func testMatchingUsesRecordedCharacterForRemappedCommandLetter() {
+        let shortcut = StoredShortcut(key: "q", command: true, shift: false, option: false, control: false)
+
+        XCTAssertTrue(
+            shortcut.matches(
+                keyCode: 13,
+                modifierFlags: [.command],
+                eventCharacter: "q",
+                layoutCharacterProvider: { _, _ in nil }
+            )
+        )
+        XCTAssertFalse(
+            StoredShortcut(key: "w", command: true, shift: false, option: false, control: false).matches(
+                keyCode: 13,
+                modifierFlags: [.command],
+                eventCharacter: "q",
+                layoutCharacterProvider: { _, _ in nil }
+            )
+        )
+    }
+
+    func testMatchingTreatsKeypadEnterAsReturn() {
+        let shortcut = StoredShortcut(key: "\r", command: true, shift: false, option: false, control: false)
+
+        XCTAssertTrue(
+            shortcut.matches(
+                keyCode: 76,
+                modifierFlags: [.command],
+                eventCharacter: "\r",
+                layoutCharacterProvider: { _, _ in nil }
+            )
+        )
+    }
+
+    func testMatchingFallsBackToLayoutCharacterForNonLatinInput() {
+        let shortcut = StoredShortcut(key: "t", command: true, shift: false, option: false, control: false)
+
+        XCTAssertTrue(
+            shortcut.matches(
+                keyCode: 17,
+                modifierFlags: [.command],
+                eventCharacter: "е",
+                layoutCharacterProvider: { keyCode, _ in
+                    keyCode == 17 ? "t" : nil
+                }
+            )
+        )
+    }
+
+    func testResolvedKeyCodeUsesCurrentLayoutWhenShortcutWasStoredByCharacter() {
+        let stroke = ShortcutStroke(key: "q", command: true, shift: false, option: false, control: false)
+
+        XCTAssertEqual(
+            stroke.resolvedKeyCode(
+                layoutCharacterProvider: { keyCode, flags in
+                    guard flags == [.command] else { return nil }
+                    switch keyCode {
+                    case 12:
+                        return "'"
+                    case 13:
+                        return "q"
+                    default:
+                        return nil
+                    }
+                }
+            ),
+            13
+        )
+    }
+
+    func testResolvedKeyCodePrefersRecordedPhysicalKeyOverLayoutLookup() {
+        let stroke = ShortcutStroke(key: "q", command: true, shift: false, option: false, control: false, keyCode: 13)
+
+        XCTAssertEqual(
+            stroke.resolvedKeyCode(
+                layoutCharacterProvider: { keyCode, _ in
+                    keyCode == 12 ? "q" : nil
+                }
+            ),
+            13
+        )
+        XCTAssertEqual(stroke.carbonHotKeyRegistration?.keyCode, 13)
+    }
+
+    func testSystemWideHotkeyNormalizationRejectsReservedShortcutByRecordedPhysicalKey() {
+        KeyboardShortcutSettings.resetAll()
+        defer { KeyboardShortcutSettings.resetAll() }
+
+        let shortcut = StoredShortcut(
+            key: "q",
+            command: true,
+            shift: false,
+            option: false,
+            control: false,
+            keyCode: 13
+        )
+
+        XCTAssertNil(KeyboardShortcutSettings.Action.showHideAllWindows.normalizedRecordedShortcut(shortcut))
     }
 }
 
