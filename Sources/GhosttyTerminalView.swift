@@ -4325,6 +4325,17 @@ final class TerminalSurface: Identifiable, ObservableObject {
                 ) { [weak self, weak bridge] sid, _ in
                     guard let sid else {
                         NSLog("📱 surface.openPane failed tab=%@ surface=%@", workspaceID.uuidString, surfaceID.uuidString)
+                        DispatchQueue.main.async {
+                            bridge?.markBootstrapFailed()
+                            // Wake workspace.sync — this pane is permanently
+                            // unpending, so the bridge's stuck state should
+                            // no longer block outgoing syncs.
+                            NotificationCenter.default.post(
+                                name: .terminalSurfaceDaemonSessionAssigned,
+                                object: nil,
+                                userInfo: ["workspaceId": workspaceID, "failed": true]
+                            )
+                        }
                         return
                     }
                     DispatchQueue.main.async {

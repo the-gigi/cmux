@@ -304,9 +304,11 @@ final class WorkspaceDaemonBridge {
         guard let tabManager else { return false }
         for workspace in tabManager.tabs {
             for panel in workspace.panels.values {
-                guard let terminal = panel as? TerminalPanel else { continue }
+                guard let terminal = panel as? TerminalPanel,
+                      let bridge = terminal.surface.daemonBridge else { continue }
                 if terminal.surface.savedDaemonSessionID == nil,
-                   terminal.surface.daemonBridge != nil {
+                   bridge.sessionID == nil,
+                   !bridge.bootstrapFailed {
                     return true
                 }
             }

@@ -10,6 +10,12 @@ import Foundation
 /// subscription fires and buffered writes flush in order.
 final class DaemonTerminalBridge: @unchecked Sendable {
     private(set) var sessionID: String?
+    /// True once the bridge knows its daemon session id is never coming
+    /// (openPane gave up after retries). The pane is stuck in Manual IO
+    /// mode without a daemon session; treat buffered writes as dropped
+    /// and unblock `workspace.sync` (which defers while any bridge is
+    /// pending) so the rest of the app keeps syncing.
+    private(set) var bootstrapFailed = false
     private let shellCommand: String
     private var started = false
     private var subscribed = false
@@ -31,6 +37,19 @@ final class DaemonTerminalBridge: @unchecked Sendable {
     }
 
     deinit { stopInternal() }
+
+    /// Mark the bridge as permanently unable to bootstrap. Called when
+    /// `workspace.open_pane` exhausts its retries. Flushes the pending
+    /// queues (writes/resize) — those bytes have nowhere to go.
+    func markBootstrapFailed() {
+        lock.lock()
+        guard !bootstrapFailed, sessionID == nil else { lock.unlock(); return }
+        bootstrapFailed = true
+        pendingStart = nil
+        pendingResize = nil
+        pendingWrites.removeAll()
+        lock.unlock()
+    }
 
     /// Populate the daemon-minted session id. Flushes any buffered
     /// `start`/`writeToSession`/`resize` calls in order.
@@ -116,6 +135,10 @@ final class DaemonTerminalBridge: @unchecked Sendable {
             DaemonConnection.shared.writeToSession(sessionID: sid, data: data)
             return
         }
+        if bootstrapFailed {
+            lock.unlock()
+            return
+        }
         pendingWrites.append(data)
         lock.unlock()
     }
@@ -125,6 +148,10 @@ final class DaemonTerminalBridge: @unchecked Sendable {
         if let sid = sessionID {
             lock.unlock()
             DaemonConnection.shared.resizeSession(sessionID: sid, cols: cols, rows: rows)
+            return
+        }
+        if bootstrapFailed {
+            lock.unlock()
             return
         }
         pendingResize = (cols, rows)
