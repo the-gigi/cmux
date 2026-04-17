@@ -7693,15 +7693,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         var resolved = false
-        var readyObserver: NSObjectProtocol?
+        weak var observedReadySurface: TerminalSurface?
+        var readyToken: UUID?
         var focusObserver: NSObjectProtocol?
         var firstResponderObserver: NSObjectProtocol?
         var panelsCancellable: AnyCancellable?
 
         func cleanupObservers() {
-            if let readyObserver {
-                NotificationCenter.default.removeObserver(readyObserver)
-            }
+            observedReadySurface?.cancelRuntimeReadyCallback(readyToken)
+            readyToken = nil
             if let focusObserver {
                 NotificationCenter.default.removeObserver(focusObserver)
             }
@@ -7711,11 +7711,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             panelsCancellable?.cancel()
         }
 
+        func installReadyCallbackIfNeeded(for terminalPanel: TerminalPanel?) {
+            guard let terminalPanel else {
+                observedReadySurface?.cancelRuntimeReadyCallback(readyToken)
+                observedReadySurface = nil
+                readyToken = nil
+                return
+            }
+            guard observedReadySurface !== terminalPanel.surface else { return }
+            observedReadySurface?.cancelRuntimeReadyCallback(readyToken)
+            observedReadySurface = terminalPanel.surface
+            readyToken = terminalPanel.surface.onRuntimeReady {
+#if DEBUG
+                if isReactGrabPasteback {
+                    dlog(
+                        "reactGrab.pasteback h2.surfaceReadyCallback " +
+                        "workspace=\(Self.debugShortId(tab.id)) " +
+                        "surface=\(Self.debugShortId(terminalPanel.id)) " +
+                        "target=\(Self.debugShortId(preferredPanelId))"
+                    )
+                }
+#endif
+                finishIfReady()
+            }
+            terminalPanel.surface.requestBackgroundSurfaceStartIfNeeded()
+        }
+
         func finishIfReady() {
             let terminalPanel = Self.resolveTerminalPanelForTextSend(
                 in: tab,
                 preferredPanelId: preferredPanelId
             )
+            installReadyCallbackIfNeeded(for: terminalPanel)
 #if DEBUG
             if isReactGrabPasteback {
                 dlog(
@@ -7801,32 +7828,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 )
 #endif
             }
-        }
-        readyObserver = NotificationCenter.default.addObserver(
-            forName: .terminalSurfaceDidBecomeReady,
-            object: nil,
-            queue: .main
-        ) { note in
-            guard let workspaceId = note.userInfo?["workspaceId"] as? UUID,
-                  workspaceId == tab.id else { return }
-            let surfaceId = note.userInfo?["surfaceId"] as? UUID
-#if DEBUG
-            if isReactGrabPasteback {
-                dlog(
-                    "reactGrab.pasteback h2.surfaceReadyEvent " +
-                    "workspace=\(Self.debugShortId(workspaceId)) " +
-                    "surface=\(Self.debugShortId(surfaceId)) " +
-                    "target=\(Self.debugShortId(preferredPanelId)) " +
-                    "match=\(surfaceId == preferredPanelId ? 1 : 0)"
-                )
-            }
-#endif
-            if let preferredPanelId,
-               let surfaceId,
-               surfaceId != preferredPanelId {
-                return
-            }
-            finishIfReady()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
             if !resolved {

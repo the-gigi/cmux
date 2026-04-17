@@ -2621,6 +2621,30 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         }
     }
 
+    func testHiddenWorkspaceRenderSnapshotOmitsViewportMounts() {
+        let workspace = Workspace()
+
+        let snapshot = workspace.makeLayoutRenderSnapshot(
+            context: WorkspaceLayoutRenderContext(
+                notificationStore: nil,
+                isWorkspaceVisible: false,
+                isWorkspaceInputActive: false,
+                isMinimalMode: false,
+                appearance: PanelAppearance(
+                    dividerColor: .clear,
+                    unfocusedOverlayNSColor: .clear,
+                    unfocusedOverlayOpacity: 0
+                ),
+                workspacePortalPriority: 0,
+                usesWorkspacePaneOverlay: false,
+                showSplitButtons: true
+            )
+        )
+
+        XCTAssertTrue(snapshot.viewports.isEmpty)
+        XCTAssertNotNil(firstPaneSnapshot(from: snapshot))
+    }
+
     func testRenderSnapshotCarriesSplitGeometryFromControllerState() throws {
         let workspace = Workspace()
         guard let panelId = workspace.focusedPanelId else {
@@ -3320,6 +3344,227 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
         XCTAssertTrue(panel.hostedView.window === window)
         XCTAssertTrue(panel.hostedView.superview === slotView)
         XCTAssertFalse(panel.hostedView.isHidden)
+    }
+
+    func testTerminalViewportLifecycleReconcileCreatesRuntimeAfterWindowEntry() throws {
+        _ = NSApplication.shared
+
+        let workspace = Workspace()
+        guard let panelId = workspace.focusedPanelId,
+              let panel = workspace.terminalPanel(for: panelId) else {
+            XCTFail("Expected focused terminal panel")
+            return
+        }
+
+        let slotView = WorkspaceLayoutPaneContentSlotView(
+            frame: NSRect(x: 0, y: 0, width: 320, height: 220)
+        )
+        let descriptor = terminalDescriptor(for: panel.id)
+
+        workspace.surfaceRegistry.mountContent(
+            .terminal(descriptor),
+            contentId: panel.id,
+            in: slotView,
+            activeDropZone: nil
+        )
+
+        XCTAssertNil(panel.surface.surface)
+
+        let window = makeWindow()
+        defer { window.orderOut(nil) }
+        let contentView = try XCTUnwrap(window.contentView)
+        slotView.frame = contentView.bounds
+        slotView.autoresizingMask = [.width, .height]
+        contentView.addSubview(slotView)
+
+        window.makeKeyAndOrderFront(nil)
+        window.displayIfNeeded()
+        contentView.layoutSubtreeIfNeeded()
+        slotView.layoutSubtreeIfNeeded()
+
+        workspace.surfaceRegistry.reconcileViewportLifecycle(
+            .terminal(descriptor),
+            contentId: panel.id,
+            in: slotView,
+            reason: "test.windowEntry"
+        )
+
+        XCTAssertTrue(
+            waitForCondition { panel.surface.surface != nil },
+            "Expected viewport lifecycle reconcile to create the runtime surface once the host entered a window"
+        )
+    }
+
+    func testTerminalViewportLifecycleReconcileDefersRuntimeUntilGeometryIsUsable() throws {
+        _ = NSApplication.shared
+
+        let workspace = Workspace()
+        guard let panelId = workspace.focusedPanelId,
+              let panel = workspace.terminalPanel(for: panelId) else {
+            XCTFail("Expected focused terminal panel")
+            return
+        }
+
+        let slotView = WorkspaceLayoutPaneContentSlotView(frame: .zero)
+        let descriptor = terminalDescriptor(for: panel.id)
+
+        workspace.surfaceRegistry.mountContent(
+            .terminal(descriptor),
+            contentId: panel.id,
+            in: slotView,
+            activeDropZone: nil
+        )
+
+        let window = makeWindow()
+        defer { window.orderOut(nil) }
+        let contentView = try XCTUnwrap(window.contentView)
+        contentView.addSubview(slotView)
+
+        window.makeKeyAndOrderFront(nil)
+        window.displayIfNeeded()
+        contentView.layoutSubtreeIfNeeded()
+        slotView.layoutSubtreeIfNeeded()
+
+        workspace.surfaceRegistry.reconcileViewportLifecycle(
+            .terminal(descriptor),
+            contentId: panel.id,
+            in: slotView,
+            reason: "test.zeroGeometry"
+        )
+
+        XCTAssertNil(
+            panel.surface.surface,
+            "Expected visible runtime realization to wait for usable geometry instead of creating at zero size"
+        )
+
+        slotView.frame = contentView.bounds
+        slotView.autoresizingMask = [.width, .height]
+        contentView.layoutSubtreeIfNeeded()
+        slotView.layoutSubtreeIfNeeded()
+
+        workspace.surfaceRegistry.reconcileViewportLifecycle(
+            .terminal(descriptor),
+            contentId: panel.id,
+            in: slotView,
+            reason: "test.geometryReady"
+        )
+
+        XCTAssertTrue(
+            waitForCondition { panel.surface.surface != nil },
+            "Expected runtime realization once visible geometry became usable"
+        )
+    }
+
+    func testTerminalRuntimeReadyCallbackFiresAfterViewportLifecycleReconcile() throws {
+        _ = NSApplication.shared
+
+        let workspace = Workspace()
+        guard let panelId = workspace.focusedPanelId,
+              let panel = workspace.terminalPanel(for: panelId) else {
+            XCTFail("Expected focused terminal panel")
+            return
+        }
+
+        let slotView = WorkspaceLayoutPaneContentSlotView(
+            frame: NSRect(x: 0, y: 0, width: 320, height: 220)
+        )
+        let descriptor = terminalDescriptor(for: panel.id)
+        let readyExpectation = expectation(description: "runtime ready")
+
+        workspace.surfaceRegistry.mountContent(
+            .terminal(descriptor),
+            contentId: panel.id,
+            in: slotView,
+            activeDropZone: nil
+        )
+
+        let token = panel.surface.onRuntimeReady {
+            readyExpectation.fulfill()
+        }
+        XCTAssertNotNil(token)
+
+        let window = makeWindow()
+        defer { window.orderOut(nil) }
+        let contentView = try XCTUnwrap(window.contentView)
+        slotView.frame = contentView.bounds
+        slotView.autoresizingMask = [.width, .height]
+        contentView.addSubview(slotView)
+
+        window.makeKeyAndOrderFront(nil)
+        window.displayIfNeeded()
+        contentView.layoutSubtreeIfNeeded()
+        slotView.layoutSubtreeIfNeeded()
+
+        workspace.surfaceRegistry.reconcileViewportLifecycle(
+            .terminal(descriptor),
+            contentId: panel.id,
+            in: slotView,
+            reason: "test.runtimeReady"
+        )
+
+        wait(for: [readyExpectation], timeout: 2.0)
+        XCTAssertNotNil(panel.surface.surface)
+    }
+
+    func testBackgroundRuntimeRequestBeforeWindowEntryPersistsUntilHostCanRealize() throws {
+        _ = NSApplication.shared
+
+        let workspace = Workspace()
+        guard let panelId = workspace.focusedPanelId,
+              let panel = workspace.terminalPanel(for: panelId) else {
+            XCTFail("Expected focused terminal panel")
+            return
+        }
+
+        let slotView = WorkspaceLayoutPaneContentSlotView(
+            frame: NSRect(x: 0, y: 0, width: 320, height: 220)
+        )
+        let hiddenDescriptor = WorkspaceTerminalPaneContent(
+            surfaceId: panel.id,
+            isFocused: false,
+            isVisibleInUI: false,
+            isSplit: false,
+            appearance: PanelAppearance(
+                dividerColor: .clear,
+                unfocusedOverlayNSColor: .clear,
+                unfocusedOverlayOpacity: 0
+            ),
+            hasUnreadNotification: false,
+            onFocus: {},
+            onTriggerFlash: {}
+        )
+
+        workspace.surfaceRegistry.mountContent(
+            .terminal(hiddenDescriptor),
+            contentId: panel.id,
+            in: slotView,
+            activeDropZone: nil
+        )
+
+        XCTAssertNil(panel.surface.surface)
+
+        panel.surface.requestBackgroundSurfaceStartIfNeeded()
+        XCTAssertNil(
+            panel.surface.surface,
+            "Background runtime demand should persist instead of creating a runtime before window entry"
+        )
+
+        let window = makeWindow()
+        defer { window.orderOut(nil) }
+        let contentView = try XCTUnwrap(window.contentView)
+        slotView.frame = contentView.bounds
+        slotView.autoresizingMask = [.width, .height]
+        contentView.addSubview(slotView)
+
+        window.makeKeyAndOrderFront(nil)
+        window.displayIfNeeded()
+        contentView.layoutSubtreeIfNeeded()
+        slotView.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(
+            waitForCondition { panel.surface.surface != nil },
+            "Expected a background runtime demand made before window entry to be fulfilled once the host entered a window"
+        )
     }
 
     func testPlaceholderMountInstallsContentViewAndUnmountClearsIt() {

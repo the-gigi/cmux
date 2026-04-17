@@ -330,6 +330,20 @@ final class WorkspaceSurfaceRegistry {
             host.prepareForSurfaceRemoval()
         }
     }
+
+    func reconcileViewportLifecycle(
+        _ content: WorkspacePaneContent,
+        contentId: UUID,
+        in slotView: WorkspaceLayoutPaneContentSlotView,
+        reason: String
+    ) {
+        let identity = content.mountIdentity(contentId: contentId)
+        retainedHosts[identity]?.reconcileViewportLifecycle(
+            content: content,
+            in: slotView,
+            reason: reason
+        )
+    }
 }
 
 @MainActor
@@ -344,7 +358,21 @@ private protocol WorkspaceRetainedSurfaceHost: AnyObject {
 
     func unmount(from slotView: WorkspaceLayoutPaneContentSlotView)
 
+    func reconcileViewportLifecycle(
+        content: WorkspacePaneContent,
+        in slotView: WorkspaceLayoutPaneContentSlotView,
+        reason: String
+    )
+
     func prepareForSurfaceRemoval()
+}
+
+private extension WorkspaceRetainedSurfaceHost {
+    func reconcileViewportLifecycle(
+        content _: WorkspacePaneContent,
+        in _: WorkspaceLayoutPaneContentSlotView,
+        reason _: String
+    ) {}
 }
 
 @MainActor
@@ -405,26 +433,6 @@ private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfa
             reason: "workspace.terminalHost.mount"
         )
         lastMountedState = desiredState
-
-        let hostIsWindowed = slotView.window != nil || slotView.superview?.window != nil
-        guard hostIsWindowed else {
-            return
-        }
-
-        slotView.layoutSubtreeIfNeeded()
-        hostedView.layoutSubtreeIfNeeded()
-        hostedView.attachSurface(panel.surface)
-
-        let canWarmStartRuntime =
-            panel.surface.surface == nil &&
-            descriptor.isVisibleInUI &&
-            slotView.bounds.width > 1 &&
-            slotView.bounds.height > 1
-        if canWarmStartRuntime {
-            _ = hostedView.reconcileGeometryNow()
-            panel.surface.requestBackgroundSurfaceStartIfNeeded()
-        }
-        hostedView.resumeReparentFocusIfSuppressed()
     }
 
     func unmount(from slotView: WorkspaceLayoutPaneContentSlotView) {
@@ -485,6 +493,21 @@ private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfa
                 hostedView.requestAutomaticFirstResponderApply(reason: reason)
             }
         }
+    }
+
+    func reconcileViewportLifecycle(
+        content: WorkspacePaneContent,
+        in slotView: WorkspaceLayoutPaneContentSlotView,
+        reason: String
+    ) {
+        guard case .terminal = content,
+              let panel = workspace.panels[surfaceId] as? TerminalPanel else {
+            return
+        }
+
+        let hostedView = panel.hostedView
+        guard hostedView.superview === slotView else { return }
+        hostedView.reconcileViewportLifecycle(reason: reason)
     }
 }
 
@@ -1514,25 +1537,8 @@ extension Workspace {
             return
         }
 
-        var resolved = false
-        var observer: NSObjectProtocol?
-
-        observer = NotificationCenter.default.addObserver(
-            forName: .terminalSurfaceDidBecomeReady,
-            object: panel.surface,
-            queue: .main
-        ) { [weak panel] _ in
-            guard !resolved, let panel else { return }
-            resolved = true
-            if let observer { NotificationCenter.default.removeObserver(observer) }
-            panel.sendInput(text)
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-            guard !resolved else { return }
-            resolved = true
-            if let observer { NotificationCenter.default.removeObserver(observer) }
-            NSLog("[CmuxConfig] surface not ready after 3s, dropping command (%d chars)", text.count)
+        _ = panel.surface.onRuntimeReady { [weak panel] in
+            panel?.sendInput(text)
         }
     }
 }
@@ -8529,6 +8535,17 @@ final class Workspace: Identifiable, ObservableObject {
             from: geometrySnapshot,
             tabBarHeight: splitController.configuration.appearance.tabBarHeight
         )
+        let viewportSnapshots: [WorkspaceLayoutViewportSnapshot]
+        if context.isWorkspaceVisible {
+            viewportSnapshots = makeViewportSnapshots(
+                node: splitController.renderRootNode,
+                projectionState: projectionState,
+                context: context,
+                paneFramesById: viewportFrames
+            )
+        } else {
+            viewportSnapshots = []
+        }
         return WorkspaceLayoutRenderSnapshot(
             presentation: WorkspaceLayoutPresentationSnapshot(
                 appearance: splitController.configuration.appearance,
@@ -8550,12 +8567,7 @@ final class Workspace: Identifiable, ObservableObject {
                 projectionState: projectionState,
                 context: context
             ),
-            viewports: makeViewportSnapshots(
-                node: splitController.renderRootNode,
-                projectionState: projectionState,
-                context: context,
-                paneFramesById: viewportFrames
-            )
+            viewports: viewportSnapshots
         )
     }
 
@@ -10068,10 +10080,6 @@ final class Workspace: Identifiable, ObservableObject {
             terminalInheritanceFontPointsByPanelId.removeValue(forKey: newPanel.id)
             return nil
         }
-
-#if DEBUG
-        dlog("split.created pane=\(paneId.id.uuidString.prefix(5)) orientation=\(orientation)")
-#endif
 
         // Suppress the old view's becomeFirstResponder side-effects during SwiftUI reparenting.
         // Without this, reparenting triggers onFocus + ghostty_surface_set_focus on the old view,

@@ -3549,6 +3549,8 @@ final class GhosttyMetalLayer: CAMetalLayer {
     private let lock = NSLock()
     private var drawableCount: Int = 0
     private var lastDrawableTime: CFTimeInterval = 0
+    private var notifyOnNextDrawable = false
+    var onNextDrawable: (@MainActor @Sendable () -> Void)?
 
     func debugStats() -> (count: Int, last: CFTimeInterval) {
         lock.lock()
@@ -3556,12 +3558,31 @@ final class GhosttyMetalLayer: CAMetalLayer {
         return (drawableCount, lastDrawableTime)
     }
 
-    override func nextDrawable() -> CAMetalDrawable? {
+    func requestNextDrawableNotification() {
         lock.lock()
-        drawableCount += 1
-        lastDrawableTime = CACurrentMediaTime()
+        notifyOnNextDrawable = true
         lock.unlock()
-        return super.nextDrawable()
+    }
+
+    override func nextDrawable() -> CAMetalDrawable? {
+        let drawable = super.nextDrawable()
+        var callback: (@MainActor @Sendable () -> Void)?
+        lock.lock()
+        if drawable != nil {
+            drawableCount += 1
+            lastDrawableTime = CACurrentMediaTime()
+            if notifyOnNextDrawable {
+                notifyOnNextDrawable = false
+                callback = onNextDrawable
+            }
+        }
+        lock.unlock()
+        if let callback {
+            Task { @MainActor in
+                callback()
+            }
+        }
+        return drawable
     }
 }
 
@@ -3697,7 +3718,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
     private var pendingSocketInputQueue: [PendingSocketInput] = []
     private var pendingSocketInputBytes: Int = 0
     private let maxPendingSocketInputBytes = 1_048_576
-    private var backgroundSurfaceStartQueued = false
+    private var pendingReadyCallbacks: [UUID: () -> Void] = [:]
     private var surfaceCallbackContext: Unmanaged<GhosttySurfaceCallbackContext>?
     /// The desired focus state for the Ghostty C surface. May be set before the
     /// C surface exists (e.g. during layout restoration); `createSurface`
@@ -4226,14 +4247,8 @@ final class TerminalSurface: Identifiable, ObservableObject {
         abs(lhs - rhs) <= epsilon
     }
 
-    func attachToView(_ view: GhosttyNSView) {
+    func bindToView(_ view: GhosttyNSView) {
 #if DEBUG
-        CmuxTerminalHostDebugLog.log(
-            "h1.surface.attach.enter surface=\(id.uuidString.prefix(5)) " +
-            "view=\(Unmanaged.passUnretained(view).toOpaque()) " +
-            "attached=\(attachedView != nil ? 1 : 0) hasSurface=\(surface != nil ? 1 : 0) " +
-            "inWindow=\(view.window != nil ? 1 : 0) bounds=\(CmuxTerminalHostDebugLog.rect(view.bounds))"
-        )
         dlog(
             "surface.attach surface=\(id.uuidString.prefix(5)) view=\(Unmanaged.passUnretained(view).toOpaque()) " +
             "attached=\(attachedView != nil ? 1 : 0) hasSurface=\(surface != nil ? 1 : 0) inWindow=\(view.window != nil ? 1 : 0)"
@@ -4248,30 +4263,16 @@ final class TerminalSurface: Identifiable, ObservableObject {
         // SwiftUI also re-enters this path for ordinary state propagation (drag hover, active
         // markers, visibility flags), so avoid forcing a geometry refresh when the attachment
         // itself is unchanged.
-        if attachedView === view && surface != nil {
+        if attachedView === view {
 #if DEBUG
-            CmuxTerminalHostDebugLog.log(
-                "h1.surface.attach.reuse surface=\(id.uuidString.prefix(5)) " +
-                "view=\(Unmanaged.passUnretained(view).toOpaque()) inWindow=\(view.window != nil ? 1 : 0)"
-            )
             dlog("surface.attach.reuse surface=\(id.uuidString.prefix(5)) view=\(Unmanaged.passUnretained(view).toOpaque())")
 #endif
-            if let screen = view.window?.screen ?? NSScreen.main,
-               let displayID = screen.displayID,
-               displayID != 0,
-               let s = surface {
-                ghostty_surface_set_display_id(s, displayID)
-            }
+            updateDisplayIDIfPossible(for: view)
             return
         }
 
         if let attachedView, attachedView !== view {
 #if DEBUG
-            CmuxTerminalHostDebugLog.log(
-                "h1.surface.attach.skip surface=\(id.uuidString.prefix(5)) " +
-                "reason=alreadyAttachedToDifferentView current=\(Unmanaged.passUnretained(attachedView).toOpaque()) " +
-                "new=\(Unmanaged.passUnretained(view).toOpaque())"
-            )
             dlog(
                 "surface.attach.skip surface=\(id.uuidString.prefix(5)) reason=alreadyAttachedToDifferentView " +
                 "current=\(Unmanaged.passUnretained(attachedView).toOpaque()) new=\(Unmanaged.passUnretained(view).toOpaque())"
@@ -4281,59 +4282,63 @@ final class TerminalSurface: Identifiable, ObservableObject {
         }
 
         attachedView = view
+        updateDisplayIDIfPossible(for: view)
+    }
 
-        // If surface doesn't exist yet, create it once the view is in a real window so
-        // content scale and pixel geometry are derived from the actual backing context.
-        if surface == nil {
-            guard allowsRuntimeSurfaceCreation() else {
+    func realizeRuntimeIfPossible(reason: String) {
+        guard allowsRuntimeSurfaceCreation() else {
 #if DEBUG
-                dlog(
-                    "surface.attach.skip surface=\(id.uuidString.prefix(5)) " +
-                    "reason=lifecycle.\(portalLifecycleState.rawValue)"
-                )
-#endif
-                return
-            }
-            guard view.window != nil else {
-#if DEBUG
-                CmuxTerminalHostDebugLog.log(
-                    "h1.surface.attach.defer surface=\(id.uuidString.prefix(5)) " +
-                    "reason=noWindow bounds=\(CmuxTerminalHostDebugLog.rect(view.bounds))"
-                )
-                dlog(
-                    "surface.attach.defer surface=\(id.uuidString.prefix(5)) reason=noWindow " +
-                    "bounds=\(String(format: "%.1fx%.1f", view.bounds.width, view.bounds.height))"
-                )
-#endif
-                return
-            }
-#if DEBUG
-            CmuxTerminalHostDebugLog.log(
-                "h1.surface.attach.create surface=\(id.uuidString.prefix(5)) " +
-                "view=\(Unmanaged.passUnretained(view).toOpaque()) inWindow=\(view.window != nil ? 1 : 0)"
+            dlog(
+                "surface.realize.skip surface=\(id.uuidString.prefix(5)) " +
+                "reason=lifecycle.\(portalLifecycleState.rawValue) source=\(reason)"
             )
-            dlog("surface.attach.create surface=\(id.uuidString.prefix(5))")
+#endif
+            return
+        }
+
+        guard let view = attachedView else {
+#if DEBUG
+            dlog("surface.realize.skip surface=\(id.uuidString.prefix(5)) reason=noAttachedView source=\(reason)")
+#endif
+            return
+        }
+
+        guard view.window != nil else {
+#if DEBUG
+            dlog(
+                "surface.realize.defer surface=\(id.uuidString.prefix(5)) reason=noWindow " +
+                "bounds=\(String(format: "%.1fx%.1f", view.bounds.width, view.bounds.height)) source=\(reason)"
+            )
+#endif
+            return
+        }
+
+        if surface == nil {
+#if DEBUG
+            dlog("surface.attach.create surface=\(id.uuidString.prefix(5)) source=\(reason)")
 #endif
             createSurface(for: view)
 #if DEBUG
-            CmuxTerminalHostDebugLog.log(
-                "h1.surface.attach.create.done surface=\(id.uuidString.prefix(5)) hasSurface=\(surface != nil ? 1 : 0)"
-            )
-            dlog("surface.attach.create.done surface=\(id.uuidString.prefix(5)) hasSurface=\(surface != nil ? 1 : 0)")
+            dlog("surface.attach.create.done surface=\(id.uuidString.prefix(5)) hasSurface=\(surface != nil ? 1 : 0) source=\(reason)")
 #endif
-        } else if let screen = view.window?.screen ?? NSScreen.main,
-                  let displayID = screen.displayID,
-                  displayID != 0,
-                  let s = surface {
-            // Surface exists but we're (re)attaching after a view hierarchy move; ensure display id.
-            ghostty_surface_set_display_id(s, displayID)
-#if DEBUG
-            CmuxTerminalHostDebugLog.log(
-                "h1.surface.attach.displayId surface=\(id.uuidString.prefix(5)) display=\(displayID)"
-            )
-            dlog("surface.attach.displayId surface=\(id.uuidString.prefix(5)) display=\(displayID)")
-#endif
+            return
         }
+
+        updateDisplayIDIfPossible(for: view)
+    }
+
+    private func updateDisplayIDIfPossible(for view: GhosttyNSView) {
+        guard let screen = view.window?.screen ?? NSScreen.main,
+              let displayID = screen.displayID,
+              displayID != 0,
+              let s = surface else {
+            return
+        }
+
+        ghostty_surface_set_display_id(s, displayID)
+#if DEBUG
+        dlog("surface.attach.displayId surface=\(id.uuidString.prefix(5)) display=\(displayID)")
+#endif
     }
 
     private func createSurface(for view: GhosttyNSView) {
@@ -4677,6 +4682,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
                 "workspaceId": tabId
             ]
         )
+        runPendingReadyCallbacks()
 
 #if DEBUG
         let runtimeFontText = cmuxCurrentSurfaceFontSizePoints(createdSurface).map {
@@ -4700,12 +4706,16 @@ final class TerminalSurface: Identifiable, ObservableObject {
     ) -> Bool {
         guard let surface = surface else { return false }
         _ = layerScale
+        let liveResizeActive = attachedView?.inLiveResize == true || attachedView?.window?.inLiveResize == true
+        let resizeStartedAt = liveResizeActive ? CACurrentMediaTime() : 0
 
         let resolvedBackingWidth = backingSize?.width ?? (width * xScale)
         let resolvedBackingHeight = backingSize?.height ?? (height * yScale)
         let wpx = pixelDimension(from: resolvedBackingWidth)
         let hpx = pixelDimension(from: resolvedBackingHeight)
         guard wpx > 0, hpx > 0 else { return false }
+        let previousPixelWidth = lastPixelWidth
+        let previousPixelHeight = lastPixelHeight
 
         let scaleChanged = !scaleApproximatelyEqual(xScale, lastXScale) || !scaleApproximatelyEqual(yScale, lastYScale)
         let sizeChanged = wpx != lastPixelWidth || hpx != lastPixelHeight
@@ -4714,7 +4724,9 @@ final class TerminalSurface: Identifiable, ObservableObject {
         Self.sizeLog("updateSize-call surface=\(id.uuidString.prefix(8)) size=\(wpx)x\(hpx) prev=\(lastPixelWidth)x\(lastPixelHeight) changed=\((scaleChanged || sizeChanged) ? 1 : 0)")
         #endif
 
-        guard scaleChanged || sizeChanged else { return false }
+        guard scaleChanged || sizeChanged else {
+            return false
+        }
 
         #if DEBUG
         if sizeChanged {
@@ -4755,7 +4767,6 @@ final class TerminalSurface: Identifiable, ObservableObject {
         dlog("forceRefresh: \(id) reason=\(reason) \(viewState)")
         #endif
         guard let view = attachedView,
-              let surface,
               view.window != nil,
               view.bounds.width > 0,
               view.bounds.height > 0 else {
@@ -4928,38 +4939,36 @@ final class TerminalSurface: Identifiable, ObservableObject {
         }
 
         guard allowsRuntimeSurfaceCreation() else { return }
-        guard surface == nil, attachedView != nil else { return }
-        guard !backgroundSurfaceStartQueued else { return }
-        backgroundSurfaceStartQueued = true
-#if DEBUG
-        CmuxTerminalHostDebugLog.log(
-            "h1.backgroundStart.queue surface=\(id.uuidString.prefix(5)) " +
-            "attachedView=\(Unmanaged.passUnretained(attachedView!).toOpaque()) " +
-            "inWindow=\(attachedView?.window != nil ? 1 : 0)"
-        )
-#endif
+        guard surface == nil else { return }
+        hostedView.requestBackgroundRuntimeStartIfNeeded(reason: "surface.backgroundStart")
+    }
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.backgroundSurfaceStartQueued = false
-            guard self.allowsRuntimeSurfaceCreation() else { return }
-            guard self.surface == nil, let view = self.attachedView else { return }
-            #if DEBUG
-            let startedAt = ProcessInfo.processInfo.systemUptime
-            #endif
-            self.createSurface(for: view)
-            #if DEBUG
-            let elapsedMs = (ProcessInfo.processInfo.systemUptime - startedAt) * 1000.0
-            CmuxTerminalHostDebugLog.log(
-                "h1.backgroundStart.run surface=\(self.id.uuidString.prefix(5)) " +
-                "inWindow=\(view.window != nil ? 1 : 0) ready=\(self.surface != nil ? 1 : 0) " +
-                "bounds=\(CmuxTerminalHostDebugLog.rect(view.bounds)) ms=\(String(format: "%.2f", elapsedMs))"
-            )
-            dlog(
-                "surface.background_start surface=\(self.id.uuidString.prefix(8)) inWindow=\(view.window != nil ? 1 : 0) ready=\(self.surface != nil ? 1 : 0) ms=\(String(format: "%.2f", elapsedMs))"
-            )
-            #endif
+    @discardableResult
+    func onRuntimeReady(_ action: @escaping () -> Void) -> UUID? {
+        dispatchPrecondition(condition: .onQueue(.main))
+
+        guard surface == nil else {
+            action()
+            return nil
         }
+
+        let token = UUID()
+        pendingReadyCallbacks[token] = action
+        return token
+    }
+
+    func cancelRuntimeReadyCallback(_ token: UUID?) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard let token else { return }
+        pendingReadyCallbacks.removeValue(forKey: token)
+    }
+
+    private func runPendingReadyCallbacks() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !pendingReadyCallbacks.isEmpty else { return }
+        let callbacks = Array(pendingReadyCallbacks.values)
+        pendingReadyCallbacks.removeAll()
+        callbacks.forEach { $0() }
     }
 
     private func writeTextData(_ data: Data, to surface: ghostty_surface_t) {
@@ -5369,6 +5378,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     private let _scrollbarLock = NSLock()
     var cellSize: CGSize = .zero
     private var lastKnownMousePointInView: NSPoint?
+    weak var hostedScrollView: GhosttySurfaceScrollView?
 
     /// Coalesce high-frequency scrollbar updates into a single main-thread
     /// dispatch.  The action callback (which may fire thousands of times per
@@ -5502,7 +5512,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     }
 
     override func makeBackingLayer() -> CALayer {
-        let metalLayer = CAMetalLayer()
+        let metalLayer = GhosttyMetalLayer()
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.isOpaque = false
         // framebufferOnly=false lets the macOS compositor read the drawable
@@ -5510,12 +5520,13 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         // standalone Ghostty's SurfaceView and is required for background-opacity
         // and background-blur to render correctly.
         metalLayer.framebufferOnly = false
+        metalLayer.onNextDrawable = { [weak self] in
+            self?.hostedScrollView?.handleSurfaceFirstDrawable()
+        }
         return metalLayer
     }
 
     private func setup() {
-        // Only enable our instrumented CAMetalLayer in targeted debug/test scenarios.
-        // The lock in GhosttyMetalLayer.nextDrawable() adds overhead we don't want in normal runs.
         wantsLayer = true
         layer?.masksToBounds = true
         installEventMonitor()
@@ -5647,21 +5658,13 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     func attachSurface(_ surface: TerminalSurface) {
         let isSameSurface = terminalSurface === surface
         let isAlreadyAttached = surface.isAttached(to: self)
-#if DEBUG
-        CmuxTerminalHostDebugLog.log(
-            "h1.surfaceView.attachSurface.enter surface=\(surface.id.uuidString.prefix(5)) " +
-            "sameSurface=\(isSameSurface ? 1 : 0) alreadyAttached=\(isAlreadyAttached ? 1 : 0) " +
-            "runtime=\(surface.surface != nil ? 1 : 0) viewWindow=\(window != nil ? 1 : 0) " +
-            "bounds=\(CmuxTerminalHostDebugLog.rect(bounds))"
-        )
-#endif
         if !isSameSurface {
             appliedColorScheme = nil
         }
         terminalSurface = surface
         tabId = surface.tabId
         if !isAlreadyAttached {
-            surface.attachToView(self)
+            surface.bindToView(self)
         }
         surface.setKeyboardCopyModeActive(keyboardCopyModeActive)
         if !isAlreadyAttached {
@@ -5669,14 +5672,6 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         }
         applySurfaceBackground()
         applySurfaceColorScheme(force: !isSameSurface || !isAlreadyAttached)
-#if DEBUG
-        CmuxTerminalHostDebugLog.log(
-            "h1.surfaceView.attachSurface.exit surface=\(surface.id.uuidString.prefix(5)) " +
-            "runtime=\(surface.surface != nil ? 1 : 0) viewWindow=\(window != nil ? 1 : 0) " +
-            "pending=\(String(format: "%.1fx%.1f", pendingSurfaceSize?.width ?? 0, pendingSurfaceSize?.height ?? 0)) " +
-            "bounds=\(CmuxTerminalHostDebugLog.rect(bounds))"
-        )
-#endif
     }
 
     override func viewDidMoveToWindow() {
@@ -5699,15 +5694,6 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
 #endif
         guard let window else { return }
 
-        // If the surface creation was deferred while detached, create/attach it now.
-        terminalSurface?.attachToView(self)
-#if DEBUG
-        CmuxTerminalHostDebugLog.log(
-            "h1.surfaceView.windowMove.afterAttach surface=\(terminalSurface?.id.uuidString.prefix(5) ?? "nil") " +
-            "runtime=\(terminalSurface?.surface != nil ? 1 : 0) " +
-            "inWindow=\(self.window != nil ? 1 : 0) bounds=\(CmuxTerminalHostDebugLog.rect(bounds))"
-        )
-#endif
         if let terminalSurface {
             NotificationCenter.default.post(
                 name: .terminalSurfaceHostedViewDidMoveToWindow,
@@ -5738,14 +5724,6 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         superview?.layoutSubtreeIfNeeded()
         layoutSubtreeIfNeeded()
         updateSurfaceSize()
-#if DEBUG
-        CmuxTerminalHostDebugLog.log(
-            "h2.surfaceView.windowMove.afterSize surface=\(terminalSurface?.id.uuidString.prefix(5) ?? "nil") " +
-            "runtime=\(terminalSurface?.surface != nil ? 1 : 0) " +
-            "pending=\(String(format: "%.1fx%.1f", pendingSurfaceSize?.width ?? 0, pendingSurfaceSize?.height ?? 0)) " +
-            "bounds=\(CmuxTerminalHostDebugLog.rect(bounds))"
-        )
-#endif
         terminalSurface?.hostedView.refreshPanelBackgroundFill(reason: "surfaceView.viewDidMoveToWindow")
         applySurfaceBackground()
         applySurfaceColorScheme(force: true)
@@ -5785,13 +5763,21 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             layer?.contentsScale = window.backingScaleFactor
             CATransaction.commit()
         }
-        updateSurfaceSize()
+        if visibleInUI && !isHiddenOrHasHiddenAncestor {
+            updateSurfaceSize()
+        } else {
+            pendingSurfaceSize = resolvedSurfaceSize(preferred: nil)
+        }
         invalidateTextInputCoordinates()
     }
 
     override func layout() {
         super.layout()
-        updateSurfaceSize()
+        if visibleInUI && !isHiddenOrHasHiddenAncestor {
+            updateSurfaceSize()
+        } else {
+            pendingSurfaceSize = resolvedSurfaceSize(preferred: nil)
+        }
         invalidateTextInputCoordinates()
     }
 
@@ -5984,6 +5970,21 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         updateSurfaceSize(size: size)
     }
 
+    @discardableResult
+    func realizeRuntimeIfPossible(reason: String) -> Bool {
+        let hadRuntime = terminalSurface?.surface != nil
+        terminalSurface?.realizeRuntimeIfPossible(reason: reason)
+        let hasRuntime = terminalSurface?.surface != nil
+        if hasRuntime {
+            applySurfaceColorScheme(force: true)
+        }
+        return !hadRuntime && hasRuntime
+    }
+
+    func requestNextDrawableNotification() {
+        (layer as? GhosttyMetalLayer)?.requestNextDrawableNotification()
+    }
+
 #if DEBUG
     fileprivate func debugPendingSurfaceSize() -> CGSize? {
         pendingSurfaceSize
@@ -6047,9 +6048,10 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             return surface
         }
         guard window != nil else { return nil }
-        terminalSurface?.attachToView(self)
-        updateSurfaceSize(size: bounds.size)
-        applySurfaceColorScheme(force: true)
+        hostedScrollView?.reconcileViewportLifecycle(
+            reason: "surfaceView.ensureReadyForInput",
+            force: true
+        )
         return surface
     }
 
@@ -8949,6 +8951,160 @@ private final class GhosttyWindowFocusCoordinator {
 }
 
 final class GhosttySurfaceScrollView: NSView {
+    private enum RuntimeActivationDemand: Int, Comparable, Sendable {
+        case none
+        case background
+        case visible
+
+        static func < (lhs: RuntimeActivationDemand, rhs: RuntimeActivationDemand) -> Bool {
+            lhs.rawValue < rhs.rawValue
+        }
+    }
+
+    private enum ViewportLifecyclePhase: String, Equatable, Sendable {
+        case detached
+        case mountedHidden
+        case mountedAwaitingWindow
+        case mountedAwaitingGeometry
+        case runtimeRealized
+        case awaitingFirstFrame
+        case visible
+        case visibleFocused
+    }
+
+    private struct ViewportLifecycleFacts: Equatable, Sendable {
+        let isVisibleInUI: Bool
+        let isWindowed: Bool
+        let hasUsableGeometry: Bool
+        let hasRuntime: Bool
+        let hasPresentedFrame: Bool
+        let isActive: Bool
+    }
+
+    private enum ViewportLifecycleCommand: Equatable, Sendable {
+        case realizeRuntime
+        case synchronizeVisibleGeometry
+        case requestFirstFrame
+        case resumeFocus
+    }
+
+    private struct ViewportLifecycleUpdate: Equatable, Sendable {
+        let phase: ViewportLifecyclePhase
+        let demand: RuntimeActivationDemand
+        let commands: [ViewportLifecycleCommand]
+    }
+
+    @MainActor
+    private final class TerminalViewportLifecycleController {
+        private(set) var phase: ViewportLifecyclePhase = .detached
+        private var backgroundRuntimeRequested = false
+        private var lastFacts: ViewportLifecycleFacts?
+        private var lastDemand: RuntimeActivationDemand = .none
+        private var issuedFirstFrameRequestForCurrentAwait = false
+
+        func requestBackgroundRuntime() {
+            backgroundRuntimeRequested = true
+        }
+
+        func reset() {
+            phase = .detached
+            backgroundRuntimeRequested = false
+            lastFacts = nil
+            lastDemand = .none
+            issuedFirstFrameRequestForCurrentAwait = false
+        }
+
+        private func effectiveDemand(for facts: ViewportLifecycleFacts) -> RuntimeActivationDemand {
+            if facts.isVisibleInUI {
+                return .visible
+            }
+            return backgroundRuntimeRequested ? .background : .none
+        }
+
+        func reconcile(facts: ViewportLifecycleFacts, force: Bool) -> ViewportLifecycleUpdate? {
+            let previousFacts = lastFacts
+            let demand = effectiveDemand(for: facts)
+            let previousPhase = phase
+            let previousDemand = lastDemand
+            var commands: [ViewportLifecycleCommand] = []
+            let nextPhase: ViewportLifecyclePhase
+
+            switch demand {
+            case .none:
+                issuedFirstFrameRequestForCurrentAwait = false
+                nextPhase = facts.isWindowed ? .mountedHidden : .detached
+
+            case .background:
+                issuedFirstFrameRequestForCurrentAwait = false
+                if !facts.isWindowed {
+                    nextPhase = .mountedAwaitingWindow
+                } else if !facts.hasUsableGeometry {
+                    nextPhase = .mountedHidden
+                } else if facts.hasRuntime {
+                    nextPhase = .runtimeRealized
+                    backgroundRuntimeRequested = false
+                } else {
+                    nextPhase = .runtimeRealized
+                    commands.append(.realizeRuntime)
+                }
+
+            case .visible:
+                if !facts.isWindowed {
+                    issuedFirstFrameRequestForCurrentAwait = false
+                    nextPhase = .mountedAwaitingWindow
+                } else if !facts.hasUsableGeometry {
+                    issuedFirstFrameRequestForCurrentAwait = false
+                    nextPhase = .mountedAwaitingGeometry
+                } else if !facts.hasRuntime {
+                    issuedFirstFrameRequestForCurrentAwait = false
+                    nextPhase = .runtimeRealized
+                    commands.append(.realizeRuntime)
+                    commands.append(.synchronizeVisibleGeometry)
+                } else if !facts.hasPresentedFrame {
+                    nextPhase = .awaitingFirstFrame
+                    commands.append(.synchronizeVisibleGeometry)
+                    if !issuedFirstFrameRequestForCurrentAwait || previousPhase != .awaitingFirstFrame {
+                        commands.append(.requestFirstFrame)
+                        issuedFirstFrameRequestForCurrentAwait = true
+                    }
+                } else {
+                    issuedFirstFrameRequestForCurrentAwait = false
+                    nextPhase = facts.isActive ? .visibleFocused : .visible
+                    commands.append(.synchronizeVisibleGeometry)
+                    if facts.isActive {
+                        commands.append(.resumeFocus)
+                    }
+                }
+            }
+
+            phase = nextPhase
+            lastFacts = facts
+            lastDemand = demand
+
+            if !force,
+               nextPhase == previousPhase,
+               demand == previousDemand,
+               facts == previousFacts,
+               commands.isEmpty {
+                return nil
+            }
+
+            return ViewportLifecycleUpdate(
+                phase: nextPhase,
+                demand: demand,
+                commands: Self.deduplicated(commands)
+            )
+        }
+
+        private static func deduplicated(_ commands: [ViewportLifecycleCommand]) -> [ViewportLifecycleCommand] {
+            var result: [ViewportLifecycleCommand] = []
+            for command in commands where !result.contains(command) {
+                result.append(command)
+            }
+            return result
+        }
+    }
+
     enum FlashStyle {
         case navigation
         case notification
@@ -9019,11 +9175,13 @@ final class GhosttySurfaceScrollView: NSView {
     private var userScrolledAwayFromBottom = false
     private var pendingExplicitWheelScroll = false
     private var allowExplicitScrollbarSync = false
+    private var runtimeReadyCallbackToken: UUID?
     /// Threshold in points from bottom to consider "at bottom" (allows for minor float drift)
     private static let scrollToBottomThreshold: CGFloat = 5.0
     private var isActive = true
     private var lastFocusRefreshAt: CFTimeInterval = 0
     private var lastRequestedPortalOcclusionVisible: Bool?
+    private let viewportLifecycleController = TerminalViewportLifecycleController()
     private var activeDropZone: DropZone?
     private var pendingDropZone: DropZone?
     private var lastPanelBackgroundFallbackVisible: Bool?
@@ -9057,6 +9215,7 @@ final class GhosttySurfaceScrollView: NSView {
     private var lastDropZoneOverlayLogSignature: String?
     private var lastDragGeometryLogSignature: String?
     private var dragLayoutLogSequence: UInt64 = 0
+    private var liveResizeLogSequence: UInt64 = 0
     private static let tabTransferPasteboardType = NSPasteboard.PasteboardType("com.splittabbar.tabtransfer")
     private static let sidebarTabReorderPasteboardType = NSPasteboard.PasteboardType("com.cmux.sidebar-tab-reorder")
     private static var flashCounts: [UUID: Int] = [:]
@@ -9150,7 +9309,7 @@ final class GhosttySurfaceScrollView: NSView {
 
         if useDeferredPath {
             pendingDropZone = .left
-            synchronizeGeometryAndContent()
+            _ = synchronizeGeometryAndContent()
         } else {
             setDropZoneOverlay(zone: .left)
         }
@@ -9253,6 +9412,7 @@ final class GhosttySurfaceScrollView: NSView {
         documentView.addSubview(surfaceView)
 
         super.init(frame: .zero)
+        surfaceView.hostedScrollView = self
         wantsLayer = true
         layer?.masksToBounds = true
 
@@ -9477,24 +9637,6 @@ final class GhosttySurfaceScrollView: NSView {
         })
 
         observers.append(NotificationCenter.default.addObserver(
-            forName: .terminalSurfaceDidBecomeReady,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let self,
-                  let readySurfaceId = notification.userInfo?["surfaceId"] as? UUID,
-                  readySurfaceId == self.surfaceView.terminalSurface?.id else {
-                return
-            }
-            // Session restore can request focus before the runtime surface exists.
-            // Re-run the normal first-responder/focus path once the surface is live.
-            guard self.isActive || self.surfaceView.desiredFocus || self.isSurfaceViewFirstResponder() else {
-                return
-            }
-            self.scheduleAutomaticFirstResponderApply(reason: "surfaceDidBecomeReady")
-        })
-
-        observers.append(NotificationCenter.default.addObserver(
             forName: .ghosttyDidReceiveWheelScroll,
             object: surfaceView,
             queue: .main
@@ -9556,6 +9698,7 @@ final class GhosttySurfaceScrollView: NSView {
             "hidden=\(isHidden ? 1 : 0) frame=\(String(format: "%.1fx%.1f", frame.width, frame.height))"
         )
 #endif
+        surfaceView.terminalSurface?.cancelRuntimeReadyCallback(runtimeReadyCallbackToken)
         observers.forEach { NotificationCenter.default.removeObserver($0) }
         if let workspaceTerminalScrollBarObserver {
             NotificationCenter.default.removeObserver(workspaceTerminalScrollBarObserver)
@@ -9605,7 +9748,14 @@ final class GhosttySurfaceScrollView: NSView {
 
     override func layout() {
         super.layout()
-        synchronizeGeometryAndContent()
+        guard surfaceView.isVisibleInUI || activeDropZone != nil || pendingDropZone != nil else {
+            return
+        }
+        let requiresOverlayGeometry = activeDropZone != nil || pendingDropZone != nil
+        reconcileViewportLifecycle(reason: "hostedView.layout", force: false)
+        if requiresOverlayGeometry && !surfaceView.isVisibleInUI {
+            _ = synchronizeGeometryAndContent()
+        }
     }
 
     override func viewDidMoveToSuperview() {
@@ -9709,12 +9859,47 @@ final class GhosttySurfaceScrollView: NSView {
 #endif
     }
 
-    @discardableResult
+    private struct GeometrySyncPreparation {
+        let liveResizeActive: Bool
+        let totalStartedAt: CFTimeInterval
+        let previousSurfaceSize: CGSize
+        let targetSize: CGSize
+        let didScrollbarAppearanceChange: Bool
+    }
+
+    private struct GeometrySyncResult {
+        let didCoreSurfaceChange: Bool
+        let layoutMs: Double
+        let scrollSyncMs: Double
+        let surfaceSyncMs: Double
+        let coreSyncMs: Double
+        let fillMs: Double
+    }
+
     private func synchronizeGeometryAndContent() -> Bool {
+        let liveResizeActive = inLiveResize || window?.inLiveResize == true
+        let totalStartedAt = liveResizeActive ? CACurrentMediaTime() : 0
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        defer { CATransaction.commit() }
 
+        let preparation = prepareGeometrySync(
+            liveResizeActive: liveResizeActive,
+            totalStartedAt: totalStartedAt
+        )
+        let result = performGeometrySync(preparation)
+        let sizeChanged = !sizeApproximatelyEqual(
+            preparation.previousSurfaceSize,
+            preparation.targetSize
+        )
+        logGeometrySync(preparation, result: result, sizeChanged: sizeChanged)
+        CATransaction.commit()
+        return sizeChanged || result.didCoreSurfaceChange
+    }
+
+    private func prepareGeometrySync(
+        liveResizeActive: Bool,
+        totalStartedAt: CFTimeInterval
+    ) -> GeometrySyncPreparation {
         let didScrollbarAppearanceChange = synchronizeScrollbarAppearance()
         let previousSurfaceSize = surfaceView.frame.size
         _ = setFrameIfNeeded(backgroundView, to: bounds)
@@ -9723,13 +9908,17 @@ final class GhosttySurfaceScrollView: NSView {
 #if DEBUG
         logLayoutDuringActiveDrag(targetSize: targetSize)
 #endif
-        let targetSurfaceFrame = CGRect(origin: surfaceView.frame.origin, size: targetSize)
-        _ = setFrameIfNeeded(surfaceView, to: targetSurfaceFrame)
-        let targetDocumentFrame = CGRect(
-            origin: documentView.frame.origin,
-            size: CGSize(width: scrollView.bounds.width, height: documentView.frame.height)
+        _ = setFrameIfNeeded(
+            surfaceView,
+            to: CGRect(origin: surfaceView.frame.origin, size: targetSize)
         )
-        _ = setFrameIfNeeded(documentView, to: targetDocumentFrame)
+        _ = setFrameIfNeeded(
+            documentView,
+            to: CGRect(
+                origin: documentView.frame.origin,
+                size: CGSize(width: scrollView.bounds.width, height: documentView.frame.height)
+            )
+        )
         _ = setFrameIfNeeded(inactiveOverlayView, to: bounds)
         if let zone = activeDropZone {
             attachDropZoneOverlayIfNeeded()
@@ -9746,8 +9935,6 @@ final class GhosttySurfaceScrollView: NSView {
             let frame = dropZoneOverlayFrame(for: pending, in: bounds.size)
             logDropZoneOverlay(event: "flushPending", zone: pending, frame: frame)
 #endif
-            // Reuse the normal show/update path so deferred overlays get the
-            // same initial animation as direct drop-zone activation.
             setDropZoneOverlay(zone: pending)
         }
         _ = setFrameIfNeeded(notificationRingOverlayView, to: bounds)
@@ -9755,34 +9942,72 @@ final class GhosttySurfaceScrollView: NSView {
         if let overlay = searchOverlayHostingView {
             _ = setFrameIfNeeded(overlay, to: bounds)
         }
-        // NSScrollView can defer clip-view/content-size updates until its own layout pass,
-        // which makes interactive width changes arrive a queue turn late on Sequoia.
-        if didScrollbarAppearanceChange {
+        return GeometrySyncPreparation(
+            liveResizeActive: liveResizeActive,
+            totalStartedAt: totalStartedAt,
+            previousSurfaceSize: previousSurfaceSize,
+            targetSize: targetSize,
+            didScrollbarAppearanceChange: didScrollbarAppearanceChange
+        )
+    }
+
+    private func performGeometrySync(_ preparation: GeometrySyncPreparation) -> GeometrySyncResult {
+        if preparation.didScrollbarAppearanceChange {
+            // NSScrollView can defer clip-view/content-size updates until its own layout pass,
+            // which makes interactive width changes arrive a queue turn late on Sequoia.
             scrollView.tile()
         }
-        scrollView.layoutSubtreeIfNeeded()
+        let layoutMs = measureGeometrySync(preparation.liveResizeActive) {
+            scrollView.layoutSubtreeIfNeeded()
+        }
         updateNotificationRingPath()
         updateFlashPath(style: lastFlashStyle)
         updateFlashAppearance(style: lastFlashStyle)
-        synchronizeScrollView()
-        synchronizeSurfaceView()
-        let didCoreSurfaceChange = synchronizeCoreSurface()
-        refreshPanelBackgroundFill(reason: "synchronizeGeometryAndContent")
-        let sizeChanged = !sizeApproximatelyEqual(previousSurfaceSize, targetSize)
+        let scrollSyncMs = measureGeometrySync(preparation.liveResizeActive) {
+            synchronizeScrollView()
+        }
+        let surfaceSyncMs = measureGeometrySync(preparation.liveResizeActive) {
+            synchronizeSurfaceView()
+        }
+        var didCoreSurfaceChange = false
+        let coreSyncMs = measureGeometrySync(preparation.liveResizeActive) {
+            didCoreSurfaceChange = synchronizeCoreSurface()
+        }
+        let fillMs = measureGeometrySync(preparation.liveResizeActive) {
+            refreshPanelBackgroundFill(reason: "synchronizeGeometryAndContent")
+        }
+        return GeometrySyncResult(
+            didCoreSurfaceChange: didCoreSurfaceChange,
+            layoutMs: layoutMs,
+            scrollSyncMs: scrollSyncMs,
+            surfaceSyncMs: surfaceSyncMs,
+            coreSyncMs: coreSyncMs,
+            fillMs: fillMs
+        )
+    }
+
+    private func measureGeometrySync(_ liveResizeActive: Bool, _ body: () -> Void) -> Double {
+        let startedAt = liveResizeActive ? CACurrentMediaTime() : 0
+        body()
+        return liveResizeActive ? (CACurrentMediaTime() - startedAt) * 1000 : 0
+    }
+
+    private func logGeometrySync(
+        _ preparation: GeometrySyncPreparation,
+        result: GeometrySyncResult,
+        sizeChanged: Bool
+    ) {
 #if DEBUG
-        if sizeChanged || didCoreSurfaceChange {
-            CmuxTerminalHostDebugLog.log(
-                "h2.hosted.sync surface=\(debugSurfaceId?.uuidString.prefix(5) ?? "nil") " +
-                "runtime=\(debugRuntimeSurfaceReady ? 1 : 0) " +
-                "inWindow=\(window != nil ? 1 : 0) " +
-                "bounds=\(CmuxTerminalHostDebugLog.rect(bounds)) " +
-                "oldSurface=\(String(format: "%.1fx%.1f", previousSurfaceSize.width, previousSurfaceSize.height)) " +
-                "targetSurface=\(String(format: "%.1fx%.1f", targetSize.width, targetSize.height)) " +
-                "coreChanged=\(didCoreSurfaceChange ? 1 : 0)"
+        if preparation.liveResizeActive {
+            liveResizeLogSequence &+= 1
+            let totalMs = (CACurrentMediaTime() - preparation.totalStartedAt) * 1000
+            dlog(
+                "surface.resize surface=\(debugSurfaceId?.uuidString.prefix(5) ?? "nil") " +
+                "seq=\(liveResizeLogSequence) sizeChanged=\(sizeChanged ? 1 : 0) " +
+                "coreChanged=\(result.didCoreSurfaceChange ? 1 : 0) totalMs=\(String(format: "%.2f", totalMs))"
             )
         }
 #endif
-        return sizeChanged || didCoreSurfaceChange
     }
 
     @discardableResult
@@ -9914,6 +10139,7 @@ final class GhosttySurfaceScrollView: NSView {
         cancelFocusRequest()
         refreshPanelBackgroundFill(reason: "hostedView.viewDidMoveToWindow")
         guard let window else { return }
+        reconcileViewportLifecycle(reason: "hostedView.viewDidMoveToWindow", force: true)
         windowObservers.append(NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
             object: window,
@@ -9953,14 +10179,82 @@ final class GhosttySurfaceScrollView: NSView {
     }
 
     func attachSurface(_ terminalSurface: TerminalSurface) {
+        if surfaceView.terminalSurface !== terminalSurface {
+            surfaceView.terminalSurface?.cancelRuntimeReadyCallback(runtimeReadyCallbackToken)
+            runtimeReadyCallbackToken = nil
+            viewportLifecycleController.reset()
+        }
         surfaceView.attachSurface(terminalSurface)
         let workspace = terminalSurface.owningWorkspace()
         cachedOwningWorkspace = workspace
         updateWorkspaceTerminalScrollBarObserver(workspace)
-        // Preserve the bootstrap 800x600 surface until portal reattach churn
-        // has produced a real host size instead of a transient 1x1 placeholder.
-        guard bounds.width > 1, bounds.height > 1 else { return }
-        _ = synchronizeGeometryAndContent()
+        installRuntimeReadyCallback(for: terminalSurface)
+        reconcileViewportLifecycle(reason: "hostedView.attachSurface", force: true)
+    }
+
+    func requestBackgroundRuntimeStartIfNeeded(reason: String) {
+        guard let terminalSurface = surfaceView.terminalSurface else { return }
+        guard terminalSurface.surface == nil else {
+            return
+        }
+        viewportLifecycleController.requestBackgroundRuntime()
+        reconcileViewportLifecycle(reason: reason, force: true)
+    }
+
+    func handleSurfaceFirstDrawable() {
+        reconcileViewportLifecycle(reason: "hostedView.firstDrawable", force: true)
+    }
+
+    private func currentViewportLifecycleFacts() -> ViewportLifecycleFacts {
+        ViewportLifecycleFacts(
+            isVisibleInUI: surfaceView.isVisibleInUI,
+            isWindowed: window != nil,
+            hasUsableGeometry: bounds.width > 1 && bounds.height > 1,
+            hasRuntime: surfaceView.terminalSurface?.surface != nil,
+            hasPresentedFrame: surfaceHasPresentedFrame(),
+            isActive: isActive
+        )
+    }
+
+    private func applyViewportLifecycleUpdate(_ update: ViewportLifecycleUpdate, reason: String) {
+        for command in update.commands {
+            switch command {
+            case .realizeRuntime:
+                if update.demand == .visible {
+                    superview?.layoutSubtreeIfNeeded()
+                    layoutSubtreeIfNeeded()
+                }
+                _ = surfaceView.realizeRuntimeIfPossible(reason: reason)
+            case .synchronizeVisibleGeometry:
+                _ = synchronizeGeometryAndContent()
+            case .requestFirstFrame:
+                surfaceView.requestNextDrawableNotification()
+                refreshSurfaceNow(reason: "viewport.awaitingFirstFrame")
+            case .resumeFocus:
+                resumeReparentFocusIfSuppressed()
+            }
+        }
+    }
+
+    func reconcileViewportLifecycle(reason: String, force: Bool = false) {
+        let facts = currentViewportLifecycleFacts()
+        guard surfaceView.terminalSurface != nil,
+              let update = viewportLifecycleController.reconcile(facts: facts, force: force) else {
+            return
+        }
+        applyViewportLifecycleUpdate(update, reason: reason)
+    }
+
+    private func installRuntimeReadyCallback(for terminalSurface: TerminalSurface) {
+        terminalSurface.cancelRuntimeReadyCallback(runtimeReadyCallbackToken)
+        runtimeReadyCallbackToken = terminalSurface.onRuntimeReady { [weak self, weak terminalSurface] in
+            guard let self, let terminalSurface else { return }
+            guard terminalSurface === self.surfaceView.terminalSurface else { return }
+            guard self.isActive || self.surfaceView.desiredFocus || self.isSurfaceViewFirstResponder() else {
+                return
+            }
+            self.scheduleAutomaticFirstResponderApply(reason: "surfaceDidBecomeReady")
+        }
     }
 
     func setFocusHandler(_ handler: (() -> Void)?) {
@@ -10612,6 +10906,9 @@ final class GhosttySurfaceScrollView: NSView {
         let wasVisible = surfaceView.isVisibleInUI
         surfaceView.setVisibleInUI(visible)
         isHidden = !visible
+        if visible, !wasVisible, window != nil {
+            reconcileViewportLifecycle(reason: "hostedView.setVisibleInUI", force: true)
+        }
         if wasVisible != visible, lastRequestedPortalOcclusionVisible != visible {
             lastRequestedPortalOcclusionVisible = visible
             surfaceView.terminalSurface?.setOcclusion(visible)

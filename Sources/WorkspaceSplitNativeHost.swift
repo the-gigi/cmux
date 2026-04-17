@@ -956,7 +956,10 @@ private final class WorkspaceLayoutViewportCanvasView: NSView {
         if let existing = viewportHosts[identity] {
             return existing
         }
-        let host = WorkspaceLayoutSurfaceViewportHostView(mountIdentity: identity)
+        let host = WorkspaceLayoutSurfaceViewportHostView(
+            mountIdentity: identity,
+            surfaceRegistry: surfaceRegistry
+        )
         viewportHosts[identity] = host
         return host
     }
@@ -965,11 +968,18 @@ private final class WorkspaceLayoutViewportCanvasView: NSView {
 @MainActor
 private final class WorkspaceLayoutSurfaceViewportHostView: NSView {
     private let mountIdentity: WorkspacePaneMountIdentity
+    private let surfaceRegistry: WorkspaceSurfaceRegistry
     private let slotView = WorkspaceLayoutPaneContentSlotView(frame: .zero)
     private var mountedContent: WorkspaceLayoutMountedTabEntry?
+    private var currentSnapshot: WorkspaceLayoutViewportSnapshot?
+    private var lastLifecyclePhase: WorkspaceLayoutViewportPhase?
 
-    init(mountIdentity: WorkspacePaneMountIdentity) {
+    init(
+        mountIdentity: WorkspacePaneMountIdentity,
+        surfaceRegistry: WorkspaceSurfaceRegistry
+    ) {
         self.mountIdentity = mountIdentity
+        self.surfaceRegistry = surfaceRegistry
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
@@ -985,6 +995,12 @@ private final class WorkspaceLayoutSurfaceViewportHostView: NSView {
     override func layout() {
         super.layout()
         slotView.frame = bounds
+        reconcileViewportLifecycle(reason: "layout", force: false)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        reconcileViewportLifecycle(reason: "windowMove", force: true)
     }
 
     func apply(
@@ -993,6 +1009,7 @@ private final class WorkspaceLayoutSurfaceViewportHostView: NSView {
         activeDropZone: DropZone?
     ) {
         frame = snapshot.frame
+        currentSnapshot = snapshot
         let nextMountedContent = WorkspaceLayoutMountedTabEntry(
             contentId: snapshot.contentId,
             content: snapshot.content,
@@ -1017,6 +1034,7 @@ private final class WorkspaceLayoutSurfaceViewportHostView: NSView {
             activeDropZone: activeDropZone
         )
         mountedContent = nextMountedContent
+        reconcileViewportLifecycle(reason: "apply", force: true)
     }
 
     func prepareForRemoval(surfaceRegistry: WorkspaceSurfaceRegistry) {
@@ -1027,8 +1045,27 @@ private final class WorkspaceLayoutSurfaceViewportHostView: NSView {
                 from: slotView
             )
         }
+        currentSnapshot = nil
+        lastLifecyclePhase = nil
         mountedContent = nil
         removeFromSuperview()
+    }
+
+    private func reconcileViewportLifecycle(reason: String, force: Bool) {
+        guard let currentSnapshot else { return }
+        let nextPhase = WorkspaceLayoutViewportPhase(
+            content: currentSnapshot.content,
+            slotView: slotView
+        )
+        guard force || nextPhase != lastLifecyclePhase else { return }
+        lastLifecyclePhase = nextPhase
+        guard let mountedContent else { return }
+        surfaceRegistry.reconcileViewportLifecycle(
+            mountedContent.content,
+            contentId: mountedContent.contentId,
+            in: slotView,
+            reason: "viewport.\(reason)"
+        )
     }
 }
 
@@ -1037,6 +1074,46 @@ private struct WorkspaceLayoutMountedTabEntry {
     let contentId: UUID
     let content: WorkspacePaneContent
     let mountIdentity: WorkspacePaneMountIdentity
+}
+
+@MainActor
+private enum WorkspaceLayoutViewportPhase: Equatable {
+    case detached
+    case attachedHidden
+    case visibleAwaitingWindow
+    case visibleAwaitingGeometry
+    case visibleReady
+
+    init(content: WorkspacePaneContent, slotView: NSView) {
+        let isVisibleInUI = content.viewportIsVisibleInUI
+        let isWindowed = slotView.window != nil || slotView.superview?.window != nil
+        let hasUsableGeometry = slotView.bounds.width > 1 && slotView.bounds.height > 1
+
+        if !isWindowed {
+            self = isVisibleInUI ? .visibleAwaitingWindow : .detached
+        } else if !isVisibleInUI {
+            self = .attachedHidden
+        } else if !hasUsableGeometry {
+            self = .visibleAwaitingGeometry
+        } else {
+            self = .visibleReady
+        }
+    }
+}
+
+private extension WorkspacePaneContent {
+    var viewportIsVisibleInUI: Bool {
+        switch self {
+        case .terminal(let descriptor):
+            return descriptor.isVisibleInUI
+        case .browser(let descriptor):
+            return descriptor.isVisibleInUI
+        case .markdown(let descriptor):
+            return descriptor.isVisibleInUI
+        case .placeholder:
+            return true
+        }
+    }
 }
 
 @MainActor

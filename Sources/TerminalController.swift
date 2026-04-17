@@ -13403,23 +13403,18 @@ class TerminalController {
         let terminalSurface = terminalPanel.surface
         terminalSurface.requestBackgroundSurfaceStartIfNeeded()
         _ = v2AwaitCallback(timeout: timeout) { finish in
-            var readyObserver: NSObjectProtocol?
             var hostedViewObserver: NSObjectProtocol?
+            var readyToken: UUID?
             let finishOnce: () -> Void = {
-                if let readyObserver {
-                    NotificationCenter.default.removeObserver(readyObserver)
-                }
+                terminalSurface.cancelRuntimeReadyCallback(readyToken)
+                readyToken = nil
                 if let hostedViewObserver {
                     NotificationCenter.default.removeObserver(hostedViewObserver)
                 }
                 finish(())
             }
 
-            readyObserver = NotificationCenter.default.addObserver(
-                forName: .terminalSurfaceDidBecomeReady,
-                object: terminalSurface,
-                queue: .main
-            ) { _ in
+            readyToken = terminalSurface.onRuntimeReady {
                 finishOnce()
             }
             hostedViewObserver = NotificationCenter.default.addObserver(

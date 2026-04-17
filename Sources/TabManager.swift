@@ -2096,17 +2096,18 @@ class TabManager: ObservableObject {
         }
 
         var resolved = false
-        var readyObserver: NSObjectProtocol?
         var panelsCancellable: AnyCancellable?
+        var readyToken: UUID?
 
         func finishIfReady() {
             guard !resolved,
                   let terminalPanel = workspace.focusedTerminalPanel,
                   terminalPanel.surface.surface != nil else { return }
             resolved = true
-            if let readyObserver {
-                NotificationCenter.default.removeObserver(readyObserver)
+            if let terminalPanel = workspace.focusedTerminalPanel {
+                terminalPanel.surface.cancelRuntimeReadyCallback(readyToken)
             }
+            readyToken = nil
             panelsCancellable?.cancel()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 UserDefaults.standard.set(true, forKey: WelcomeSettings.shownKey)
@@ -2121,22 +2122,18 @@ class TabManager: ObservableObject {
                     finishIfReady()
                 }
             }
-        readyObserver = NotificationCenter.default.addObserver(
-            forName: .terminalSurfaceDidBecomeReady,
-            object: nil,
-            queue: .main
-        ) { note in
-            guard let workspaceId = note.userInfo?["workspaceId"] as? UUID,
-                  workspaceId == workspace.id else { return }
-            Task { @MainActor in
+        if let terminalPanel = workspace.focusedTerminalPanel {
+            terminalPanel.surface.requestBackgroundSurfaceStartIfNeeded()
+            readyToken = terminalPanel.surface.onRuntimeReady {
                 finishIfReady()
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
             Task { @MainActor in
-                if let readyObserver, !resolved {
-                    NotificationCenter.default.removeObserver(readyObserver)
+                if let terminalPanel = workspace.focusedTerminalPanel, !resolved {
+                    terminalPanel.surface.cancelRuntimeReadyCallback(readyToken)
                 }
+                readyToken = nil
                 if !resolved {
                     panelsCancellable?.cancel()
                 }
@@ -5573,17 +5570,18 @@ class TabManager: ObservableObject {
         return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
             var resolved = false
             var panelsCancellable: AnyCancellable?
-            var readyObserver: NSObjectProtocol?
             var hostedViewObserver: NSObjectProtocol?
+            var readyToken: UUID?
 
             @MainActor
             func finish(_ value: Bool) {
                 guard !resolved else { return }
                 resolved = true
                 panelsCancellable?.cancel()
-                if let readyObserver {
-                    NotificationCenter.default.removeObserver(readyObserver)
+                if let panel = tab.terminalPanel(for: panelId) {
+                    panel.surface.cancelRuntimeReadyCallback(readyToken)
                 }
+                readyToken = nil
                 if let hostedViewObserver {
                     NotificationCenter.default.removeObserver(hostedViewObserver)
                 }
@@ -5609,14 +5607,8 @@ class TabManager: ObservableObject {
                         evaluate()
                     }
                 }
-            readyObserver = NotificationCenter.default.addObserver(
-                forName: .terminalSurfaceDidBecomeReady,
-                object: nil,
-                queue: .main
-            ) { note in
-                guard let readySurfaceId = note.userInfo?["surfaceId"] as? UUID,
-                      readySurfaceId == panelId else { return }
-                Task { @MainActor in
+            if let panel = tab.terminalPanel(for: panelId) {
+                readyToken = panel.surface.onRuntimeReady {
                     evaluate()
                 }
             }
