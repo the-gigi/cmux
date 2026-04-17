@@ -573,6 +573,15 @@ final class SessionIndexStore: ObservableObject {
         return trimmed
     }
 
+    /// Claude Code marks sessions created over `claude ssh <host>` with an
+    /// `ssh-` prefix on the project directory name. Their recorded cwd is on
+    /// the remote machine, so a local `claude --resume` can't find them.
+    /// Filter them out of the local session index rather than surfacing broken
+    /// rows.
+    nonisolated private static func isClaudeRemoteProjectDir(_ dirName: String) -> Bool {
+        return dirName.hasPrefix("ssh-")
+    }
+
     nonisolated private static func decodeClaudeProjectDir(_ raw: String) -> String? {
         // Claude encodes cwd by replacing "/" with "-" and prefixing "-"
         // e.g. "-Users-lawrence-fun-cmuxterm-hq" -> "/Users/lawrence/fun/cmuxterm-hq".
@@ -987,9 +996,10 @@ final class SessionIndexStore: ObservableObject {
            let rgPaths = await ripgrepMatchingPaths(needle: needle, root: projectsRoot, fileGlob: "*.jsonl") {
             rgFiltered = true
             for url in rgPaths {
+                let dirName = url.deletingLastPathComponent().lastPathComponent
+                if isClaudeRemoteProjectDir(dirName) { continue }
                 guard let attrs = try? fm.attributesOfItem(atPath: url.path),
                       let mtime = attrs[.modificationDate] as? Date else { continue }
-                let dirName = url.deletingLastPathComponent().lastPathComponent
                 candidates.append((url, mtime, dirName))
             }
         } else if let cwdFilter {
@@ -1011,6 +1021,7 @@ final class SessionIndexStore: ObservableObject {
         } else {
             guard let projectDirs = try? fm.contentsOfDirectory(atPath: projectsRoot) else { return [] }
             for dirName in projectDirs {
+                if isClaudeRemoteProjectDir(dirName) { continue }
                 let dirPath = (projectsRoot as NSString).appendingPathComponent(dirName)
                 var isDir: ObjCBool = false
                 guard fm.fileExists(atPath: dirPath, isDirectory: &isDir), isDir.boolValue else { continue }
