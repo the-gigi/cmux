@@ -11139,7 +11139,12 @@ final class Workspace: Identifiable, ObservableObject {
         entry: SessionEntry,
         destination: BonsplitController.ExternalTabDropRequest.Destination
     ) -> Bool {
-        let inputWithReturn = entry.resumeCommand + "\n"
+        // The dropped terminal is freshly spawned with `workingDirectory:
+        // entry.cwd`, but the shell's rc files can still land it somewhere
+        // else (e.g. an auto-chdir in zshrc). Prepend `cd` so the resume
+        // lands in the session's cwd regardless of the shell's post-startup
+        // cwd.
+        let inputWithReturn = entry.resumeCommand(alreadyInCwd: false) + "\n"
         switch destination {
         case .insert(let paneId, _):
             let panel = newTerminalSurface(

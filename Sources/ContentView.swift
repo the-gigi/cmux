@@ -2973,7 +2973,6 @@ struct ContentView: View {
     }
 
     private func resumeSession(entry: SessionEntry) {
-        let inputWithReturn = entry.resumeCommand + "\n"
         let targetCwd = entry.cwd
 
         // Smart placement: if the focused workspace's tracked cwd matches, open a
@@ -2996,9 +2995,15 @@ struct ContentView: View {
             return lhs == rhs
         }()
 
+        // Only skip the `cd` prefix when the receiving terminal is guaranteed to
+        // already be in the session's cwd. That's only the cwd-match path where a
+        // fresh tab is spawned in the same workspace. For the new-workspace path,
+        // we still want the `cd` as a safety net in case the shell's rc files land
+        // it somewhere else.
         if pwdMatches,
            let workspace = selected,
            let paneId = workspace.bonsplitController.focusedPaneId {
+            let inputWithReturn = entry.resumeCommand(alreadyInCwd: true) + "\n"
             workspace.newTerminalSurface(
                 inPane: paneId,
                 focus: true,
@@ -3008,6 +3013,7 @@ struct ContentView: View {
             return
         }
 
+        let inputWithReturn = entry.resumeCommand(alreadyInCwd: false) + "\n"
         tabManager.addWorkspace(
             workingDirectory: targetCwd,
             initialTerminalInput: inputWithReturn

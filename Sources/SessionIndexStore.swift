@@ -99,8 +99,24 @@ struct SessionEntry: Identifiable, Hashable {
         }
     }
 
+    /// Shell command that resumes this session, prefixed with `cd <cwd> && ` when
+    /// the caller isn't already in the session's working directory. Use
+    /// `alreadyInCwd: true` for the in-app path that opens a new tab in the same
+    /// workspace as the session's cwd, so we don't emit a redundant `cd`. For the
+    /// clipboard / drag-drop / new-workspace paths, pass `false` (or leave default)
+    /// so the resume works regardless of where the receiving shell lands.
+    func resumeCommand(alreadyInCwd: Bool) -> String {
+        let base = resumeCommand
+        guard !alreadyInCwd,
+              let cwd,
+              !cwd.isEmpty else {
+            return base
+        }
+        return "cd \(Self.shellQuote(cwd)) && \(base)"
+    }
+
     /// Single-quote a value for safe shell injection. Escapes embedded single quotes.
-    private static func shellQuote(_ value: String) -> String {
+    fileprivate static func shellQuote(_ value: String) -> String {
         if value.range(of: "[^A-Za-z0-9_./:=+-]", options: .regularExpression) == nil {
             return value
         }
