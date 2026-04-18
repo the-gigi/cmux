@@ -617,11 +617,11 @@ private struct SectionPopoverView: View {
     @State private var hasMore: Bool = true
     @State private var isLoading: Bool = false
     @State private var activeQuery: String = ""
+    /// In-flight pagination task. Reassigned by `loadMore()`; the previous
+    /// task is cancelled implicitly. The initial / query-change load is
+    /// owned by SwiftUI via `.task(id: query)` and doesn't use this slot.
     @State private var loadTask: Task<Void, Never>?
     @State private var errorMessages: [String] = []
-    /// Bumped on each query reset so an in-flight task knows it's been superseded
-    /// even if cancellation hasn't propagated yet.
-    @State private var loadGeneration: Int = 0
 
     private static let pageSize = 30
 
@@ -743,17 +743,49 @@ private struct SectionPopoverView: View {
         .background(
             EscapeKeyCatcher { onDismiss() }
         )
-        .onAppear {
-            resetAndLoad(query: "")
-            DispatchQueue.main.async { searchFocused = true }
-        }
-        .onChange(of: query) { newValue in
-            resetAndLoad(query: newValue)
-        }
-        .onDisappear {
-            loadTask?.cancel()
-            loadTask = nil
-            isLoading = false
+        // Single SwiftUI-owned lifecycle for the initial load and every
+        // query change. `.task(id: query)` auto-cancels on view disappear
+        // AND on any `query` change, so we don't need onAppear +
+        // onChange + onDisappear + a manual generation counter to
+        // discard superseded fetches. The 200ms pause doubles as a
+        // debounce: rapid keystrokes bump `id:` which cancels this task
+        // before the sleep completes, preventing an unnecessary search.
+        .task(id: query) {
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            activeQuery = trimmed
+            errorMessages = []
+
+            if trimmed.isEmpty {
+                loaded = section.entries
+                // Optimistic: assume there might be more on disk; loadMore
+                // will discover the truth and flip hasMore off if a fetch
+                // returns nothing.
+                hasMore = !section.entries.isEmpty
+                isLoading = false
+                // Focus the search field on first appear. Deferred so it
+                // runs after the popover has been mounted.
+                if !searchFocused {
+                    await Task.yield()
+                    searchFocused = true
+                }
+                return
+            }
+
+            loaded = []
+            hasMore = true
+            isLoading = true
+
+            // Cancellation-sensitive debounce. If the user is still typing,
+            // SwiftUI cancels this task before we hit the search.
+            do {
+                try await Task.sleep(for: .milliseconds(200))
+            } catch {
+                return
+            }
+
+            let outcome = await search(trimmed, sectionSearchScope, 0, Self.pageSize)
+            guard !Task.isCancelled else { return }
+            applyOutcome(outcome, append: false)
         }
     }
 
@@ -770,56 +802,20 @@ private struct SectionPopoverView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Reset the page and load page 0.
-    /// - Empty query: synchronous fast path. Show the cached top-N from
-    ///   `section.entries` immediately so opening the popover never flashes a
-    ///   loading spinner. The sentinel row's loadMore will then fetch any
-    ///   additional pages from disk/SQL when the user scrolls past them.
-    /// - Non-empty query: 200ms debounce then deep search via the store.
-    private func resetAndLoad(query newValue: String) {
-        loadTask?.cancel()
-        loadGeneration += 1
-        let generation = loadGeneration
-        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        activeQuery = trimmed
-
-        if trimmed.isEmpty {
-            loaded = section.entries
-            // Optimistic: assume there might be more on disk; loadMore will
-            // discover the truth and flip hasMore off if a fetch returns nothing.
-            hasMore = !section.entries.isEmpty
-            isLoading = false
-            errorMessages = []
-            return
-        }
-
-        loaded = []
-        hasMore = true
-        isLoading = true
-        errorMessages = []
-        let scope = sectionSearchScope
-        let search = self.search
-        loadTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            if Task.isCancelled || generation != loadGeneration { return }
-            let outcome = await search(trimmed, scope, 0, Self.pageSize)
-            if Task.isCancelled || generation != loadGeneration { return }
-            applyOutcome(outcome, append: false)
-        }
-    }
-
-    /// Append the next page to `loaded`. Triggered by the sentinel row's onAppear.
+    /// Append the next page to `loaded`. Triggered by the sentinel row's
+    /// onAppear. Reassigning `loadTask` implicitly cancels any earlier
+    /// load-more still in flight; `Task.isCancelled` inside guards against
+    /// applying a superseded outcome.
     private func loadMore() {
         guard !isLoading, hasMore else { return }
         isLoading = true
-        let generation = loadGeneration
         let scope = sectionSearchScope
         let search = self.search
         let query = activeQuery
         let offset = loaded.count
         loadTask = Task { @MainActor in
             let outcome = await search(query, scope, offset, Self.pageSize)
-            if Task.isCancelled || generation != loadGeneration { return }
+            guard !Task.isCancelled else { return }
             applyOutcome(outcome, append: true)
         }
     }
