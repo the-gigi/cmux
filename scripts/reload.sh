@@ -328,20 +328,43 @@ fi
 XCODEBUILD_ARGS+=(build)
 
 XCODE_LOG="/tmp/cmux-xcodebuild-${TAG_SLUG}.log"
-XCODEBUILD_LOCK="/tmp/cmux-xcodebuild.lock"
+XCODEBUILD_LOCK="${TMPDIR:-/tmp}/cmux-xcodebuild-$(id -u).lock"
 # Xcode 26's SWBBuildService is a per-user singleton. Concurrent xcodebuild
 # invocations (even with separate -derivedDataPath) share that daemon and can
-# crash it, SIGTERMing in-flight builds. Serialize via a global flock so
+# crash it, SIGTERMing in-flight builds. Serialize via a per-user lock so
 # parallel reload.sh runs queue instead of trampling each other.
-if ! perl -MFcntl=:flock -e 'open(F, ">>", $ARGV[0]) or exit 0; exit(flock(F, LOCK_EX|LOCK_NB) ? 0 : 1)' "$XCODEBUILD_LOCK" 2>/dev/null; then
-  echo "==> Another xcodebuild is running; waiting for $XCODEBUILD_LOCK..."
-fi
 set +e
-perl -MFcntl=:flock -e '
-  open(my $fh, ">>", $ARGV[0]) or die "open lock: $!\n";
-  flock($fh, LOCK_EX) or die "flock: $!\n";
-  shift @ARGV;
-  exec { $ARGV[0] } @ARGV or die "exec: $!\n";
+python3 -c '
+import fcntl
+import os
+import sys
+
+lock_path = sys.argv[1]
+command = sys.argv[2:]
+
+try:
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+except OSError as exc:
+    raise SystemExit(f"open lock: {exc}")
+
+try:
+    flags = fcntl.fcntl(fd, fcntl.F_GETFD)
+    fcntl.fcntl(fd, fcntl.F_SETFD, flags & ~fcntl.FD_CLOEXEC)
+except OSError as exc:
+    raise SystemExit(f"fcntl lock fd: {exc}")
+
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    print(f"==> Another xcodebuild is running; waiting for {lock_path}...", file=sys.stderr, flush=True)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError as exc:
+        raise SystemExit(f"flock: {exc}")
+except OSError as exc:
+    raise SystemExit(f"flock: {exc}")
+
+os.execvp(command[0], command)
 ' "$XCODEBUILD_LOCK" xcodebuild "${XCODEBUILD_ARGS[@]}" 2>&1 | tee "$XCODE_LOG" | grep -E '(warning:|error:|fatal:|BUILD FAILED|BUILD SUCCEEDED|\*\* BUILD)'
 XCODE_PIPESTATUS=("${PIPESTATUS[@]}")
 set -e

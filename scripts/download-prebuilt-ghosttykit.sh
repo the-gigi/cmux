@@ -21,6 +21,47 @@ CHECKSUMS_FILE="${GHOSTTYKIT_CHECKSUMS_FILE:-$SCRIPT_DIR/ghosttykit-checksums.tx
 DOWNLOAD_URL="${GHOSTTYKIT_URL:-https://github.com/manaflow-ai/ghostty/releases/download/$TAG/$ARCHIVE_NAME}"
 DOWNLOAD_RETRIES="${GHOSTTYKIT_DOWNLOAD_RETRIES:-30}"
 DOWNLOAD_RETRY_DELAY="${GHOSTTYKIT_DOWNLOAD_RETRY_DELAY:-20}"
+DOWNLOAD_CONNECT_TIMEOUT="${GHOSTTYKIT_DOWNLOAD_CONNECT_TIMEOUT:-10}"
+DOWNLOAD_MAX_TIME="${GHOSTTYKIT_DOWNLOAD_MAX_TIME:-300}"
+
+validate_xcframework_archive() {
+  local archive="$1"
+  python3 - "$archive" <<'PY'
+from pathlib import PurePosixPath
+import sys
+import tarfile
+
+archive = sys.argv[1]
+root = "GhosttyKit.xcframework"
+
+def normalize(name: str) -> str:
+    while name.startswith("./"):
+        name = name[2:]
+    return name
+
+def is_safe_member(name: str) -> bool:
+    path = PurePosixPath(name)
+    return not path.is_absolute() and ".." not in path.parts
+
+with tarfile.open(archive, "r:gz") as tar:
+    saw_root = False
+    for member in tar.getmembers():
+        name = normalize(member.name)
+        if not is_safe_member(name):
+            raise SystemExit(f"unsafe archive entry: {member.name}")
+        if name != root and not name.startswith(root + "/"):
+            raise SystemExit(f"unexpected archive entry: {member.name}")
+        if member.islnk() or member.issym():
+            target = normalize(member.linkname)
+            if not target or not is_safe_member(target):
+                raise SystemExit(f"unsafe archive link target: {member.linkname}")
+        elif not (member.isfile() or member.isdir()):
+            raise SystemExit(f"unsupported archive member: {member.name}")
+        saw_root = True
+    if not saw_root:
+        raise SystemExit(f"archive missing {root}")
+PY
+}
 
 if [ ! -f "$CHECKSUMS_FILE" ]; then
   echo "Missing checksum file: $CHECKSUMS_FILE" >&2
@@ -48,14 +89,23 @@ if [ -z "$EXPECTED_SHA256" ]; then
 fi
 
 echo "Downloading $ARCHIVE_NAME for ghostty $GHOSTTY_SHA"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ghosttykit-download.XXXXXX")"
+trap 'rm -rf "$TMP_DIR"' EXIT
+ARCHIVE_BASENAME="$(basename "$ARCHIVE_NAME")"
+ARCHIVE_PATH="$TMP_DIR/$ARCHIVE_BASENAME"
+EXTRACT_DIR="$TMP_DIR/extract"
+mkdir -p "$EXTRACT_DIR"
+
 curl --fail --show-error --location \
+  --connect-timeout "$DOWNLOAD_CONNECT_TIMEOUT" \
+  --max-time "$DOWNLOAD_MAX_TIME" \
   --retry "$DOWNLOAD_RETRIES" \
   --retry-delay "$DOWNLOAD_RETRY_DELAY" \
   --retry-all-errors \
-  -o "$ARCHIVE_NAME" \
+  -o "$ARCHIVE_PATH" \
   "$DOWNLOAD_URL"
 
-ACTUAL_SHA256="$(shasum -a 256 "$ARCHIVE_NAME" | awk '{print $1}')"
+ACTUAL_SHA256="$(shasum -a 256 "$ARCHIVE_PATH" | awk '{print $1}')"
 if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
   echo "$ARCHIVE_NAME checksum mismatch" >&2
   echo "Expected: $EXPECTED_SHA256" >&2
@@ -63,9 +113,11 @@ if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
   exit 1
 fi
 
+validate_xcframework_archive "$ARCHIVE_PATH"
 rm -rf "$OUTPUT_DIR"
-tar xzf "$ARCHIVE_NAME"
-rm "$ARCHIVE_NAME"
+mkdir -p "$(dirname "$OUTPUT_DIR")"
+tar --no-same-owner -xzf "$ARCHIVE_PATH" -C "$EXTRACT_DIR"
+mv "$EXTRACT_DIR/GhosttyKit.xcframework" "$OUTPUT_DIR"
 test -d "$OUTPUT_DIR"
 
 echo "Verified and extracted $OUTPUT_DIR"
