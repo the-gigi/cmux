@@ -139,6 +139,9 @@ struct SessionIndexView: View {
         let searchFn: SessionSearchFn = { query, scope, offset, limit in
             await store.searchSessions(query: query, scope: scope, offset: offset, limit: limit)
         }
+        let loadSnapshotFn: DirectorySnapshotFn = { cwd in
+            await store.loadDirectorySnapshot(cwd: cwd)
+        }
 
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
@@ -172,7 +175,8 @@ struct SessionIndexView: View {
                         actions: IndexSectionActions(
                             onBeginDrag: { dragCoordinator.draggedKey = section.key },
                             onResume: onResumeClosure,
-                            search: searchFn
+                            search: searchFn,
+                            loadSnapshot: loadSnapshotFn
                         )
                     ).equatable()
                     let _ = index
@@ -232,6 +236,11 @@ typealias SessionSearchFn = @MainActor (
     _ limit: Int
 ) async -> SessionIndexStore.SearchOutcome
 
+/// Closure type for fetching the full merged snapshot of a directory.
+/// The popover uses this on the empty-query scroll path so pagination
+/// becomes an in-memory slice instead of repeated store round-trips.
+typealias DirectorySnapshotFn = @MainActor (_ cwd: String?) async -> DirectorySnapshot
+
 /// Callback bundle handed to `IndexSectionView` in place of a store reference.
 /// Every capability the row needs is expressed as a closure so no child view
 /// below the snapshot boundary can subscribe to `ObservableObject` updates —
@@ -241,6 +250,7 @@ struct IndexSectionActions {
     let onBeginDrag: @MainActor () -> Void
     let onResume: ((SessionEntry) -> Void)?
     let search: SessionSearchFn
+    let loadSnapshot: DirectorySnapshotFn
 }
 
 /// Callback bundle for `SectionReorderGap` / `SectionGapDropDelegate`.
@@ -319,6 +329,7 @@ private struct IndexSectionView: View, Equatable {
                 isPresented: $isPopoverOpen,
                 section: section,
                 search: actions.search,
+                loadSnapshot: actions.loadSnapshot,
                 onResume: actions.onResume
             )
         )
@@ -605,25 +616,36 @@ private struct SectionPopoverView: View {
     /// Closure-typed search handle. The popover never holds a reference to
     /// `SessionIndexStore`; the parent view is the only owner.
     let search: SessionSearchFn
+    /// Closure that returns the full merged snapshot for a directory.
+    /// Used on the empty-query directory-scope scroll path so pagination
+    /// is an in-memory array slice, not repeated store round-trips.
+    let loadSnapshot: DirectorySnapshotFn
     let onResume: ((SessionEntry) -> Void)?
     let onDismiss: () -> Void
 
     @State private var query: String = ""
     @FocusState private var searchFocused: Bool
 
-    /// Pages of results loaded so far. Each page is `pageSize` rows from the store's
-    /// paginated search.
+    /// Rows currently rendered in the popover. In snapshot mode this is a
+    /// prefix of `fullSnapshot`; in typed-query mode it's the accumulated
+    /// pages from the store.
     @State private var loaded: [SessionEntry] = []
     @State private var hasMore: Bool = true
     @State private var isLoading: Bool = false
     @State private var activeQuery: String = ""
-    /// In-flight pagination task. Reassigned by `loadMore()`; the previous
-    /// task is cancelled implicitly. The initial / query-change load is
-    /// owned by SwiftUI via `.task(id: query)` and doesn't use this slot.
+    /// In-flight pagination task for the typed-query path. Reassigned by
+    /// `loadMore()`; the previous task is cancelled implicitly. The
+    /// initial / query-change load is owned by SwiftUI via
+    /// `.task(id: query)` and doesn't use this slot.
     @State private var loadTask: Task<Void, Never>?
     @State private var errorMessages: [String] = []
+    /// Full merged snapshot of the directory (empty-query directory scope
+    /// only). When non-nil, `loadMore()` slices this array in memory
+    /// instead of hitting the store. `nil` for typed-query and for agent
+    /// scope, which fall back to the paged search path.
+    @State private var fullSnapshot: [SessionEntry]? = nil
 
-    private static let pageSize = 30
+    private static let pageSize = 100
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -756,14 +778,33 @@ private struct SectionPopoverView: View {
             errorMessages = []
 
             if trimmed.isEmpty {
+                // Fast first frame: render the scan-time top-N we already
+                // have while the full snapshot builds in parallel. On
+                // warm cache the snapshot returns immediately and the
+                // fast-path rows are replaced in the same tick.
                 loaded = section.entries
-                // Optimistic: assume there might be more on disk; loadMore
-                // will discover the truth and flip hasMore off if a fetch
-                // returns nothing.
                 hasMore = !section.entries.isEmpty
                 isLoading = false
-                // Focus the search field on first appear. Deferred so it
-                // runs after the popover has been mounted.
+
+                // Build-or-return the full directory snapshot. For
+                // directory scope scrolling this replaces per-page store
+                // fetches with a single merged array + in-memory slice.
+                // Agent-scope popovers keep the old paged flow (no
+                // snapshot needed, store.entries already top-N per agent).
+                if case .directory(let path) = sectionSearchScope {
+                    let snapshot = await loadSnapshot(path)
+                    guard !Task.isCancelled else { return }
+                    fullSnapshot = snapshot.entries
+                    // Show the first page's worth immediately; loadMore
+                    // grows `loaded` from the snapshot on scroll.
+                    let initialWindow = min(Self.pageSize, snapshot.entries.count)
+                    loaded = Array(snapshot.entries.prefix(initialWindow))
+                    hasMore = initialWindow < snapshot.entries.count
+                    errorMessages = snapshot.errors
+                } else {
+                    fullSnapshot = nil
+                }
+
                 if !searchFocused {
                     await Task.yield()
                     searchFocused = true
@@ -771,12 +812,15 @@ private struct SectionPopoverView: View {
                 return
             }
 
+            // Typed query — drop any prior snapshot and run a paged
+            // search instead. Cancellation-sensitive debounce: rapid
+            // keystrokes bump id: and SwiftUI cancels before the search
+            // fires.
+            fullSnapshot = nil
             loaded = []
             hasMore = true
             isLoading = true
 
-            // Cancellation-sensitive debounce. If the user is still typing,
-            // SwiftUI cancels this task before we hit the search.
             do {
                 try await Task.sleep(for: .milliseconds(200))
             } catch {
@@ -803,11 +847,20 @@ private struct SectionPopoverView: View {
     }
 
     /// Append the next page to `loaded`. Triggered by the sentinel row's
-    /// onAppear. Reassigning `loadTask` implicitly cancels any earlier
-    /// load-more still in flight; `Task.isCancelled` inside guards against
-    /// applying a superseded outcome.
+    /// onAppear. In snapshot mode (empty-query directory scope) this is a
+    /// pure in-memory array slice — zero store calls. In typed-query mode
+    /// it fires a paged search. Reassigning `loadTask` implicitly cancels
+    /// any earlier load-more still in flight.
     private func loadMore() {
         guard !isLoading, hasMore else { return }
+
+        if let snapshot = fullSnapshot {
+            let next = min(loaded.count + Self.pageSize, snapshot.count)
+            loaded = Array(snapshot.prefix(next))
+            hasMore = next < snapshot.count
+            return
+        }
+
         isLoading = true
         let scope = sectionSearchScope
         let search = self.search
@@ -1024,6 +1077,7 @@ private struct SectionPopoverHost: NSViewRepresentable {
     /// Closure-typed search handle passed through to the SwiftUI popover
     /// body. The host no longer holds a `SessionIndexStore` reference.
     let search: SessionSearchFn
+    let loadSnapshot: DirectorySnapshotFn
     let onResume: ((SessionEntry) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(isPresented: $isPresented) }
@@ -1041,6 +1095,7 @@ private struct SectionPopoverHost: NSViewRepresentable {
         coordinator.update(
             section: section,
             search: search,
+            loadSnapshot: loadSnapshot,
             onResume: onResume
         )
         if isPresented {
@@ -1076,6 +1131,7 @@ private struct SectionPopoverHost: NSViewRepresentable {
         private var popover: NSPopover?
         private var currentSection: IndexSection?
         private var currentSearch: SessionSearchFn?
+        private var currentLoadSnapshot: DirectorySnapshotFn?
         private var currentOnResume: ((SessionEntry) -> Void)?
         /// Bumped on every present(). Used as the SwiftUI view identity so each
         /// open gets fresh @State (empty query, fresh focus, no stale results).
@@ -1088,20 +1144,29 @@ private struct SectionPopoverHost: NSViewRepresentable {
         func update(
             section: IndexSection,
             search: @escaping SessionSearchFn,
+            loadSnapshot: @escaping DirectorySnapshotFn,
             onResume: ((SessionEntry) -> Void)?
         ) {
             currentSection = section
             currentSearch = search
+            currentLoadSnapshot = loadSnapshot
             currentOnResume = onResume
             refreshContent()
         }
 
         private func refreshContent() {
-            guard let section = currentSection, let search = currentSearch else { return }
+            guard let section = currentSection,
+                  let search = currentSearch,
+                  let loadSnapshot = currentLoadSnapshot else { return }
             let onResume = currentOnResume
             let identity = presentationCount
             hostingController.rootView = AnyView(
-                SectionPopoverView(section: section, search: search, onResume: onResume) { [weak self] in
+                SectionPopoverView(
+                    section: section,
+                    search: search,
+                    loadSnapshot: loadSnapshot,
+                    onResume: onResume
+                ) { [weak self] in
                     self?.closeFromContent()
                 }
                 // Tied to presentationCount so reopening the popover discards

@@ -259,6 +259,16 @@ final class SessionDragCoordinator: ObservableObject {
     @Published var draggedKey: SectionKey? = nil
 }
 
+/// Immutable per-directory snapshot consumed by `SectionPopoverView` for
+/// empty-query scrolling. All entries are merged across the three agent
+/// sources and sorted by `modified` desc. The popover slices this array
+/// in-memory to page, so scrolling fires zero store/disk calls.
+struct DirectorySnapshot: Sendable {
+    let cwd: String  // "" represents the unknown-folder bucket
+    let entries: [SessionEntry]
+    let errors: [String]
+}
+
 @MainActor
 final class SessionIndexStore: ObservableObject {
     @Published private(set) var entries: [SessionEntry] = []
@@ -448,6 +458,7 @@ final class SessionIndexStore: ObservableObject {
     func reload() {
         loadTask?.cancel()
         isLoading = true
+        invalidateDirectorySnapshots()
         loadTask = Task.detached(priority: .userInitiated) { [weak self] in
             let scanned = await Self.scanAll()
             await MainActor.run {
@@ -458,6 +469,79 @@ final class SessionIndexStore: ObservableObject {
                 self.backfillDirectoryOrderFromEntries()
             }
         }
+    }
+
+    // MARK: - Directory snapshot cache
+
+    private var directorySnapshotCache: [String: DirectorySnapshot] = [:]
+    private var directorySnapshotLRU: [String] = []
+    private static let directorySnapshotCacheCapacity = 16
+
+    /// Return a cached or freshly-built merged snapshot for a cwd-scoped
+    /// directory. Used by the Show-more popover's empty-query scroll
+    /// path: the popover slices this array in memory instead of asking
+    /// the store for more pages on every scroll, eliminating the O(n²)
+    /// repeated-refetch-and-merge behavior.
+    func loadDirectorySnapshot(cwd: String?) async -> DirectorySnapshot {
+        let key = cwd ?? ""
+        if let cached = touchDirectorySnapshotLRU(key) {
+            return cached
+        }
+
+        let bag = ErrorBag()
+        let cwdFilter = (cwd?.isEmpty == false) ? cwd : nil
+        // Large limit so every per-agent loader returns all matching rows.
+        // Claude's `searchMaxFiles` cap still applies (currently 1500); if
+        // anyone has more Claude sessions in a single cwd we'll bump it.
+        let bigLimit = 10_000
+        async let c = Self.timedAgent(
+            needle: "", agent: .claude, cwdFilter: cwdFilter,
+            offset: 0, limit: bigLimit, errorBag: bag
+        )
+        async let x = Self.timedAgent(
+            needle: "", agent: .codex, cwdFilter: cwdFilter,
+            offset: 0, limit: bigLimit, errorBag: bag
+        )
+        async let o = Self.timedAgent(
+            needle: "", agent: .opencode, cwdFilter: cwdFilter,
+            offset: 0, limit: bigLimit, errorBag: bag
+        )
+        let merged = (await c) + (await x) + (await o)
+        if Task.isCancelled {
+            return DirectorySnapshot(cwd: key, entries: [], errors: [])
+        }
+        let sorted = merged.sorted { $0.modified > $1.modified }
+        let snapshot = DirectorySnapshot(cwd: key, entries: sorted, errors: bag.snapshot())
+        storeDirectorySnapshot(key: key, snapshot: snapshot)
+        return snapshot
+    }
+
+    private func touchDirectorySnapshotLRU(_ key: String) -> DirectorySnapshot? {
+        guard let cached = directorySnapshotCache[key] else { return nil }
+        if let idx = directorySnapshotLRU.firstIndex(of: key) {
+            directorySnapshotLRU.remove(at: idx)
+        }
+        directorySnapshotLRU.append(key)
+        return cached
+    }
+
+    private func storeDirectorySnapshot(key: String, snapshot: DirectorySnapshot) {
+        if directorySnapshotCache[key] == nil,
+           directorySnapshotCache.count >= Self.directorySnapshotCacheCapacity,
+           let oldestKey = directorySnapshotLRU.first {
+            directorySnapshotCache.removeValue(forKey: oldestKey)
+            directorySnapshotLRU.removeFirst()
+        }
+        directorySnapshotCache[key] = snapshot
+        if let idx = directorySnapshotLRU.firstIndex(of: key) {
+            directorySnapshotLRU.remove(at: idx)
+        }
+        directorySnapshotLRU.append(key)
+    }
+
+    private func invalidateDirectorySnapshots() {
+        directorySnapshotCache.removeAll()
+        directorySnapshotLRU.removeAll()
     }
 
     private func normalizedDirectory(_ value: String?) -> String? {
