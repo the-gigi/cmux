@@ -990,7 +990,17 @@ private struct SectionPopoverHost: NSViewRepresentable {
         @Binding var isPresented: Bool
         weak var anchorView: NSView?
 
-        private let hostingController = NSHostingController(rootView: AnyView(EmptyView()))
+        private let hostingController: NSHostingController<AnyView> = {
+            let hc = NSHostingController(rootView: AnyView(EmptyView()))
+            // Let SwiftUI drive the hosting controller's intrinsic size so
+            // NSPopover resizes as @State loads (search results streaming in,
+            // pagination appending rows). Without this, the popover would be
+            // frozen at whatever fittingSize reported the instant we set
+            // rootView — which, on re-opens with a fresh view identity, is
+            // the empty-content size because .onAppear hasn't fired yet.
+            hc.sizingOptions = [.preferredContentSize, .intrinsicContentSize]
+            return hc
+        }()
         private var popover: NSPopover?
         private var currentSection: IndexSection?
         private var currentStore: SessionIndexStore?
