@@ -3026,6 +3026,15 @@ enum WorkspacePaneMountIdentity: Hashable {
 }
 
 extension WorkspacePaneContent {
+    var usesDirectPaneHost: Bool {
+        switch self {
+        case .terminal:
+            return true
+        case .browser, .markdown, .placeholder:
+            return false
+        }
+    }
+
     var prefersNativeDropOverlay: Bool {
         switch self {
         case .terminal, .browser:
@@ -3046,6 +3055,59 @@ extension WorkspacePaneContent {
         case .placeholder:
             return .placeholder(contentId)
         }
+    }
+}
+
+enum WorkspaceSurfaceRevealPhase: Equatable, Sendable {
+    case hidden
+    case waitingForWindow
+    case waitingForGeometry
+    case waitingForRuntime
+    case waitingForFirstFrame
+    case visible
+
+    init(terminalFacts: TerminalViewportLifecycleFacts) {
+        if !terminalFacts.isVisibleInUI {
+            self = .hidden
+        } else if !terminalFacts.isWindowed {
+            self = .waitingForWindow
+        } else if !terminalFacts.hasUsableGeometry {
+            self = .waitingForGeometry
+        } else if !terminalFacts.hasRuntime {
+            self = .waitingForRuntime
+        } else if !terminalFacts.hasPresentedFrame {
+            self = .waitingForFirstFrame
+        } else {
+            self = .visible
+        }
+    }
+
+    var showsLoadingCover: Bool {
+        switch self {
+        case .hidden, .visible:
+            false
+        case .waitingForWindow, .waitingForGeometry, .waitingForRuntime, .waitingForFirstFrame:
+            true
+        }
+    }
+}
+
+struct WorkspaceSurfacePresentationFacts: Equatable, Sendable {
+    let revealPhase: WorkspaceSurfaceRevealPhase
+
+    var isVisible: Bool {
+        revealPhase == .visible
+    }
+
+    var showsLoadingCover: Bool {
+        revealPhase.showsLoadingCover
+    }
+
+    static let hidden = WorkspaceSurfacePresentationFacts(revealPhase: .hidden)
+    static let visible = WorkspaceSurfacePresentationFacts(revealPhase: .visible)
+
+    static func terminal(_ facts: TerminalViewportLifecycleFacts) -> WorkspaceSurfacePresentationFacts {
+        WorkspaceSurfacePresentationFacts(revealPhase: WorkspaceSurfaceRevealPhase(terminalFacts: facts))
     }
 }
 
@@ -3124,6 +3186,8 @@ struct WorkspaceLayoutPaneChromeSnapshot {
 struct WorkspaceLayoutPaneRenderSnapshot {
     let paneId: PaneID
     let chrome: WorkspaceLayoutPaneChromeSnapshot
+    let contentId: UUID
+    let content: WorkspacePaneContent
     let prefersNativeDropOverlay: Bool
 }
 

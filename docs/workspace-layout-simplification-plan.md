@@ -118,6 +118,18 @@ Implemented on `2026-04-16`:
 
 The old status list below reflects earlier cleanup work that landed before this bug surfaced. The current migration is the ownership cut that makes close, split, and root collapse deterministic.
 
+## Current Cycle (single live scene reveal cut, Option A)
+
+Status on `2026-04-17`:
+
+1. done, the split host now uses one live `WorkspaceLayoutViewportCanvasView`; the old staged viewport path, pending snapshot commit gate, and stage-to-live promotion flow are gone.
+2. done, surface reveal is now an explicit value contract through `WorkspaceSurfacePresentationFacts` and `WorkspaceSurfaceRevealPhase`, instead of an ad hoc readiness boolean hidden behind retained-host dispatch.
+3. done, terminal retained hosts now publish reveal state from `GhosttySurfaceScrollView` using terminal lifecycle facts, and browser, markdown, and placeholder retained hosts publish immediate visible or hidden facts through the same registry boundary.
+4. done, visible terminal panes now mount their retained `GhosttySurfaceScrollView` directly inside `WorkspaceLayoutPaneHostView`, so terminals no longer use viewport hosts or reveal-cover state on the visible path. Browser, markdown, and placeholder content still use the viewport canvas.
+5. done, focused verification passed locally on `2026-04-17` with `49` tests and `0` failures across `WorkspaceContentViewVisibilityTests`, `WorkspaceLayoutSimplificationTests`, and `WorkspaceSurfaceRegistryTests` (`/tmp/cmux-issue-2289-direct-pane/Logs/Test/Test-cmux-unit-2026.04.17_23-01-47--0700.xcresult`).
+
+This is the architecture cut that removes the blank staged-pane class of bug. The shell no longer commits a second scene ahead of surface readiness, and visible terminal panes no longer have a separate shell-owned reveal layer at all.
+
 Implemented on `issue-2289-appkit-split-host`:
 
 - canonical surface identity now uses the panel UUID directly, so normal layout operations no longer depend on `surfaceIdToPanelId`
@@ -132,6 +144,7 @@ Implemented on `issue-2289-appkit-split-host`:
 - the old raw create-split methods are now private implementation detail inside `Workspace`, and tests were migrated to the typed helper API
 - `WorkspaceLayoutController.createTab` now only accepts the layout-owned fields that survive into `TabItem`, and detached-surface transfer payloads no longer carry dead chrome data
 - split-view drag state and same-process tab transfer payloads now carry stable `TabID` values instead of duplicating full tab chrome payload across controller state and pasteboard transport
+- same-pane edge-split moves now route through `Workspace.splitSurface(...)`, so local drag no longer bypasses workspace semantics, and last-tab self-splits create a same-kind replacement terminal or browser instead of leaving the source pane empty
 - pane render snapshots no longer duplicate raw tab ordering and selection alongside pane chrome snapshots, so the native host now reads one canonical pane-tab contract
 - empty-pane placeholder descriptors now expose explicit create actions instead of handing the renderer a live `Workspace` reference, so placeholder UI follows the same action-driven boundary as the other pane content kinds
 - the layout host command and drag path now use typed `PanelType` surface kinds instead of raw `"terminal"` and `"browser"` strings
@@ -164,6 +177,7 @@ Implemented on `issue-2289-appkit-split-host`:
 - all current surface kinds, terminal, browser, and markdown, now mount through the same workspace-owned pane-content descriptor path inside the AppKit host, and the dead `PanelContentView` fallback path is gone
 - `WorkspaceLayoutView` now requires a workspace-owned render snapshot instead of synthesizing one internally, so the shell boundary is purely "apply this snapshot" even for markdown and placeholder tabs
 - the native AppKit host now receives a concrete `WorkspaceLayoutInteractionHandlers` bundle instead of a live `WorkspaceLayoutHost` protocol object, so the renderer boundary is "snapshot plus actions" rather than a retained backchannel to the workspace owner
+- visible terminal panes now bypass `WorkspaceLayoutSurfaceViewportHostView` and mount directly in the pane host, while the viewport canvas remains responsible only for non-terminal visible content
 - the native tab bar no longer reads `workspacePresentationMode` from `UserDefaults`, because minimal-mode policy now enters through `WorkspaceLayoutPresentationSnapshot` with the rest of the workspace-owned presentation state
 - tab chrome context-menu eligibility no longer reaches into `WorkspaceLayoutController` through `workspaceSplitContextMenuState`, because `Workspace` now resolves move/zoom/split facts before building `WorkspaceLayoutPaneChromeSnapshot`
 - `TabManager`, `ContentView`, `WorkspaceContentView`, `TerminalController`, `AppleScriptSupport`, `GhosttyTerminalView`, and `TerminalImageTransfer` now consume canonical surface snapshots/accessors instead of wrapper-shaped metadata dictionaries

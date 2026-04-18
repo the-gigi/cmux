@@ -5130,7 +5130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         if destinationWorkspace.id == sourceWorkspace.id {
             if let splitTarget {
-                guard sourceWorkspace.splitSurface(
+                guard sourceWorkspace.splitSurfaceByDrag(
                     panelId: panelId,
                     inPane: resolvedTargetPane,
                     orientation: splitTarget.orientation,

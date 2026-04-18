@@ -1,5 +1,7 @@
 import XCTest
 import CoreGraphics
+import SwiftUI
+import AppKit
 
 #if canImport(cmux_DEV)
 @testable import cmux_DEV
@@ -8,6 +10,60 @@ import CoreGraphics
 #endif
 
 final class WorkspaceContentViewVisibilityTests: XCTestCase {
+    @MainActor
+    private func terminalViewport(
+        paneId: PaneID,
+        surfaceId: UUID
+    ) -> WorkspaceLayoutViewportSnapshot {
+        let content = WorkspacePaneContent.terminal(
+            WorkspaceTerminalPaneContent(
+                surfaceId: surfaceId,
+                isFocused: true,
+                isVisibleInUI: true,
+                isSplit: false,
+                appearance: PanelAppearance(
+                    dividerColor: .clear,
+                    unfocusedOverlayNSColor: .clear,
+                    unfocusedOverlayOpacity: 0
+                ),
+                hasUnreadNotification: false,
+                onFocus: {},
+                onTriggerFlash: {}
+            )
+        )
+        return WorkspaceLayoutViewportSnapshot(
+            paneId: paneId,
+            contentId: surfaceId,
+            mountIdentity: content.mountIdentity(contentId: surfaceId),
+            content: content,
+            frame: CGRect(x: 0, y: 0, width: 320, height: 240)
+        )
+    }
+
+    @MainActor
+    private func browserViewport(
+        paneId: PaneID,
+        surfaceId: UUID
+    ) -> WorkspaceLayoutViewportSnapshot {
+        let content = WorkspacePaneContent.browser(
+            WorkspaceBrowserPaneContent(
+                surfaceId: surfaceId,
+                paneId: paneId,
+                isFocused: true,
+                isVisibleInUI: true,
+                portalPriority: 0,
+                onRequestPanelFocus: {}
+            )
+        )
+        return WorkspaceLayoutViewportSnapshot(
+            paneId: paneId,
+            contentId: surfaceId,
+            mountIdentity: content.mountIdentity(contentId: surfaceId),
+            content: content,
+            frame: CGRect(x: 0, y: 0, width: 320, height: 240)
+        )
+    }
+
     func testPanelVisibleInUIReturnsFalseWhenWorkspaceHidden() {
         XCTAssertFalse(
             WorkspaceContentView.panelVisibleInUI(
@@ -182,6 +238,148 @@ final class WorkspaceContentViewVisibilityTests: XCTestCase {
             ),
             [CGRect(x: 677.5, y: 30, width: 500, height: 290)]
         )
+    }
+
+    func testTerminalRevealPhaseWaitsForFirstPresentedFrame() {
+        XCTAssertEqual(
+            WorkspaceSurfaceRevealPhase(
+                terminalFacts: TerminalViewportLifecycleFacts(
+                    isVisibleInUI: true,
+                    isWindowed: false,
+                    hasUsableGeometry: false,
+                    hasRuntime: false,
+                    hasPresentedFrame: false,
+                    isActive: false
+                )
+            ),
+            .waitingForWindow
+        )
+
+        XCTAssertEqual(
+            WorkspaceSurfaceRevealPhase(
+                terminalFacts: TerminalViewportLifecycleFacts(
+                    isVisibleInUI: true,
+                    isWindowed: true,
+                    hasUsableGeometry: false,
+                    hasRuntime: false,
+                    hasPresentedFrame: false,
+                    isActive: false
+                )
+            ),
+            .waitingForGeometry
+        )
+
+        XCTAssertEqual(
+            WorkspaceSurfaceRevealPhase(
+                terminalFacts: TerminalViewportLifecycleFacts(
+                    isVisibleInUI: true,
+                    isWindowed: true,
+                    hasUsableGeometry: true,
+                    hasRuntime: false,
+                    hasPresentedFrame: false,
+                    isActive: false
+                )
+            ),
+            .waitingForRuntime
+        )
+
+        XCTAssertEqual(
+            WorkspaceSurfaceRevealPhase(
+                terminalFacts: TerminalViewportLifecycleFacts(
+                    isVisibleInUI: true,
+                    isWindowed: true,
+                    hasUsableGeometry: true,
+                    hasRuntime: true,
+                    hasPresentedFrame: false,
+                    isActive: false
+                )
+            ),
+            .waitingForFirstFrame
+        )
+
+        XCTAssertEqual(
+            WorkspaceSurfaceRevealPhase(
+                terminalFacts: TerminalViewportLifecycleFacts(
+                    isVisibleInUI: true,
+                    isWindowed: true,
+                    hasUsableGeometry: true,
+                    hasRuntime: true,
+                    hasPresentedFrame: true,
+                    isActive: true
+                )
+            ),
+            .visible
+        )
+    }
+
+    @MainActor
+    func testPaneContentSlotMoveKeepsViewMountedWhenNewSlotInstallsFirst() {
+        let firstSlot = WorkspaceLayoutPaneContentSlotView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        let secondSlot = WorkspaceLayoutPaneContentSlotView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        let hostedView = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+
+        firstSlot.installContentView(hostedView)
+        XCTAssertTrue(hostedView.superview === firstSlot)
+
+        secondSlot.installContentView(hostedView)
+        XCTAssertTrue(hostedView.superview === secondSlot)
+
+        firstSlot.clearContentView()
+        XCTAssertTrue(hostedView.superview === secondSlot)
+    }
+
+    @MainActor
+    func testViewportHostApplySynchronizesSlotGeometryBeforeMount() {
+        _ = NSApplication.shared
+
+        let workspace = Workspace()
+        guard let panelId = workspace.focusedPanelId,
+              let panel = workspace.terminalPanel(for: panelId),
+              let paneId = workspace.paneId(forPanelId: panelId) else {
+            XCTFail("Expected focused terminal panel")
+            return
+        }
+
+        let viewport = terminalViewport(paneId: paneId, surfaceId: panel.id)
+        let host = WorkspaceLayoutSurfaceViewportHostView(
+            mountIdentity: viewport.mountIdentity,
+            surfaceRegistry: workspace.surfaceRegistry,
+            debugCanvasName: "test"
+        )
+
+        host.apply(
+            snapshot: viewport,
+            surfaceRegistry: workspace.surfaceRegistry,
+            activeDropZone: nil
+        )
+
+        XCTAssertEqual(host.debugSlotBounds.size.width, viewport.frame.width, accuracy: 0.001)
+        XCTAssertEqual(host.debugSlotBounds.size.height, viewport.frame.height, accuracy: 0.001)
+        XCTAssertEqual(panel.hostedView.frame.width, viewport.frame.width, accuracy: 0.001)
+        XCTAssertEqual(panel.hostedView.frame.height, viewport.frame.height, accuracy: 0.001)
+        XCTAssertTrue(host.debugShowsRevealCover)
+        XCTAssertEqual(host.debugRevealPhase, .waitingForWindow)
+    }
+
+    @MainActor
+    func testViewportHostDoesNotShowRevealCoverForBrowserSurface() {
+        let workspace = Workspace()
+        let paneId = PaneID(id: UUID())
+        let viewport = browserViewport(paneId: paneId, surfaceId: UUID())
+        let host = WorkspaceLayoutSurfaceViewportHostView(
+            mountIdentity: viewport.mountIdentity,
+            surfaceRegistry: workspace.surfaceRegistry,
+            debugCanvasName: "test"
+        )
+
+        host.apply(
+            snapshot: viewport,
+            surfaceRegistry: workspace.surfaceRegistry,
+            activeDropZone: nil
+        )
+
+        XCTAssertEqual(host.debugRevealPhase, .visible)
+        XCTAssertFalse(host.debugShowsRevealCover)
     }
 }
 

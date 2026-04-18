@@ -253,12 +253,14 @@ final class WorkspaceSurfaceRegistry {
         _ content: WorkspacePaneContent,
         contentId: UUID,
         in slotView: WorkspaceLayoutPaneContentSlotView,
-        activeDropZone: DropZone?
+        activeDropZone: DropZone?,
+        onPresentationChange: (() -> Void)? = nil
     ) {
         retainedHost(for: content, contentId: contentId).mount(
             content: content,
             in: slotView,
-            activeDropZone: activeDropZone
+            activeDropZone: activeDropZone,
+            onPresentationChange: onPresentationChange
         )
     }
 
@@ -344,6 +346,17 @@ final class WorkspaceSurfaceRegistry {
             reason: reason
         )
     }
+
+    func presentationFacts(
+        _ content: WorkspacePaneContent,
+        contentId: UUID
+    ) -> WorkspaceSurfacePresentationFacts {
+        let identity = content.mountIdentity(contentId: contentId)
+        return retainedHosts[identity]?.presentationFacts(
+            content: content,
+            contentId: contentId
+        ) ?? .visible
+    }
 }
 
 @MainActor
@@ -353,7 +366,8 @@ private protocol WorkspaceRetainedSurfaceHost: AnyObject {
     func mount(
         content: WorkspacePaneContent,
         in slotView: WorkspaceLayoutPaneContentSlotView,
-        activeDropZone: DropZone?
+        activeDropZone: DropZone?,
+        onPresentationChange: (() -> Void)?
     )
 
     func unmount(from slotView: WorkspaceLayoutPaneContentSlotView)
@@ -364,6 +378,11 @@ private protocol WorkspaceRetainedSurfaceHost: AnyObject {
         reason: String
     )
 
+    func presentationFacts(
+        content: WorkspacePaneContent,
+        contentId: UUID
+    ) -> WorkspaceSurfacePresentationFacts
+
     func prepareForSurfaceRemoval()
 }
 
@@ -373,6 +392,13 @@ private extension WorkspaceRetainedSurfaceHost {
         in _: WorkspaceLayoutPaneContentSlotView,
         reason _: String
     ) {}
+
+    func presentationFacts(
+        content _: WorkspacePaneContent,
+        contentId _: UUID
+    ) -> WorkspaceSurfacePresentationFacts {
+        .visible
+    }
 }
 
 @MainActor
@@ -397,7 +423,8 @@ private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfa
     func mount(
         content: WorkspacePaneContent,
         in slotView: WorkspaceLayoutPaneContentSlotView,
-        activeDropZone: DropZone?
+        activeDropZone: DropZone?,
+        onPresentationChange: (() -> Void)?
     ) {
         guard case .terminal(let descriptor) = content,
               let panel = workspace.panels[surfaceId] as? TerminalPanel else {
@@ -415,6 +442,7 @@ private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfa
         )
 
         slotView.installContentView(hostedView)
+        hostedView.setPresentationChangeHandler(onPresentationChange)
 
         hostedView.setFocusHandler { descriptor.onFocus() }
         hostedView.setTriggerFlashHandler(descriptor.onTriggerFlash)
@@ -465,6 +493,7 @@ private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfa
         lastMountedState = nil
         hostedView.setFocusHandler(nil)
         hostedView.setTriggerFlashHandler(nil)
+        hostedView.setPresentationChangeHandler(nil)
         hostedView.removeFromSuperview()
     }
 
@@ -509,6 +538,17 @@ private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfa
         guard hostedView.superview === slotView else { return }
         hostedView.reconcileViewportLifecycle(reason: reason)
     }
+
+    func presentationFacts(
+        content: WorkspacePaneContent,
+        contentId _: UUID
+    ) -> WorkspaceSurfacePresentationFacts {
+        guard case .terminal = content,
+              let panel = workspace.panels[surfaceId] as? TerminalPanel else {
+            return .hidden
+        }
+        return panel.hostedView.presentationFacts
+    }
 }
 
 @MainActor
@@ -528,7 +568,8 @@ private final class WorkspaceBrowserRetainedSurfaceHost: WorkspaceRetainedSurfac
     func mount(
         content: WorkspacePaneContent,
         in slotView: WorkspaceLayoutPaneContentSlotView,
-        activeDropZone: DropZone?
+        activeDropZone: DropZone?,
+        onPresentationChange _: (() -> Void)?
     ) {
         guard case .browser(let descriptor) = content,
               let panel = workspace.panels[surfaceId] as? BrowserPanel else {
@@ -556,6 +597,16 @@ private final class WorkspaceBrowserRetainedSurfaceHost: WorkspaceRetainedSurfac
         hostView.prepareForRemoval(reason: "surfaceRemoved")
         hostView.removeFromSuperview()
     }
+
+    func presentationFacts(
+        content: WorkspacePaneContent,
+        contentId _: UUID
+    ) -> WorkspaceSurfacePresentationFacts {
+        guard case .browser(let descriptor) = content, descriptor.isVisibleInUI else {
+            return .hidden
+        }
+        return .visible
+    }
 }
 
 @MainActor
@@ -578,7 +629,8 @@ private final class WorkspaceMarkdownRetainedSurfaceHost: WorkspaceRetainedSurfa
     func mount(
         content: WorkspacePaneContent,
         in slotView: WorkspaceLayoutPaneContentSlotView,
-        activeDropZone: DropZone?
+        activeDropZone: DropZone?,
+        onPresentationChange _: (() -> Void)?
     ) {
         guard case .markdown(let descriptor) = content,
               let panel = workspace.panels[surfaceId] as? MarkdownPanel else {
@@ -612,6 +664,16 @@ private final class WorkspaceMarkdownRetainedSurfaceHost: WorkspaceRetainedSurfa
     func prepareForSurfaceRemoval() {
         hostingController.view.removeFromSuperview()
     }
+
+    func presentationFacts(
+        content: WorkspacePaneContent,
+        contentId _: UUID
+    ) -> WorkspaceSurfacePresentationFacts {
+        guard case .markdown(let descriptor) = content, descriptor.isVisibleInUI else {
+            return .hidden
+        }
+        return .visible
+    }
 }
 
 @MainActor
@@ -632,7 +694,8 @@ private final class WorkspacePlaceholderRetainedSurfaceHost: WorkspaceRetainedSu
     func mount(
         content: WorkspacePaneContent,
         in slotView: WorkspaceLayoutPaneContentSlotView,
-        activeDropZone _: DropZone?
+        activeDropZone _: DropZone?,
+        onPresentationChange _: (() -> Void)?
     ) {
         guard case .placeholder(let descriptor) = content else {
             slotView.clearContentView()
@@ -661,6 +724,13 @@ private final class WorkspacePlaceholderRetainedSurfaceHost: WorkspaceRetainedSu
 
     func prepareForSurfaceRemoval() {
         hostingController.view.removeFromSuperview()
+    }
+
+    func presentationFacts(
+        content _: WorkspacePaneContent,
+        contentId _: UUID
+    ) -> WorkspaceSurfacePresentationFacts {
+        .visible
     }
 }
 
@@ -8429,6 +8499,8 @@ final class Workspace: Identifiable, ObservableObject {
                 WorkspaceLayoutPaneRenderSnapshot(
                     paneId: pane.id,
                     chrome: chrome,
+                    contentId: displayedContent.contentId,
+                    content: displayedContent.content,
                     prefersNativeDropOverlay: displayedContent.content.prefersNativeDropOverlay
                 )
             )
@@ -8475,6 +8547,9 @@ final class Workspace: Identifiable, ObservableObject {
                 chrome: chrome,
                 context: context
             )
+            if displayedContent.content.usesDirectPaneHost {
+                return []
+            }
             return [
                 WorkspaceLayoutViewportSnapshot(
                     paneId: pane.id,
@@ -11038,15 +11113,17 @@ final class Workspace: Identifiable, ObservableObject {
     @discardableResult
     func splitSurface(
         panelId: UUID,
-        inPane paneId: PaneID? = nil,
+        inPane targetPane: PaneID? = nil,
         orientation: SplitOrientation,
         insertFirst: Bool,
         focusNewPane: Bool = true
     ) -> PaneID? {
         guard panels[panelId] != nil,
               let tabId = surfaceIdFromPanelId(panelId) else { return nil }
+        let targetPaneId = targetPane ?? paneId(forPanelId: panelId)
+
         let newPaneId = splitController.splitPane(
-            paneId,
+            targetPaneId,
             orientation: orientation,
             movingTab: tabId,
             insertFirst: insertFirst,
@@ -11059,6 +11136,69 @@ final class Workspace: Identifiable, ObservableObject {
             scheduleFocusReconcile()
         }
         return newPaneId
+    }
+
+    @discardableResult
+    func splitSurfaceByDrag(
+        panelId: UUID,
+        inPane targetPane: PaneID? = nil,
+        orientation: SplitOrientation,
+        insertFirst: Bool,
+        focusNewPane: Bool = true
+    ) -> PaneID? {
+        let sourcePaneId = paneId(forPanelId: panelId)
+        let targetPaneId = targetPane ?? sourcePaneId
+        let replacementPanelId = prepareReplacementPanelForSelfSplitIfNeeded(
+            movingPanelId: panelId,
+            sourcePaneId: sourcePaneId,
+            targetPaneId: targetPaneId
+        )
+
+        guard let newPaneId = splitSurface(
+            panelId: panelId,
+            inPane: targetPaneId,
+            orientation: orientation,
+            insertFirst: insertFirst,
+            focusNewPane: focusNewPane
+        ) else {
+            if let replacementPanelId {
+                _ = closePanel(replacementPanelId, force: true)
+            }
+            return nil
+        }
+
+        if replacementPanelId != nil {
+            scheduleFocusReconcile()
+        }
+
+        return newPaneId
+    }
+
+    private func prepareReplacementPanelForSelfSplitIfNeeded(
+        movingPanelId panelId: UUID,
+        sourcePaneId: PaneID?,
+        targetPaneId: PaneID?
+    ) -> UUID? {
+        guard let sourcePaneId,
+              let targetPaneId,
+              sourcePaneId == targetPaneId,
+              splitController.tabIds(inPane: sourcePaneId).count == 1 else {
+            return nil
+        }
+
+        if terminalPanel(for: panelId) != nil {
+            return createTerminalPanel(inPane: sourcePaneId, focus: false)?.id
+        }
+
+        if let browser = browserPanel(for: panelId) {
+            return createBrowserPanel(
+                inPane: sourcePaneId,
+                focus: false,
+                preferredProfileID: browser.profileID
+            )?.id
+        }
+
+        return nil
     }
 
     @discardableResult
@@ -11915,10 +12055,10 @@ extension Workspace {
                 self?.splitController.splitPane(paneId, orientation: orientation)
             },
             splitPaneMovingTabHandler: { [weak self] paneId, orientation, tabId, insertFirst, focusNewPane in
-                self?.splitController.splitPane(
-                    paneId,
+                self?.splitSurfaceByDrag(
+                    panelId: tabId.id,
+                    inPane: paneId,
                     orientation: orientation,
-                    movingTab: tabId,
                     insertFirst: insertFirst,
                     focusNewPane: focusNewPane
                 )

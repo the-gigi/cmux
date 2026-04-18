@@ -2591,16 +2591,13 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
             XCTFail("Expected pane snapshot")
             return
         }
-        guard let initialViewport = viewport(in: initialSnapshot, for: paneId) else {
-            XCTFail("Expected viewport snapshot for initial pane")
-            return
-        }
         XCTAssertEqual(initialPane.chrome.tabs.count, 2)
-        XCTAssertEqual(initialViewport.contentId, terminalPanelId)
-        if case .terminal = initialViewport.content {
+        XCTAssertEqual(initialPane.contentId, terminalPanelId)
+        if case .terminal = initialPane.content {
         } else {
-            XCTFail("Expected selected terminal content to be emitted")
+            XCTFail("Expected selected terminal content to be emitted in the pane snapshot")
         }
+        XCTAssertNil(viewport(in: initialSnapshot, for: paneId))
 
         XCTAssertTrue(workspace.selectSurface(markdownPanel.id))
 
@@ -2614,11 +2611,83 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
             return
         }
         XCTAssertEqual(markdownPane.chrome.tabs.count, 2)
+        XCTAssertEqual(markdownPane.contentId, markdownPanel.id)
+        if case .markdown = markdownPane.content {
+        } else {
+            XCTFail("Expected selected markdown content to be emitted in the pane snapshot")
+        }
         XCTAssertEqual(markdownViewport.contentId, markdownPanel.id)
         if case .markdown = markdownViewport.content {
         } else {
             XCTFail("Expected selected markdown content to be emitted")
         }
+    }
+
+    func testRootHostMountsSelectedTerminalDirectlyInPaneHost() throws {
+        _ = NSApplication.shared
+
+        let workspace = Workspace()
+        guard let paneId = workspace.focusedPaneId,
+              let panelId = workspace.focusedPanelId,
+              let panel = workspace.terminalPanel(for: panelId) else {
+            XCTFail("Expected focused terminal pane")
+            return
+        }
+
+        let renderContext = WorkspaceLayoutRenderContext(
+            notificationStore: nil,
+            isWorkspaceVisible: true,
+            isWorkspaceInputActive: true,
+            isMinimalMode: false,
+            appearance: PanelAppearance(
+                dividerColor: .clear,
+                unfocusedOverlayNSColor: .clear,
+                unfocusedOverlayOpacity: 0
+            ),
+            workspacePortalPriority: 0,
+            usesWorkspacePaneOverlay: false,
+            showSplitButtons: true
+        )
+        let rootHost = WorkspaceLayoutRootHostView(
+            hostBridge: workspace.layoutInteractionHandlers,
+            renderSnapshot: workspace.makeLayoutRenderSnapshot(context: renderContext),
+            surfaceRegistry: workspace.surfaceRegistry
+        )
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+        let contentView = try XCTUnwrap(window.contentView)
+        rootHost.frame = contentView.bounds
+        rootHost.autoresizingMask = [.width, .height]
+        contentView.addSubview(rootHost)
+
+        window.makeKeyAndOrderFront(nil)
+        window.displayIfNeeded()
+        contentView.layoutSubtreeIfNeeded()
+        rootHost.layoutSubtreeIfNeeded()
+
+        let mountedExpectation = expectation(description: "terminal mounted directly")
+        func pollMounted() {
+            if panel.hostedView.window === window &&
+                panel.hostedView.superview != nil &&
+                !panel.hostedView.isHidden {
+                mountedExpectation.fulfill()
+            } else {
+                DispatchQueue.main.async {
+                    pollMounted()
+                }
+            }
+        }
+        pollMounted()
+        wait(for: [mountedExpectation], timeout: 2.0)
+
+        XCTAssertTrue(rootHost.debugPaneUsesDirectTerminalHost(paneId))
+        XCTAssertFalse(rootHost.debugViewportMountIdentities.contains(WorkspacePaneMountIdentity.terminal(panel.id)))
     }
 
     func testHiddenWorkspaceRenderSnapshotOmitsViewportMounts() {
@@ -5098,6 +5167,134 @@ final class WorkspacePanelGitBranchTests: XCTestCase {
             workspace.surfaceIdFromPanelId(originalFocusedPanelId)?.id,
             "Expected selected tab to stay on the original focused panel"
         )
+    }
+
+    func testSplitPaneMovingTabHandlerSelfSplitLastTerminalCreatesReplacementTerminal() {
+        let workspace = Workspace()
+        guard let sourcePanelId = workspace.focusedPanelId,
+              let sourcePaneId = workspace.focusedPaneId else {
+            XCTFail("Expected initial focused terminal and pane")
+            return
+        }
+
+        guard let newPaneId = workspace.layoutInteractionHandlers.splitPaneMovingTabHandler(
+            sourcePaneId,
+            .vertical,
+            TabID(id: sourcePanelId),
+            false,
+            true
+        ) else {
+            XCTFail("Expected drag self-split to create a new pane")
+            return
+        }
+
+        let sourcePaneSurfaces = workspace.surfaceIds(inPane: sourcePaneId)
+        XCTAssertEqual(sourcePaneSurfaces.count, 1, "Expected source pane to keep a replacement surface")
+        XCTAssertEqual(workspace.surfaceIds(inPane: newPaneId), [sourcePanelId], "Expected moved terminal in the new pane")
+
+        guard let replacementPanelId = sourcePaneSurfaces.first else {
+            XCTFail("Expected replacement terminal")
+            return
+        }
+
+        XCTAssertNotEqual(replacementPanelId, sourcePanelId)
+        XCTAssertNotNil(workspace.terminalPanel(for: replacementPanelId))
+        XCTAssertEqual(workspace.selectedSurfaceId(inPane: sourcePaneId), replacementPanelId)
+    }
+
+    func testSplitPaneMovingTabHandlerSelfSplitLastBrowserCreatesReplacementBrowser() {
+        let workspace = Workspace()
+        guard let sourcePaneId = workspace.focusedPaneId,
+              let originalTerminalId = workspace.focusedPanelId,
+              let browserPanel = workspace.createBrowserPanel(inPane: sourcePaneId, focus: true) else {
+            XCTFail("Expected initial pane and browser surface")
+            return
+        }
+
+        XCTAssertTrue(workspace.closePanel(originalTerminalId, force: true), "Expected bootstrap terminal to close")
+        drainMainQueue()
+        drainMainQueue()
+
+        guard let newPaneId = workspace.layoutInteractionHandlers.splitPaneMovingTabHandler(
+            sourcePaneId,
+            .vertical,
+            TabID(id: browserPanel.id),
+            false,
+            true
+        ) else {
+            XCTFail("Expected browser drag self-split to create a new pane")
+            return
+        }
+
+        let sourcePaneSurfaces = workspace.surfaceIds(inPane: sourcePaneId)
+        XCTAssertEqual(sourcePaneSurfaces.count, 1, "Expected source pane to keep a replacement browser")
+        XCTAssertEqual(workspace.surfaceIds(inPane: newPaneId), [browserPanel.id], "Expected moved browser in the new pane")
+
+        guard let replacementPanelId = sourcePaneSurfaces.first,
+              let replacementBrowser = workspace.browserPanel(for: replacementPanelId) else {
+            XCTFail("Expected replacement browser")
+            return
+        }
+
+        XCTAssertNotEqual(replacementPanelId, browserPanel.id)
+        XCTAssertEqual(replacementBrowser.profileID, browserPanel.profileID)
+        XCTAssertEqual(workspace.selectedSurfaceId(inPane: sourcePaneId), replacementPanelId)
+    }
+
+    func testSplitPaneMovingTabHandlerDoesNotCreateReplacementWhenSourcePaneStillHasOtherTabs() {
+        let workspace = Workspace()
+        guard let sourcePaneId = workspace.focusedPaneId,
+              let sourcePanelId = workspace.focusedPanelId,
+              let remainingPanel = workspace.createTerminalPanel(inPane: sourcePaneId, focus: false) else {
+            XCTFail("Expected source pane to contain two terminal tabs")
+            return
+        }
+
+        guard let newPaneId = workspace.layoutInteractionHandlers.splitPaneMovingTabHandler(
+            sourcePaneId,
+            .vertical,
+            TabID(id: sourcePanelId),
+            false,
+            true
+        ) else {
+            XCTFail("Expected split to succeed")
+            return
+        }
+
+        XCTAssertEqual(workspace.surfaceIds(inPane: sourcePaneId), [remainingPanel.id])
+        XCTAssertEqual(workspace.surfaceIds(inPane: newPaneId), [sourcePanelId])
+    }
+
+    func testSplitSurfaceDoesNotApplyDragReplacementSemantics() {
+        let workspace = Workspace()
+        guard let sourcePaneId = workspace.focusedPaneId,
+              let originalTerminalId = workspace.focusedPanelId,
+              let browserPanel = workspace.createBrowserPanel(inPane: sourcePaneId, focus: true) else {
+            XCTFail("Expected initial pane and browser surface")
+            return
+        }
+
+        XCTAssertTrue(workspace.closePanel(originalTerminalId, force: true), "Expected bootstrap terminal to close")
+        drainMainQueue()
+        drainMainQueue()
+
+        guard let newPaneId = workspace.splitSurface(
+            panelId: browserPanel.id,
+            inPane: sourcePaneId,
+            orientation: .vertical,
+            insertFirst: false,
+            focusNewPane: true
+        ) else {
+            XCTFail("Expected direct splitSurface call to succeed")
+            return
+        }
+
+        XCTAssertEqual(
+            workspace.surfaceIds(inPane: sourcePaneId).count,
+            0,
+            "Expected pure splitSurface to avoid drag-only replacement behavior"
+        )
+        XCTAssertEqual(workspace.surfaceIds(inPane: newPaneId), [browserPanel.id])
     }
 
     func testClosingFocusedSplitRestoresBranchForRemainingFocusedPanel() {

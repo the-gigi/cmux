@@ -149,7 +149,7 @@ private func cmuxScalarHex(_ value: String?) -> String {
         .joined(separator: ",")
 }
 
-private enum CmuxTerminalHostDebugLog {
+enum CmuxTerminalHostDebugLog {
     private static let logURL = URL(fileURLWithPath: "/tmp/cmux-terminal-host-debug.log")
     private static let timestampFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -9183,6 +9183,8 @@ final class GhosttySurfaceScrollView: NSView {
     private var lastFocusRefreshAt: CFTimeInterval = 0
     private var lastRequestedPortalOcclusionVisible: Bool?
     private let viewportLifecycleController = TerminalViewportLifecycleController()
+    private var presentationChangeHandler: (() -> Void)?
+    private var lastReportedPresentationFacts: WorkspaceSurfacePresentationFacts?
     private var activeDropZone: DropZone?
     private var pendingDropZone: DropZone?
     private var lastPanelBackgroundFallbackVisible: Bool?
@@ -10139,7 +10141,10 @@ final class GhosttySurfaceScrollView: NSView {
         windowObservers.removeAll()
         cancelFocusRequest()
         refreshPanelBackgroundFill(reason: "hostedView.viewDidMoveToWindow")
-        guard let window else { return }
+        guard let window else {
+            notifyPresentationFactsChanged(force: true)
+            return
+        }
         reconcileViewportLifecycle(reason: "hostedView.viewDidMoveToWindow", force: true)
         windowObservers.append(NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
@@ -10184,6 +10189,7 @@ final class GhosttySurfaceScrollView: NSView {
             surfaceView.terminalSurface?.cancelRuntimeReadyCallback(runtimeReadyCallbackToken)
             runtimeReadyCallbackToken = nil
             viewportLifecycleController.reset()
+            lastReportedPresentationFacts = nil
         }
         surfaceView.attachSurface(terminalSurface)
         let workspace = terminalSurface.owningWorkspace()
@@ -10217,6 +10223,17 @@ final class GhosttySurfaceScrollView: NSView {
         )
     }
 
+    var presentationFacts: WorkspaceSurfacePresentationFacts {
+        WorkspaceSurfacePresentationFacts.terminal(currentViewportLifecycleFacts())
+    }
+
+    private func notifyPresentationFactsChanged(force: Bool = false) {
+        let nextFacts = presentationFacts
+        guard force || nextFacts != lastReportedPresentationFacts else { return }
+        lastReportedPresentationFacts = nextFacts
+        presentationChangeHandler?()
+    }
+
     private func applyViewportLifecycleUpdate(_ update: TerminalViewportLifecycleUpdate, reason: String) {
         for command in update.commands {
             switch command {
@@ -10244,6 +10261,7 @@ final class GhosttySurfaceScrollView: NSView {
             return
         }
         applyViewportLifecycleUpdate(update, reason: reason)
+        notifyPresentationFactsChanged(force: force)
     }
 
     private func installRuntimeReadyCallback(for terminalSurface: TerminalSurface) {
@@ -10279,6 +10297,15 @@ final class GhosttySurfaceScrollView: NSView {
 
     func setTriggerFlashHandler(_ handler: (() -> Void)?) {
         surfaceView.onTriggerFlash = handler
+    }
+
+    func setPresentationChangeHandler(_ handler: (() -> Void)?) {
+        presentationChangeHandler = handler
+        if handler == nil {
+            lastReportedPresentationFacts = nil
+            return
+        }
+        notifyPresentationFactsChanged(force: true)
     }
 
     func setBackgroundColor(_ color: NSColor) {
@@ -10942,6 +10969,7 @@ final class GhosttySurfaceScrollView: NSView {
             }
             cancelFocusRequest()
         }
+        notifyPresentationFactsChanged(force: true)
     }
 
     var debugPortalVisibleInUI: Bool {
@@ -10971,11 +10999,13 @@ final class GhosttySurfaceScrollView: NSView {
         }
 #endif
         if active {
+            notifyPresentationFactsChanged(force: true)
             return
         } else {
             cancelFocusRequest()
             resignOwnedFirstResponderIfNeeded(reason: "setActive(false)")
         }
+        notifyPresentationFactsChanged(force: true)
     }
 
 #if DEBUG
