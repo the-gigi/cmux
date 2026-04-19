@@ -3272,6 +3272,40 @@ class GhosttyApp {
                 #endif
                 return false
             }
+            // Route markdown file URLs into the cmux viewer when the toggle is
+            // on AND the link is local + has no anchor/query. Anything else
+            // (toggle off, hosted file URL, #fragment, ?query, non-markdown,
+            // remote workspace, unreadable file, split creation failure) falls
+            // through to the existing NSWorkspace path below so the default-off
+            // behavior and URL semantics are preserved.
+            let fileURLHost = target.url.host
+            if CmdClickMarkdownRouteSettings.isEnabled(),
+               target.url.isFileURL,
+               target.url.fragment == nil,
+               target.url.query == nil,
+               fileURLHost == nil || fileURLHost?.isEmpty == true || fileURLHost == "localhost",
+               CmdClickMarkdownRouteSettings.isMarkdownPath(target.url.path) {
+                let fileURL = target.url
+                let routed: Bool = performOnMain {
+                    // Remote-surface guard runs before shouldRoute so we never
+                    // stat a local path on the main thread for a remote workspace.
+                    guard let termSurface = surfaceView.terminalSurface,
+                          let workspace = termSurface.owningWorkspace(),
+                          !workspace.isRemoteTerminalSurface(termSurface.id),
+                          CmdClickMarkdownRouteSettings.shouldRoute(path: fileURL.path) else {
+                        return false
+                    }
+                    return workspace.openOrFocusMarkdownSplit(
+                        from: termSurface.id,
+                        filePath: fileURL.path
+                    ) != nil
+                }
+                if routed {
+                    return true
+                }
+                // Fall through to the existing NSWorkspace path below.
+            }
+
             if !BrowserLinkOpenSettings.openTerminalLinksInCmuxBrowser() {
                 #if DEBUG
                 dlog("link.openURL cmuxBrowser=disabled, opening externally url=\(target.url)")
@@ -3577,6 +3611,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
     private let configTemplate: CmuxSurfaceConfigTemplate?
     private let workingDirectory: String?
     private let initialCommand: String?
+    private let initialInput: String?
     private let initialEnvironmentOverrides: [String: String]
     var requestedWorkingDirectory: String? { workingDirectory }
     private var additionalEnvironment: [String: String]
@@ -3669,6 +3704,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
         configTemplate: CmuxSurfaceConfigTemplate?,
         workingDirectory: String? = nil,
         initialCommand: String? = nil,
+        initialInput: String? = nil,
         initialEnvironmentOverrides: [String: String] = [:],
         additionalEnvironment: [String: String] = [:]
     ) {
@@ -3679,6 +3715,8 @@ final class TerminalSurface: Identifiable, ObservableObject {
         self.workingDirectory = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCommand = initialCommand?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.initialCommand = (trimmedCommand?.isEmpty == false) ? trimmedCommand : nil
+        let trimmedInput = initialInput?.isEmpty == false ? initialInput : nil
+        self.initialInput = trimmedInput
         self.initialEnvironmentOverrides = Self.mergedNormalizedEnvironment(base: [:], overrides: initialEnvironmentOverrides)
         self.additionalEnvironment = Self.mergedNormalizedEnvironment(base: [:], overrides: additionalEnvironment)
         // Match Ghostty's own SurfaceView: ensure a non-zero initial frame so the backing layer
@@ -4428,7 +4466,12 @@ final class TerminalSurface: Identifiable, ObservableObject {
             }
             return baseConfig.command
         }()
-        let resolvedInitialInput = baseConfig.initialInput
+        let resolvedInitialInput: String? = {
+            if let initialInput, !initialInput.isEmpty {
+                return initialInput
+            }
+            return baseConfig.initialInput
+        }()
         func withOptionalCString<T>(_ value: String?, _ body: (UnsafePointer<CChar>?) -> T) -> T {
             guard let value else {
                 return body(nil)
@@ -5884,6 +5927,15 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
 #endif
     }
 
+    @discardableResult
+    func prepareSurfaceForPaste(reason: String) -> Bool {
+        guard ensureSurfaceReadyForInput() != nil else {
+            requestInputRecoveryAfterSurfaceMiss(reason: reason)
+            return false
+        }
+        return true
+    }
+
     func performBindingAction(_ action: String) -> Bool {
         guard let surface = surface else { return false }
         return action.withCString { cString in
@@ -6106,11 +6158,13 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     // MARK: - Clipboard paste
 
     @IBAction func paste(_ sender: Any?) {
+        guard prepareSurfaceForPaste(reason: "paste.missingSurface") else { return }
         _ = performBindingAction("paste_from_clipboard")
     }
 
     /// Pastes clipboard text as plain text, stripping any rich formatting.
     @IBAction func pasteAsPlainText(_ sender: Any?) {
+        guard prepareSurfaceForPaste(reason: "pasteAsPlainText.missingSurface") else { return }
         _ = performBindingAction("paste_from_clipboard")
     }
 
@@ -6390,6 +6444,14 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        performKeyEquivalent(with: event, shouldRetryMainMenu: true)
+    }
+
+    func performKeyEquivalentAfterMenuMiss(with event: NSEvent) -> Bool {
+        performKeyEquivalent(with: event, shouldRetryMainMenu: false)
+    }
+
+    private func performKeyEquivalent(with event: NSEvent, shouldRetryMainMenu: Bool) -> Bool {
 #if DEBUG
         let typingTimingStart = CmuxTypingTiming.start()
         defer {
@@ -6461,14 +6523,13 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         if let bindingFlags {
             let isConsumed = (bindingFlags.rawValue & GHOSTTY_BINDING_FLAGS_CONSUMED.rawValue) != 0
             let isAll = (bindingFlags.rawValue & GHOSTTY_BINDING_FLAGS_ALL.rawValue) != 0
-            let isPerformable = (bindingFlags.rawValue & GHOSTTY_BINDING_FLAGS_PERFORMABLE.rawValue) != 0
 
             // If the binding is consumed and not meant for the menu, allow menu first.
             // Performable bindings (e.g. paste_from_clipboard) also need the menu
             // path so that Edit > Paste handles Cmd+V instead of keyDown double-
             // firing the clipboard request through both interpretKeyEvents and
             // ghostty_surface_key.
-            if isConsumed && !isAll && keySequence.isEmpty && keyTables.isEmpty {
+            if shouldRetryMainMenu && isConsumed && !isAll && keySequence.isEmpty && keyTables.isEmpty {
                 if let menu = NSApp.mainMenu, menu.performKeyEquivalent(with: event) {
                     return true
                 }
@@ -7846,6 +7907,18 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         )
         #endif
 
+        // Remote-surface guard runs before shouldRoute so we never stat a local
+        // path on the main thread for a remote workspace. When the viewer path
+        // is applicable but split creation fails, fall back to the preferred
+        // editor so the click never silently no-ops.
+        if let termSurface = terminalSurface,
+           let workspace = termSurface.owningWorkspace(),
+           !workspace.isRemoteTerminalSurface(termSurface.id),
+           CmdClickMarkdownRouteSettings.shouldRoute(path: resolution.path),
+           workspace.openOrFocusMarkdownSplit(from: termSurface.id, filePath: resolution.path) != nil {
+            return resolution
+        }
+
         PreferredEditorSettings.open(URL(fileURLWithPath: resolution.path))
         return resolution
     }
@@ -8563,6 +8636,11 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         dlog("terminal.draggingEntered surface=\(terminalSurface?.id.uuidString.prefix(5) ?? "nil") types=\(types.map(\.rawValue))")
         #endif
         guard let types = sender.draggingPasteboard.types else { return [] }
+        // Defer to bonsplit when a tab/session drag is in flight: bonsplit's pane
+        // drop overlays should win over the terminal's text/file drop handling.
+        if types.contains(Self.tabTransferPasteboardType) || types.contains(Self.sidebarTabReorderPasteboardType) {
+            return []
+        }
         if Set(types).isDisjoint(with: Self.dropTypes) {
             return []
         }
@@ -8575,6 +8653,9 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         dlog("terminal.draggingUpdated surface=\(terminalSurface?.id.uuidString.prefix(5) ?? "nil") types=\(types.map(\.rawValue))")
         #endif
         guard let types = sender.draggingPasteboard.types else { return [] }
+        if types.contains(Self.tabTransferPasteboardType) || types.contains(Self.sidebarTabReorderPasteboardType) {
+            return []
+        }
         if Set(types).isDisjoint(with: Self.dropTypes) {
             return []
         }
@@ -8582,6 +8663,10 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        let types = sender.draggingPasteboard.types ?? []
+        if types.contains(Self.tabTransferPasteboardType) || types.contains(Self.sidebarTabReorderPasteboardType) {
+            return false
+        }
         #if DEBUG
         dlog("terminal.fileDrop surface=\(terminalSurface?.id.uuidString.prefix(5) ?? "nil")")
         #endif
@@ -10811,6 +10896,17 @@ final class GhosttySurfaceScrollView: NSView {
         if let fr = window.firstResponder, isSearchOverlayOrDescendant(fr) {
 #if DEBUG
             dlog("find.applyFirstResponder SKIP surface=\(surfaceShort) reason=searchOverlayFocused")
+#endif
+            return
+        }
+        // Don't steal focus from an active text editor (NSTextField/NSTextView/field editor).
+        // The terminal surface uses its own GhosttyNSView for input, never NSText, so this is
+        // safe. Without this guard, a popover (e.g. session-index search) loses its text-field
+        // focus instantly because applyFirstResponderIfNeeded runs on a deferred async tick and
+        // sees the field editor as a "foreign" responder to clobber.
+        if window.firstResponder is NSText {
+#if DEBUG
+            dlog("find.applyFirstResponder SKIP surface=\(surfaceShort) reason=textEditorFocused")
 #endif
             return
         }

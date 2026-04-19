@@ -991,6 +991,7 @@ class TabManager: ObservableObject {
     private var workspaceCycleCooldownTask: Task<Void, Never>?
     private var pendingWorkspaceUnfocusTarget: (tabId: UUID, panelId: UUID)?
     private var sidebarSelectedWorkspaceIds: Set<UUID> = []
+    private var closeConfirmationInFlight = false
     var confirmCloseHandler: ((String, String, Bool) -> Bool)?
     private struct WorkspaceCreationTabSnapshot {
         let id: UUID
@@ -1891,6 +1892,7 @@ class TabManager: ObservableObject {
         portOrdinal: Int,
         configTemplate: CmuxSurfaceConfigTemplate?,
         initialTerminalCommand: String?,
+        initialTerminalInput: String? = nil,
         initialTerminalEnvironment: [String: String]
     ) -> Workspace {
         Workspace(
@@ -1899,6 +1901,7 @@ class TabManager: ObservableObject {
             portOrdinal: portOrdinal,
             configTemplate: configTemplate,
             initialTerminalCommand: initialTerminalCommand,
+            initialTerminalInput: initialTerminalInput,
             initialTerminalEnvironment: initialTerminalEnvironment
         )
     }
@@ -1950,6 +1953,7 @@ class TabManager: ObservableObject {
         title: String? = nil,
         workingDirectory overrideWorkingDirectory: String? = nil,
         initialTerminalCommand: String? = nil,
+        initialTerminalInput: String? = nil,
         initialTerminalEnvironment: [String: String] = [:],
         select: Bool = true,
         eagerLoadTerminal: Bool = false,
@@ -1997,6 +2001,7 @@ class TabManager: ObservableObject {
                 portOrdinal: ordinal,
                 configTemplate: inheritedConfig,
                 initialTerminalCommand: initialTerminalCommand,
+                initialTerminalInput: initialTerminalInput,
                 initialTerminalEnvironment: initialTerminalEnvironment
             )
             applyCreationChromeInheritance(
@@ -3877,6 +3882,7 @@ class TabManager: ObservableObject {
 #if DEBUG
         UITestRecorder.incrementInt("closePanelInvocations")
 #endif
+        guard !closeConfirmationInFlight else { return }
         guard let selectedId = selectedTabId,
               let tab = tabs.first(where: { $0.id == selectedId }) else { return }
         reconcileFocusedPanelFromFirstResponderForKeyboard()
@@ -3889,6 +3895,7 @@ class TabManager: ObservableObject {
     }
 
     func closeOtherTabsInFocusedPaneWithConfirmation() {
+        guard !closeConfirmationInFlight else { return }
         guard let plan = closeOtherTabsInFocusedPanePlan() else { return }
 
         let count = plan.panelIds.count
@@ -3909,6 +3916,7 @@ class TabManager: ObservableObject {
 #if DEBUG
         UITestRecorder.incrementInt("closeTabInvocations")
 #endif
+        guard !closeConfirmationInFlight else { return }
         let sidebarSelectionIds = orderedSidebarSelectedWorkspaceIds()
         if sidebarSelectionIds.count > 1 {
             closeWorkspacesWithConfirmation(sidebarSelectionIds, allowPinned: true)
@@ -3985,7 +3993,24 @@ class TabManager: ObservableObject {
     // Keep selectTab as convenience alias
     func selectTab(_ tab: Workspace) { selectWorkspace(tab) }
 
-    private func confirmClose(title: String, message: String, acceptCmdD: Bool) -> Bool {
+    var isCloseConfirmationInFlight: Bool { closeConfirmationInFlight }
+
+    func beginCloseConfirmationSession() -> Bool {
+        guard !closeConfirmationInFlight else { return false }
+        closeConfirmationInFlight = true
+        return true
+    }
+
+    func endCloseConfirmationSession() {
+        DispatchQueue.main.async { [weak self] in
+            self?.closeConfirmationInFlight = false
+        }
+    }
+
+    func confirmClose(title: String, message: String, acceptCmdD: Bool) -> Bool {
+        guard beginCloseConfirmationSession() else { return false }
+        defer { endCloseConfirmationSession() }
+
         if let confirmCloseHandler {
             return confirmCloseHandler(title, message, acceptCmdD)
         }
