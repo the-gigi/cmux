@@ -13489,7 +13489,8 @@ private struct TabItemView: View, Equatable {
         let nextSnapshot = makeWorkspaceSnapshot()
 
         if contextMenuState.isVisible {
-            if force || nextSnapshot != workspaceSnapshot {
+            let deferredBaseline = contextMenuState.pendingWorkspaceSnapshot ?? workspaceSnapshotStorage
+            if force || deferredBaseline != nextSnapshot {
                 contextMenuState.hasDeferredWorkspaceObservationInvalidation = true
                 contextMenuState.pendingWorkspaceSnapshot = nextSnapshot
             }

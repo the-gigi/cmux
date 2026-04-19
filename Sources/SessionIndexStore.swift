@@ -272,18 +272,28 @@ struct DirectorySnapshot: Sendable {
 @MainActor
 final class SessionIndexStore: ObservableObject {
     @Published private(set) var entries: [SessionEntry] = [] {
-        didSet { invalidateSectionsCache() }
+        didSet {
+            guard entries != oldValue else { return }
+            invalidateSectionsCache()
+        }
     }
     @Published private(set) var isLoading: Bool = false
     @Published var scopeToCurrentDirectory: Bool = false {
-        didSet { invalidateSectionsCache() }
+        didSet {
+            guard scopeToCurrentDirectory != oldValue else { return }
+            invalidateSectionsCache()
+        }
     }
     @Published var currentDirectory: String? = nil {
-        didSet { invalidateSectionsCache() }
+        didSet {
+            guard scopeToCurrentDirectory, currentDirectory != oldValue else { return }
+            invalidateSectionsCache()
+        }
     }
 
     @Published var grouping: SessionGrouping {
         didSet {
+            guard grouping != oldValue else { return }
             UserDefaults.standard.set(grouping.rawValue, forKey: Self.groupingKey)
             invalidateSectionsCache()
             // Switching into directory grouping can expose cwds that were never
@@ -295,6 +305,7 @@ final class SessionIndexStore: ObservableObject {
     /// Persisted order for agent sections.
     @Published var agentOrder: [SessionAgent] {
         didSet {
+            guard agentOrder != oldValue else { return }
             Self.persistAgentOrder(agentOrder)
             invalidateSectionsCache()
         }
@@ -303,6 +314,7 @@ final class SessionIndexStore: ObservableObject {
     /// Persisted order for directory sections (absolute paths; "" means "no folder").
     @Published var directoryOrder: [String] {
         didSet {
+            guard directoryOrder != oldValue else { return }
             Self.persistDirectoryOrder(directoryOrder)
             invalidateSectionsCache()
         }
