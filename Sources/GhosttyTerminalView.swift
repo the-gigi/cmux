@@ -180,36 +180,33 @@ enum GhosttyPasteboardHelper {
     }
 
     static func stringContents(from pasteboard: NSPasteboard) -> String? {
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
+        let types = pasteboard.types ?? []
+
+        if types.contains(.fileURL),
+           let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
            !urls.isEmpty {
             return urls
                 .map { $0.isFileURL ? escapeForShell($0.path) : $0.absoluteString }
                 .joined(separator: " ")
         }
 
-        let htmlText = attributedStringContents(from: pasteboard, type: .html, documentType: .html)
-        let rtfText = attributedStringContents(from: pasteboard, type: .rtf, documentType: .rtf)
-        let rtfdText = attributedStringContents(from: pasteboard, type: .rtfd, documentType: .rtfd)
-
-        if hasImageData(in: pasteboard),
+        let hasImagePayload = hasImageData(in: pasteboard)
+        if hasImagePayload,
            let html = pasteboard.string(forType: .html),
            htmlHasNoVisibleText(html) {
             return nil
         }
 
-        if hasImageData(in: pasteboard) {
-            if let htmlText { return htmlText }
-            if let rtfText { return rtfText }
-            return rtfdText
-        }
-
-        if let value = plainTextContents(from: pasteboard) {
+        // Match upstream Ghostty's fast plain-text path for normal text paste.
+        // Large clipboard payloads often also advertise HTML/RTF variants, and
+        // eagerly rendering those rich-text flavors makes Cmd-V much slower than
+        // vanilla Ghostty before the bytes ever reach the PTY.
+        if !hasImagePayload,
+           let value = plainTextContents(from: pasteboard) {
             return value
         }
 
-        if let htmlText { return htmlText }
-        if let rtfText { return rtfText }
-        return rtfdText
+        return richTextContents(from: pasteboard)
     }
 
     static func hasString(for location: ghostty_clipboard_e) -> Bool {
@@ -261,6 +258,16 @@ enum GhosttyPasteboardHelper {
 
         guard let sanitized, !sanitized.isEmpty else { return nil }
         return sanitized
+    }
+
+    private static func richTextContents(from pasteboard: NSPasteboard) -> String? {
+        if let htmlText = attributedStringContents(from: pasteboard, type: .html, documentType: .html) {
+            return htmlText
+        }
+        if let rtfText = attributedStringContents(from: pasteboard, type: .rtf, documentType: .rtf) {
+            return rtfText
+        }
+        return attributedStringContents(from: pasteboard, type: .rtfd, documentType: .rtfd)
     }
 
     private static func plainTextContents(from pasteboard: NSPasteboard) -> String? {
