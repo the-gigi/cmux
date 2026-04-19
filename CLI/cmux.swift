@@ -17,14 +17,14 @@ struct CLIError: Error, CustomStringConvertible {
     var description: String { message }
 }
 
-private enum CLIBrokenPipeDisposition {
+enum CLIBrokenPipeDisposition {
     case exit(Int32)
     case ignore
 }
 
 // Route CLI stdio through write(2) so broken pipes never surface as NSFileHandle exceptions.
 @discardableResult
-private func cliWrite(_ data: Data, to handle: FileHandle, onBrokenPipe: CLIBrokenPipeDisposition) -> Bool {
+func cliWrite(_ data: Data, to handle: FileHandle, onBrokenPipe: CLIBrokenPipeDisposition) -> Bool {
     guard !data.isEmpty else { return true }
     return data.withUnsafeBytes { rawBuffer in
         guard let baseAddress = rawBuffer.bindMemory(to: UInt8.self).baseAddress else {
@@ -62,7 +62,7 @@ private func cliWrite(_ data: Data, to handle: FileHandle, onBrokenPipe: CLIBrok
 }
 
 @discardableResult
-private func cliWrite(_ text: String, to handle: FileHandle, onBrokenPipe: CLIBrokenPipeDisposition) -> Bool {
+func cliWrite(_ text: String, to handle: FileHandle, onBrokenPipe: CLIBrokenPipeDisposition) -> Bool {
     guard let data = text.data(using: .utf8) else { return true }
     return cliWrite(data, to: handle, onBrokenPipe: onBrokenPipe)
 }
@@ -72,6 +72,10 @@ private func cliWriteStdout(_ text: String) {
 }
 
 private func cliWriteStderr(_ text: String) {
+    _ = cliWrite(text, to: FileHandle.standardError, onBrokenPipe: .ignore)
+}
+
+private func cliWriteFatalStderr(_ text: String) {
     _ = cliWrite(text, to: FileHandle.standardError, onBrokenPipe: .exit(0))
 }
 
@@ -14577,7 +14581,7 @@ struct CMUXTermMain {
         do {
             try cli.run()
         } catch {
-            cliWriteStderr("Error: \(error)\n")
+            cliWriteFatalStderr("Error: \(error)\n")
             exit(1)
         }
     }

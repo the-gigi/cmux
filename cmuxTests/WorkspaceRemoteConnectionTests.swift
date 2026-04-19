@@ -2834,3 +2834,20 @@ final class CLINotifyProcessIntegrationTests: XCTestCase {
         )
     }
 }
+
+final class CLIBrokenPipeWriteTests: XCTestCase {
+    func testIgnoreDispositionDoesNotExitWhenPipeReaderCloses() throws {
+        var pipeFDs = [Int32](repeating: 0, count: 2)
+        XCTAssertEqual(pipe(&pipeFDs), 0)
+
+        let readFD = pipeFDs[0]
+        let writeFD = pipeFDs[1]
+        XCTAssertEqual(Darwin.close(readFD), 0)
+
+        let writeHandle = FileHandle(fileDescriptor: writeFD, closeOnDealloc: true)
+        defer { try? writeHandle.close() }
+
+        let wrote = cliWrite("warning\n", to: writeHandle, onBrokenPipe: .ignore)
+        XCTAssertFalse(wrote, "Ignoring EPIPE should report the dropped write without terminating the process")
+    }
+}
