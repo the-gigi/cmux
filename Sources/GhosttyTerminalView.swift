@@ -105,8 +105,7 @@ func cmuxTerminalSelectionCopyIntentAvailable(
     selectionActive: Bool,
     recentSelectionDragCompleted: Bool
 ) -> Bool {
-    let _ = recentSelectionDragCompleted
-    return selectionActive
+    selectionActive || recentSelectionDragCompleted
 }
 
 func cmuxShouldSuppressTerminalCommandPathHover(
@@ -5335,6 +5334,11 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     private var keyTables: [String] = []
     fileprivate private(set) var keyboardCopyModeActive = false
     private var wordPathHoverActive = false
+    // A just-finished drag selection should treat the next stationary Cmd press
+    // as copy intent, not as cmd-hover/cmd-click intent, until the pointer
+    // moves again.
+    private var suppressCommandPathHoverUntilMouseMove = false
+    private var leftMouseDragSelectionInProgress = false
     private var keyboardCopyModeConsumedKeyUps: Set<UInt16> = []
     private var keyboardCopyModeInputState = TerminalKeyboardCopyModeInputState()
     private var keyboardCopyModeViewportRow: Int?
@@ -6172,7 +6176,11 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     // MARK: - Input Handling
 
     @IBAction func copy(_ sender: Any?) {
-        _ = performBindingAction("copy_to_clipboard")
+        if performBindingAction("copy_to_clipboard") {
+            return
+        }
+        guard let snapshot = readSelectionSnapshot(), !snapshot.string.isEmpty else { return }
+        GhosttyPasteboardHelper.writeString(snapshot.string, to: GHOSTTY_CLIPBOARD_STANDARD)
     }
 
     // MARK: - Clipboard paste
@@ -6192,8 +6200,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         switch item.action {
         case #selector(copy(_:)):
-            guard let surface = surface else { return false }
-            return ghostty_surface_has_selection(surface)
+            return canCopySelectionFromCurrentSurface()
         case #selector(paste(_:)):
             return GhosttyPasteboardHelper.hasString(for: GHOSTTY_CLIPBOARD_STANDARD)
         case #selector(pasteAsPlainText(_:)):
@@ -7190,8 +7197,25 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     }
 
     private func shouldSuppressCommandPathHover(for flags: NSEvent.ModifierFlags) -> Bool {
-        guard flags.contains(.command), let surface else { return false }
-        return ghostty_surface_has_selection(surface)
+        guard let surface else { return false }
+        return cmuxShouldSuppressTerminalCommandPathHover(
+            modifierFlags: flags,
+            selectionActive: ghostty_surface_has_selection(surface),
+            recentSelectionDragCompleted: suppressCommandPathHoverUntilMouseMove
+        )
+    }
+
+    private func canCopySelectionFromCurrentSurface() -> Bool {
+        guard let surface else { return false }
+        return cmuxTerminalSelectionCopyIntentAvailable(
+            selectionActive: ghostty_surface_has_selection(surface),
+            recentSelectionDragCompleted: suppressCommandPathHoverUntilMouseMove
+        )
+    }
+
+    private func clearCompletedSelectionDragSuppressionIfNeeded() {
+        guard suppressCommandPathHoverUntilMouseMove, NSEvent.pressedMouseButtons == 0 else { return }
+        suppressCommandPathHoverUntilMouseMove = false
     }
 
     private func hoverModsFromFlags(
@@ -7467,6 +7491,8 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         // repairs workspace/pane active state before key routing runs.
         requestPointerFocusRecovery()
         window?.makeFirstResponder(self)
+        leftMouseDragSelectionInProgress = false
+        suppressCommandPathHoverUntilMouseMove = false
         if let terminalSurface {
             AppDelegate.shared?.tabManager?.dismissNotificationOnDirectInteraction(
                 tabId: terminalSurface.tabId,
@@ -7491,6 +7517,8 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         guard let surface = surface else { return }
         let point = convert(event.locationInWindow, from: nil)
         let consumed = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, modsFromEvent(event))
+        suppressCommandPathHoverUntilMouseMove = leftMouseDragSelectionInProgress
+        leftMouseDragSelectionInProgress = false
         _ = handleCommandClickRelease(at: point, modifierFlags: event.modifierFlags, ghosttyConsumed: consumed)
     }
 
@@ -8235,6 +8263,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     override func mouseMoved(with event: NSEvent) {
         maybeRequestFirstResponderForMouseFocus()
         guard let surface = surface else { return }
+        clearCompletedSelectionDragSuppressionIfNeeded()
         let suppressCommandPathHover = shouldSuppressCommandPathHover(for: event.modifierFlags)
         let eventPoint = convert(event.locationInWindow, from: nil)
         trackMousePointIfUsable(eventPoint)
@@ -8258,6 +8287,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         super.mouseEntered(with: event)
         maybeRequestFirstResponderForMouseFocus()
         guard let surface = surface else { return }
+        clearCompletedSelectionDragSuppressionIfNeeded()
         let suppressCommandPathHover = shouldSuppressCommandPathHover(for: event.modifierFlags)
         let eventPoint = convert(event.locationInWindow, from: nil)
         trackMousePointIfUsable(eventPoint)
@@ -8308,6 +8338,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
 
     override func mouseDragged(with event: NSEvent) {
         guard let surface = surface else { return }
+        leftMouseDragSelectionInProgress = true
         let eventPoint = convert(event.locationInWindow, from: nil)
         trackMousePointIfUsable(eventPoint)
         // Forward the raw drag coordinates, including out-of-bounds positions.
