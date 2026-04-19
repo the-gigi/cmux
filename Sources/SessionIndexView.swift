@@ -982,6 +982,16 @@ private struct PopoverRow: View, Equatable {
         return out
     }
 
+    @ViewBuilder
+    private var modifiedText: some View {
+        TimelineView(.periodic(from: entry.modified, by: 60)) { context in
+            Text(SessionIndexView.relativeFormatter.localizedString(for: entry.modified, relativeTo: context.date))
+        }
+        .font(.system(size: 11).monospacedDigit())
+        .foregroundColor(.secondary.opacity(0.7))
+        .fixedSize()
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             Image(entry.agent.assetName)
@@ -999,10 +1009,7 @@ private struct PopoverRow: View, Equatable {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
-            Text(SessionIndexView.relativeFormatter.localizedString(for: entry.modified, relativeTo: Date()))
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundColor(.secondary.opacity(0.7))
-                .fixedSize()
+            modifiedText
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
@@ -1106,7 +1113,7 @@ private func sessionDragItemProvider(for entry: SessionEntry) -> NSItemProvider 
 /// Hosts SectionPopoverView in a real NSPopover. SwiftUI's native `.popover()`
 /// doesn't reliably let the embedded TextField become first responder in cmux's
 /// focus-managed environment — the terminal keeps grabbing focus back.
-private struct SectionPopoverHost: NSViewRepresentable {
+struct SectionPopoverHost: NSViewRepresentable {
     @Binding var isPresented: Bool
     let section: IndexSection
     /// Closure-typed search handle passed through to the SwiftUI popover
@@ -1147,6 +1154,7 @@ private struct SectionPopoverHost: NSViewRepresentable {
     final class Coordinator: NSObject, NSPopoverDelegate {
         @Binding var isPresented: Bool
         weak var anchorView: NSView?
+        private(set) var debugRefreshContentCallCount = 0
 
         private let hostingController: NSHostingController<AnyView> = {
             NSHostingController(rootView: AnyView(EmptyView()))
@@ -1186,6 +1194,10 @@ private struct SectionPopoverHost: NSViewRepresentable {
             currentSearch = search
             currentLoadSnapshot = loadSnapshot
             currentOnResume = onResume
+            // When hidden, defer rebuilding the hosting view until `present()`.
+            // Rewriting rootView + forcing layout on every parent re-render was
+            // the 100% CPU loop behind #3010.
+            guard popover?.isShown == true else { return }
             refreshContent()
         }
 
@@ -1193,6 +1205,7 @@ private struct SectionPopoverHost: NSViewRepresentable {
             guard let section = currentSection,
                   let search = currentSearch,
                   let loadSnapshot = currentLoadSnapshot else { return }
+            debugRefreshContentCallCount += 1
             let onResume = currentOnResume
             let identity = presentationCount
             hostingController.rootView = AnyView(
