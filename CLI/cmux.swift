@@ -2788,6 +2788,17 @@ struct CMUXCLI {
                 throw error
             }
 
+        case "feed-hook":
+            cliTelemetry.breadcrumb("feed-hook.dispatch")
+            do {
+                try runFeedHook(commandArgs: commandArgs, client: client, telemetry: cliTelemetry)
+                cliTelemetry.breadcrumb("feed-hook.completed")
+            } catch {
+                cliTelemetry.breadcrumb("feed-hook.failure")
+                cliTelemetry.captureError(stage: "feed_hook_dispatch", error: error)
+                throw error
+            }
+
         case "codex-hook":
             cliTelemetry.breadcrumb("codex-hook.dispatch")
             do {
@@ -14002,6 +14013,243 @@ struct CMUXCLI {
         }
 
         print("{}")
+    }
+
+    // MARK: - Feed (workstream) hook bridge
+
+    /// Reads an agent hook JSON payload from stdin, forwards it to the
+    /// running cmux app via the `feed.push` V2 socket verb, and (for
+    /// actionable events: ExitPlanMode, AskUserQuestion, permission-
+    /// requiring tools) blocks until the user resolves the item. The
+    /// decision JSON is emitted on stdout in the agent's expected format
+    /// so the agent honors the user's choice.
+    ///
+    /// Usage:
+    ///   echo "<hook_json>" | cmux feed-hook --source <claude|codex|...>
+    ///
+    /// Designed so agents and wrappers can point a single hook config
+    /// entry at it and have permission/plan/question events surface in
+    /// the Feed sidebar. The existing per-agent hook wrappers (e.g.
+    /// `claude-hook pre-tool-use`) are untouched — callers chain both.
+    private func runFeedHook(
+        commandArgs: [String],
+        client: SocketClient,
+        telemetry: CLISocketSentryTelemetry
+    ) throws {
+        _ = client
+        _ = telemetry
+        let source = optionValue(commandArgs, name: "--source") ?? ""
+        guard !source.isEmpty else {
+            throw CLIError(message: "cmux feed-hook requires --source <agent-name>")
+        }
+
+        // Outside a cmux terminal (no CMUX_SURFACE_ID) → silently no-op.
+        // Also matches the graceful-fallback pattern of the other hooks.
+        guard ProcessInfo.processInfo.environment["CMUX_SURFACE_ID"]?.isEmpty == false else {
+            print("{}")
+            return
+        }
+
+        // Read stdin. Claude, Codex, and the other agents all pipe hook
+        // JSON through stdin; unknown inputs fall through to `{}`.
+        let stdinData = FileHandle.standardInput.readDataToEndOfFile()
+        guard !stdinData.isEmpty,
+              let stdinObj = try? JSONSerialization.jsonObject(with: stdinData) as? [String: Any]
+        else {
+            print("{}")
+            return
+        }
+
+        // Derive the hook event name, mapped to our wire format. Claude
+        // uses `hook_event_name`; Codex uses `event` or `hook_event_name`.
+        let rawEvent = (stdinObj["hook_event_name"] as? String)
+            ?? (stdinObj["event"] as? String)
+            ?? ""
+        let toolName = (stdinObj["tool_name"] as? String) ?? ""
+        let sessionId = (stdinObj["session_id"] as? String) ?? UUID().uuidString
+
+        // Decide whether this event is Feed-actionable. Non-actionable
+        // events are forwarded as telemetry (non-blocking) and exit `{}`
+        // so the agent proceeds without a decision.
+        let (hookEventName, isActionable) = Self.classifyFeedEvent(
+            event: rawEvent,
+            toolName: toolName
+        )
+
+        var eventDict: [String: Any] = [
+            "session_id": "\(source)-\(sessionId)",
+            "hook_event_name": hookEventName,
+            "_source": source,
+            "_ppid": ProcessInfo.processInfo.processIdentifier,
+        ]
+        if let cwd = stdinObj["cwd"] as? String { eventDict["cwd"] = cwd }
+        if !toolName.isEmpty { eventDict["tool_name"] = toolName }
+        if let toolInput = stdinObj["tool_input"] {
+            eventDict["tool_input"] = toolInput
+        }
+        let requestId = stdinObj["_opencode_request_id"] as? String
+            ?? "\(source)-\(sessionId)-\(rawEvent)-\(Int(Date().timeIntervalSince1970 * 1000))"
+        eventDict["_opencode_request_id"] = requestId
+
+        let waitTimeout: Double = isActionable ? 120 : 0
+        let params: [String: Any] = [
+            "event": eventDict,
+            "wait_timeout_seconds": waitTimeout,
+        ]
+
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "id": UUID().uuidString,
+            "method": "feed.push",
+            "params": params,
+        ])
+        let line = String(data: payload, encoding: .utf8) ?? "{}"
+
+        let response: String
+        do {
+            response = try client.send(command: line)
+        } catch {
+            // Socket unavailable → gracefully degrade: emit {} so the
+            // agent's default behavior takes over.
+            print("{}")
+            return
+        }
+
+        guard let respData = response.data(using: .utf8),
+              let respObj = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
+              let ok = respObj["ok"] as? Bool, ok,
+              let result = respObj["result"] as? [String: Any]
+        else {
+            print("{}")
+            return
+        }
+
+        let status = result["status"] as? String ?? "acknowledged"
+        if status == "resolved", let decision = result["decision"] as? [String: Any] {
+            // Translate decision into the agent's expected stdout format.
+            let out = Self.renderAgentDecision(
+                source: source,
+                hookEventName: hookEventName,
+                decision: decision
+            )
+            print(out)
+            return
+        }
+
+        // timed_out / acknowledged → fall through to agent default.
+        print("{}")
+    }
+
+    /// Classifies a raw agent hook event into our wire `hook_event_name`
+    /// plus an `isActionable` flag that drives whether `feed-hook`
+    /// blocks waiting for a user decision.
+    private static func classifyFeedEvent(
+        event: String,
+        toolName: String
+    ) -> (String, Bool) {
+        switch event {
+        case "PreToolUse":
+            switch toolName {
+            case "ExitPlanMode":
+                return ("ExitPlanMode", true)
+            case "AskUserQuestion":
+                return ("AskUserQuestion", true)
+            default:
+                // Permission-bearing tools can surface here too, but
+                // Claude's native permission flow already prompts via the
+                // TUI and doesn't need an additional Feed round-trip. We
+                // only surface explicit permission requests when the
+                // agent emits `PermissionRequest` directly.
+                return ("PreToolUse", false)
+            }
+        case "PermissionRequest":
+            return ("PermissionRequest", true)
+        case "PostToolUse":
+            return ("PostToolUse", false)
+        case "UserPromptSubmit":
+            return ("UserPromptSubmit", false)
+        case "SessionStart":
+            return ("SessionStart", false)
+        case "SessionEnd":
+            return ("SessionEnd", false)
+        case "Stop", "SubagentStop":
+            return ("Stop", false)
+        case "Notification":
+            return ("Notification", false)
+        default:
+            return ("PreToolUse", false)
+        }
+    }
+
+    /// Encodes the user's decision in the agent's expected hook stdout
+    /// shape so the agent honors it.
+    private static func renderAgentDecision(
+        source: String,
+        hookEventName: String,
+        decision: [String: Any]
+    ) -> String {
+        let kind = decision["kind"] as? String ?? ""
+
+        func encode(_ obj: [String: Any]) -> String {
+            guard let data = try? JSONSerialization.data(
+                withJSONObject: obj, options: [.sortedKeys]
+            ),
+                  let s = String(data: data, encoding: .utf8)
+            else { return "{}" }
+            return s
+        }
+
+        switch kind {
+        case "permission":
+            let mode = decision["mode"] as? String ?? "deny"
+            if mode == "deny" {
+                return encode([
+                    "decision": "block",
+                    "reason": "User denied permission."
+                ])
+            }
+            var out: [String: Any] = ["decision": "approve"]
+            if mode == "always" || mode == "all" || mode == "bypass" {
+                // Hint the agent to reduce subsequent prompts.
+                out["systemMessage"] =
+                    "User granted \(mode) permission. Reduce subsequent approval prompts for similar calls."
+                if source == "codex" {
+                    // Codex uses `remember` rather than `systemMessage`.
+                    out.removeValue(forKey: "systemMessage")
+                    out["remember"] = (mode == "bypass") ? "always" : "session"
+                }
+            }
+            return encode(out)
+
+        case "exit_plan":
+            let mode = decision["mode"] as? String ?? "manual"
+            if mode == "deny" {
+                return encode([
+                    "decision": "block",
+                    "reason": "User rejected the plan."
+                ])
+            }
+            var out: [String: Any] = ["decision": "approve"]
+            switch mode {
+            case "bypassPermissions":
+                out["systemMessage"] = "User accepted the plan and chose bypass-permissions mode. Proceed without per-edit approval."
+            case "autoAccept":
+                out["systemMessage"] = "User accepted the plan and chose auto-accept edits. Proceed without per-edit approval."
+            default:
+                out["systemMessage"] = "User accepted the plan; continue asking for approval per edit as usual."
+            }
+            return encode(out)
+
+        case "question":
+            let selections = decision["selections"] as? [String] ?? []
+            return encode([
+                "decision": "approve",
+                "toolResult": ["selections": selections]
+            ])
+
+        default:
+            _ = hookEventName
+            return "{}"
+        }
     }
 
     // MARK: Convenience wrappers
