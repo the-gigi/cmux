@@ -1,15 +1,18 @@
 import AppKit
+import CMUXWorkstream
 import SwiftUI
 
 /// Mode shown in the right sidebar (the panel toggled by ⌘⌥B).
 enum RightSidebarMode: String, CaseIterable {
     case files
     case sessions
+    case feed
 
     var label: String {
         switch self {
         case .files: return String(localized: "rightSidebar.mode.files", defaultValue: "Files")
         case .sessions: return String(localized: "rightSidebar.mode.sessions", defaultValue: "Sessions")
+        case .feed: return String(localized: "rightSidebar.mode.feed", defaultValue: "Feed")
         }
     }
 
@@ -17,6 +20,7 @@ enum RightSidebarMode: String, CaseIterable {
         switch self {
         case .files: return "folder"
         case .sessions: return "bubble.left.and.text.bubble.right"
+        case .feed: return "dot.radiowaves.left.and.right"
         }
     }
 }
@@ -73,6 +77,8 @@ struct RightSidebarPanelView: View {
                 .onAppear {
                     sessionIndexStore.setCurrentDirectoryIfChanged(sessionIndexDirectory)
                 }
+        case .feed:
+            FeedPanelView()
         }
     }
 
