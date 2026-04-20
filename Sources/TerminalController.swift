@@ -2120,6 +2120,27 @@ class TerminalController {
                 let r = try await VMClient.shared.exec(id: vmId, command: command, timeoutMs: timeoutMs)
                 return ["exit_code": r.exitCode, "stdout": r.stdout, "stderr": r.stderr]
             }
+        case "vm.ssh_info":
+            guard let vmId = params["id"] as? String else {
+                return v2Error(id: id, code: "invalid_params", message: "vm.ssh_info requires `id`")
+            }
+            return v2VmCall(id: id) {
+                let ep = try await VMClient.shared.openSSH(id: vmId)
+                var credPayload: [String: Any] = [:]
+                switch ep.credential {
+                case .password(let value):
+                    credPayload = ["kind": "password", "value": value]
+                case .authorizedKey(let pem):
+                    credPayload = ["kind": "authorizedKey", "private_key_pem": pem]
+                }
+                return [
+                    "host": ep.host,
+                    "port": ep.port,
+                    "username": ep.username,
+                    "credential": credPayload,
+                    "public_key_fingerprint": ep.publicKeyFingerprint ?? NSNull(),
+                ]
+            }
 
         // Windows
         case "window.list":
@@ -2528,6 +2549,7 @@ class TerminalController {
             "vm.create",
             "vm.destroy",
             "vm.exec",
+            "vm.ssh_info",
             "window.list",
             "window.current",
             "window.focus",

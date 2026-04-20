@@ -2064,6 +2064,34 @@ struct CMUXCLI {
                     print("OK \(vmId)")
                 }
 
+            case "ssh-info", "ssh":
+                guard let vmId = rest.first else {
+                    throw CLIError(message: "Usage: cmux \(command) ssh <id>")
+                }
+                let response = try client.sendV2(method: "vm.ssh_info", params: ["id": vmId])
+                if jsonOutput {
+                    print(jsonString(response))
+                    break
+                }
+                let host = (response["host"] as? String) ?? "?"
+                let port = (response["port"] as? Int) ?? 22
+                let username = (response["username"] as? String) ?? "?"
+                let cred = (response["credential"] as? [String: Any]) ?? [:]
+                let credKind = (cred["kind"] as? String) ?? "?"
+                let credValue = (cred["value"] as? String) ?? "?"
+                // Print the ready-to-paste one-liner. Using password auth for Freestyle today.
+                if credKind == "password" {
+                    print("ssh \(username):\(credValue)@\(host) -p \(port)")
+                    print("")
+                    print("  host:      \(host)")
+                    print("  port:      \(port)")
+                    print("  username:  \(username)")
+                    print("  password:  \(credValue)")
+                } else {
+                    print("authorizedKey credential not yet supported by `cmux \(command) ssh`; raw response:")
+                    print(jsonString(response))
+                }
+
             case "exec":
                 guard let vmId = rest.first else {
                     throw CLIError(message: "Usage: cmux vm exec <id> -- <command...>")
@@ -6996,10 +7024,12 @@ struct CMUXCLI {
             Subcommands:
               ls                        List your cloud VMs.
               new [--image <template>] [--provider <e2b|freestyle>]
-                                        Create a new VM. Defaults to the server-side default
-                                        template + provider (E2B today).
+                                        Create a new VM. Default provider is Freestyle.
               rm <id>                   Destroy a VM.
               exec <id> -- <command...> Run a shell command inside the VM and print stdout.
+              ssh <id>                  Mint a short-lived SSH credential and print a ready
+                                        -to-paste `ssh user:token@vm-ssh.freestyle.sh -p 22`
+                                        one-liner. (Freestyle only; E2B will error.)
 
             Env:
               CMUX_VM_API_BASE_URL       Override the backend origin (default: the cmux website).
@@ -14566,7 +14596,7 @@ struct CMUXCLI {
           version
           capabilities
           auth <status|login|logout>
-          vm <new|ls|rm|exec> [args...]          (alias: cloud)
+          vm <new|ls|rm|exec|ssh> [args...]      (alias: cloud)
           rpc <method> [json-params]
           identify [--workspace <id|ref|index>] [--surface <id|ref|index>] [--no-caller]
           list-windows

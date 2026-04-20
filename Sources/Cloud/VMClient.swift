@@ -30,6 +30,21 @@ struct VMExecResult {
     let stderr: String
 }
 
+/// Short-lived SSH endpoint the backend mints on demand. Mac client dials this with the
+/// existing `cmux ssh` transport.
+struct VMSSHEndpoint {
+    let host: String
+    let port: Int
+    let username: String
+    let credential: Credential
+    let publicKeyFingerprint: String?
+
+    enum Credential {
+        case password(String)
+        case authorizedKey(privateKeyPem: String)
+    }
+}
+
 /// Talks to the manaflow cloud VM backend at `/api/vm/*`. Stack Auth tokens come from
 /// `AuthManager.shared`; the HTTP base URL from `AuthEnvironment.vmAPIBaseURL`.
 ///
@@ -80,6 +95,42 @@ actor VMClient {
     func destroy(id: String) async throws {
         let (data, http) = try await request("DELETE", path: "/api/vm/\(id)")
         try ensureOK(http, data: data)
+    }
+
+    func openSSH(id: String) async throws -> VMSSHEndpoint {
+        let (data, http) = try await request("POST", path: "/api/vm/\(id)/ssh-endpoint", jsonBody: [:])
+        try ensureOK(http, data: data)
+        let obj = try decodeJSONObject(data)
+        guard let host = obj["host"] as? String,
+              let port = (obj["port"] as? Int) ?? (obj["port"] as? Double).map(Int.init),
+              let username = obj["username"] as? String,
+              let credDict = obj["credential"] as? [String: Any],
+              let kind = credDict["kind"] as? String
+        else {
+            throw VMClientError.malformedResponse("ssh-endpoint missing fields: \(obj)")
+        }
+        let credential: VMSSHEndpoint.Credential
+        switch kind {
+        case "password":
+            guard let value = credDict["value"] as? String else {
+                throw VMClientError.malformedResponse("ssh-endpoint password credential missing value")
+            }
+            credential = .password(value)
+        case "authorizedKey":
+            guard let pem = credDict["privateKeyPem"] as? String else {
+                throw VMClientError.malformedResponse("ssh-endpoint authorizedKey credential missing privateKeyPem")
+            }
+            credential = .authorizedKey(privateKeyPem: pem)
+        default:
+            throw VMClientError.malformedResponse("ssh-endpoint unknown credential kind: \(kind)")
+        }
+        return VMSSHEndpoint(
+            host: host,
+            port: port,
+            username: username,
+            credential: credential,
+            publicKeyFingerprint: obj["publicKeyFingerprint"] as? String
+        )
     }
 
     func exec(id: String, command: String, timeoutMs: Int = 30_000) async throws -> VMExecResult {
