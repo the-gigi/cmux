@@ -5081,28 +5081,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             "split=\(splitLabel) focus=\(focus ? 1 : 0) focusWindow=\(focusWindow ? 1 : 0)"
         )
 #endif
+        let browserMoveBegin = browserPanel(for: panelId) != nil
+        if browserMoveBegin {
+        }
         guard let source = locateSurface(surfaceId: panelId) else {
 #if DEBUG
             dlog("surface.move.fail panel=\(panelId.uuidString.prefix(5)) reason=sourcePanelNotFound elapsedMs=\(elapsedMs(since: moveStart))")
 #endif
+            if browserMoveBegin {
+            }
             return false
         }
         guard let sourceWorkspace = source.tabManager.tabs.first(where: { $0.id == source.workspaceId }) else {
 #if DEBUG
             dlog("surface.move.fail panel=\(panelId.uuidString.prefix(5)) reason=sourceWorkspaceMissing elapsedMs=\(elapsedMs(since: moveStart))")
 #endif
+            if browserMoveBegin {
+            }
             return false
         }
         guard let destinationManager = tabManagerFor(tabId: targetWorkspaceId) else {
 #if DEBUG
             dlog("surface.move.fail panel=\(panelId.uuidString.prefix(5)) reason=destinationManagerMissing elapsedMs=\(elapsedMs(since: moveStart))")
 #endif
+            if browserMoveBegin {
+            }
             return false
         }
         guard let destinationWorkspace = destinationManager.tabs.first(where: { $0.id == targetWorkspaceId }) else {
 #if DEBUG
             dlog("surface.move.fail panel=\(panelId.uuidString.prefix(5)) reason=destinationWorkspaceMissing elapsedMs=\(elapsedMs(since: moveStart))")
 #endif
+            if browserMoveBegin {
+            }
             return false
         }
 #if DEBUG
@@ -5144,6 +5155,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                         "elapsedMs=\(elapsedMs(since: moveStart))"
                     )
 #endif
+                    if browserMoveBegin {
+                    }
                     return false
                 }
                 if focus {
@@ -5155,6 +5168,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     "targetPane=\(resolvedTargetPane.id.uuidString.prefix(5)) elapsedMs=\(elapsedMs(since: moveStart))"
                 )
 #endif
+                if browserMoveBegin {
+                }
                 return true
             }
 
@@ -5166,11 +5181,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             )
 #if DEBUG
             dlog(
-                "surface.move.end panel=\(panelId.uuidString.prefix(5)) path=sameWorkspaceMove moved=\(moved ? 1 : 0) " +
-                "targetPane=\(resolvedTargetPane.id.uuidString.prefix(5)) targetIndex=\(targetIndex.map(String.init) ?? "nil") " +
-                "elapsedMs=\(elapsedMs(since: moveStart))"
+                    "surface.move.end panel=\(panelId.uuidString.prefix(5)) path=sameWorkspaceMove moved=\(moved ? 1 : 0) " +
+                    "targetPane=\(resolvedTargetPane.id.uuidString.prefix(5)) targetIndex=\(targetIndex.map(String.init) ?? "nil") " +
+                    "elapsedMs=\(elapsedMs(since: moveStart))"
             )
 #endif
+            if browserMoveBegin {
+            }
             return moved
         }
 
@@ -5187,6 +5204,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 "elapsedMs=\(elapsedMs(since: moveStart))"
             )
 #endif
+            if browserMoveBegin {
+            }
             return false
         }
 #if DEBUG
@@ -5212,6 +5231,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 "detachMs=\(detachMs) elapsedMs=\(elapsedMs(since: moveStart))"
             )
 #endif
+            if browserMoveBegin {
+            }
             return false
         }
 #if DEBUG
@@ -5245,6 +5266,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     "detachMs=\(detachMs) attachMs=\(attachMs) elapsedMs=\(elapsedMs(since: moveStart))"
                 )
 #endif
+                if browserMoveBegin {
+                }
                 return false
             }
 #if DEBUG
@@ -5291,6 +5314,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             "cleanupMs=\(cleanupMs) focusMs=\(focusMs) elapsedMs=\(elapsedMs(since: moveStart))"
         )
 #endif
+        if browserMoveBegin {
+        }
 
         return true
     }

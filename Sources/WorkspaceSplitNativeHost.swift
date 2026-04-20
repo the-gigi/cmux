@@ -314,12 +314,13 @@ final class WorkspaceLayoutRootHostView: NSView {
     private var desiredRenderSnapshot: WorkspaceLayoutRenderSnapshot
     private var displayedRenderSnapshot: WorkspaceLayoutRenderSnapshot
     private let surfaceRegistry: WorkspaceSurfaceRegistry
+    private var activeLocalTabDrag: WorkspaceLayoutLocalDragSnapshot?
 
     private let viewportCanvas: WorkspaceLayoutViewportCanvasView
     private var currentRootView: NSView?
     private var paneHosts: [UUID: WorkspaceLayoutPaneHostView] = [:]
     private var splitHosts: [UUID: WorkspaceLayoutNativeSplitView] = [:]
-    private var paneDropZones: [UUID: DropZone?] = [:]
+    private var dropOverlayCoordinator = WorkspacePaneDropOverlayCoordinator()
     private var renderedPaneIds: Set<UUID> = []
     private var renderedSplitIds: Set<UUID> = []
     private var lastContainerFrame: CGRect = .zero
@@ -333,6 +334,7 @@ final class WorkspaceLayoutRootHostView: NSView {
         desiredRenderSnapshot = renderSnapshot
         displayedRenderSnapshot = renderSnapshot
         self.surfaceRegistry = surfaceRegistry
+        activeLocalTabDrag = renderSnapshot.presentation.localTabDrag
         viewportCanvas = WorkspaceLayoutViewportCanvasView(
             surfaceRegistry: surfaceRegistry,
             debugName: "live"
@@ -358,6 +360,7 @@ final class WorkspaceLayoutRootHostView: NSView {
     ) {
         self.hostBridge = hostBridge
         desiredRenderSnapshot = renderSnapshot
+        syncLocalTabDragIfNeeded(from: renderSnapshot)
         isHidden = !renderSnapshot.presentation.isInteractive
         refreshPresentation()
         syncContainerFrameIfNeeded(isDragging: false)
@@ -383,6 +386,7 @@ final class WorkspaceLayoutRootHostView: NSView {
     }
 
     func prepareForRemoval() {
+        clearLocalTabDrag(propagateToWorkspace: false)
         viewportCanvas.clear(surfaceRegistry: surfaceRegistry)
 
         for (_, host) in paneHosts {
@@ -401,7 +405,7 @@ final class WorkspaceLayoutRootHostView: NSView {
         }
         splitHosts.removeAll()
 
-        paneDropZones.removeAll()
+        dropOverlayCoordinator.clearAll()
         renderedPaneIds.removeAll()
         renderedSplitIds.removeAll()
 
@@ -420,13 +424,19 @@ final class WorkspaceLayoutRootHostView: NSView {
         hostBridge.notifyGeometryChange(isDragging: isDragging)
     }
 
-    fileprivate func setActiveDropZone(_ zone: DropZone?, for paneId: PaneID) {
-        paneDropZones[paneId.id] = zone
-        viewportCanvas.update(
-            viewports: displayedRenderSnapshot.viewports,
-            presentation: displayedRenderSnapshot.presentation,
-            paneDropZones: paneDropZones
-        )
+    fileprivate func updatePaneDropZone(_ zone: DropZone, for paneId: PaneID) {
+        guard dropOverlayCoordinator.setZone(zone, for: paneId) else { return }
+        syncPaneDropState(for: paneId)
+    }
+
+    fileprivate func clearPaneDropZone(for paneId: PaneID) {
+        guard dropOverlayCoordinator.clearZone(for: paneId) else { return }
+        syncPaneDropState(for: paneId)
+    }
+
+    fileprivate func completePaneDropOverlayHide(for paneId: PaneID, generation: UInt64) {
+        guard dropOverlayCoordinator.completeHide(for: paneId, generation: generation) else { return }
+        syncPaneDropState(for: paneId)
     }
 
     private func syncContainerFrameIfNeeded(isDragging: Bool) {
@@ -465,7 +475,7 @@ final class WorkspaceLayoutRootHostView: NSView {
         viewportCanvas.update(
             viewports: displayedRenderSnapshot.viewports,
             presentation: displayedRenderSnapshot.presentation,
-            paneDropZones: paneDropZones
+            paneDropZones: dropOverlayCoordinator.viewportDropZones()
         )
     }
 
@@ -475,7 +485,7 @@ final class WorkspaceLayoutRootHostView: NSView {
 
         for (id, host) in paneHosts where !livePaneIds.contains(id) {
             host.prepareForRemoval()
-            paneDropZones.removeValue(forKey: id)
+            dropOverlayCoordinator.removePane(PaneID(id: id))
             if host.superview != nil {
                 host.removeFromSuperview()
             }
@@ -501,11 +511,15 @@ final class WorkspaceLayoutRootHostView: NSView {
     }
 
     private func paneHost(for snapshot: WorkspaceLayoutPaneRenderSnapshot) -> WorkspaceLayoutPaneHostView {
+        let subviewHostBridge = interactionHandlersForSubviews()
         if let existing = paneHosts[snapshot.paneId.id] {
             existing.update(
                 snapshot: snapshot,
-                hostBridge: hostBridge,
+                hostBridge: subviewHostBridge,
                 presentation: displayedRenderSnapshot.presentation,
+                localTabDrag: activeLocalTabDrag,
+                overlayPresentation: dropOverlayCoordinator.overlayPresentation(for: snapshot.paneId),
+                contentDropZone: dropOverlayCoordinator.activeDropZone(for: snapshot.paneId),
                 surfaceRegistry: surfaceRegistry
             )
             return existing
@@ -514,8 +528,11 @@ final class WorkspaceLayoutRootHostView: NSView {
         let host = WorkspaceLayoutPaneHostView(
             rootHost: self,
             snapshot: snapshot,
-            hostBridge: hostBridge,
+            hostBridge: subviewHostBridge,
             presentation: displayedRenderSnapshot.presentation,
+            localTabDrag: activeLocalTabDrag,
+            overlayPresentation: dropOverlayCoordinator.overlayPresentation(for: snapshot.paneId),
+            contentDropZone: dropOverlayCoordinator.activeDropZone(for: snapshot.paneId),
             surfaceRegistry: surfaceRegistry
         )
         paneHosts[snapshot.paneId.id] = host
@@ -554,13 +571,161 @@ final class WorkspaceLayoutRootHostView: NSView {
         applyViewportScene()
     }
 
+    private func syncLocalTabDragIfNeeded(from renderSnapshot: WorkspaceLayoutRenderSnapshot) {
+        guard let snapshotLocalTabDrag = renderSnapshot.presentation.localTabDrag else { return }
+        guard snapshotLocalTabDrag != activeLocalTabDrag else { return }
+        activeLocalTabDrag = snapshotLocalTabDrag
+        propagateLocalTabDrag()
+    }
+
+    private func interactionHandlersForSubviews() -> WorkspaceLayoutInteractionHandlers {
+        WorkspaceLayoutInteractionHandlers(
+            notifyGeometryChangeHandler: { [weak self] isDragging in
+                self?.hostBridge.notifyGeometryChange(isDragging: isDragging)
+            },
+            setContainerFrameHandler: { [weak self] frame in
+                self?.hostBridge.setContainerFrame(frame)
+            },
+            setDividerPositionHandler: { [weak self] position, splitId in
+                self?.hostBridge.setDividerPosition(position, forSplit: splitId) ?? false
+            },
+            consumeSplitEntryAnimationHandler: { [weak self] splitId in
+                self?.hostBridge.consumeSplitEntryAnimation(splitId)
+            },
+            beginTabDragHandler: { [weak self] tabId, sourcePaneId in
+                self?.beginLocalTabDrag(tabId: tabId, sourcePaneId: sourcePaneId)
+            },
+            clearDragStateHandler: { [weak self] in
+                self?.clearLocalTabDrag()
+            },
+            focusPaneHandler: { [weak self] paneId in
+                self?.hostBridge.focusPane(paneId) ?? false
+            },
+            selectTabHandler: { [weak self] tabId in
+                self?.hostBridge.selectTab(tabId)
+            },
+            requestCloseTabHandler: { [weak self] tabId, paneId in
+                self?.hostBridge.requestCloseTab(tabId, inPane: paneId) ?? false
+            },
+            togglePaneZoomHandler: { [weak self] paneId in
+                self?.hostBridge.togglePaneZoom(inPane: paneId) ?? false
+            },
+            requestTabContextActionHandler: { [weak self] action, tabId, paneId in
+                self?.hostBridge.requestTabContextAction(action, for: tabId, inPane: paneId)
+            },
+            requestNewTabHandler: { [weak self] kind, paneId in
+                self?.hostBridge.requestNewTab(kind: kind, inPane: paneId)
+            },
+            splitPaneHandler: { [weak self] paneId, orientation in
+                self?.hostBridge.splitPane(paneId, orientation: orientation)
+            },
+            splitPaneMovingTabHandler: { [weak self] paneId, orientation, tabId, insertFirst, focusNewPane in
+                self?.hostBridge.splitPane(
+                    paneId,
+                    orientation: orientation,
+                    movingTab: tabId,
+                    insertFirst: insertFirst,
+                    focusNewPane: focusNewPane
+                )
+            },
+            moveTabHandler: { [weak self] tabId, paneId, index in
+                self?.hostBridge.moveTab(tabId, toPane: paneId, atIndex: index) ?? false
+            },
+            handleExternalTabDropHandler: { [weak self] request in
+                self?.hostBridge.handleExternalTabDrop(request) ?? false
+            },
+            handleFileDropHandler: { [weak self] urls, paneId in
+                self?.hostBridge.handleFileDrop(urls, in: paneId) ?? false
+            }
+        )
+    }
+
+    private func beginLocalTabDrag(tabId: TabID, sourcePaneId: PaneID) {
+        let drag = WorkspaceLayoutLocalDragSnapshot(tabId: tabId, sourcePaneId: sourcePaneId)
+        guard activeLocalTabDrag != drag else { return }
+        activeLocalTabDrag = drag
+        propagateLocalTabDrag()
+        hostBridge.beginTabDrag(tabId: tabId, sourcePaneId: sourcePaneId)
+    }
+
+    private func clearLocalTabDrag(propagateToWorkspace: Bool = true) {
+        let hadActiveLocalTabDrag = activeLocalTabDrag != nil
+        activeLocalTabDrag = nil
+        if hadActiveLocalTabDrag {
+            propagateLocalTabDrag()
+            clearAllPaneDropOverlays()
+        }
+        if propagateToWorkspace {
+            hostBridge.clearDragState()
+        }
+    }
+
+    private func propagateLocalTabDrag() {
+        for host in paneHosts.values {
+            host.updateLocalTabDrag(activeLocalTabDrag)
+        }
+    }
+
+    private func clearAllPaneDropOverlays() {
+        let paneIds = Array(paneHosts.keys).map(PaneID.init(id:))
+        var didChange = false
+        for paneId in paneIds {
+            didChange = dropOverlayCoordinator.clearZone(for: paneId) || didChange
+            paneHosts[paneId.id]?.updateDropPresentation(
+                overlayPresentation: dropOverlayCoordinator.overlayPresentation(for: paneId),
+                contentDropZone: dropOverlayCoordinator.activeDropZone(for: paneId),
+                surfaceRegistry: surfaceRegistry
+            )
+        }
+        if didChange {
+            viewportCanvas.update(
+                viewports: displayedRenderSnapshot.viewports,
+                presentation: displayedRenderSnapshot.presentation,
+                paneDropZones: dropOverlayCoordinator.viewportDropZones()
+            )
+        }
+    }
+
+    private func syncPaneDropState(for paneId: PaneID) {
+        paneHosts[paneId.id]?.updateDropPresentation(
+            overlayPresentation: dropOverlayCoordinator.overlayPresentation(for: paneId),
+            contentDropZone: dropOverlayCoordinator.activeDropZone(for: paneId),
+            surfaceRegistry: surfaceRegistry
+        )
+        viewportCanvas.update(
+            viewports: displayedRenderSnapshot.viewports,
+            presentation: displayedRenderSnapshot.presentation,
+            paneDropZones: dropOverlayCoordinator.viewportDropZones()
+        )
+    }
+
 #if DEBUG
     var debugViewportMountIdentities: Set<WorkspacePaneMountIdentity> {
         viewportCanvas.debugMountedIdentities
     }
 
+    func debugPaneMountedDirectContentIdentity(_ paneId: PaneID) -> WorkspacePaneMountIdentity? {
+        paneHosts[paneId.id]?.debugMountedDirectContentIdentity
+    }
+
+    func debugPaneDirectContentBounds(_ paneId: PaneID) -> CGRect {
+        paneHosts[paneId.id]?.debugDirectContentBounds ?? .zero
+    }
+
     func debugPaneUsesDirectTerminalHost(_ paneId: PaneID) -> Bool {
         paneHosts[paneId.id]?.debugUsesDirectTerminalHost ?? false
+    }
+
+    func debugPaneLocalTabDrag(_ paneId: PaneID) -> WorkspaceLayoutLocalDragSnapshot? {
+        paneHosts[paneId.id]?.debugLocalTabDrag
+    }
+
+    func debugBeginLocalTabDrag(tabId: TabID, sourcePaneId: PaneID) {
+        beginLocalTabDrag(tabId: tabId, sourcePaneId: sourcePaneId)
+    }
+
+    func debugClearLocalTabDrag() {
+        clearLocalTabDrag()
     }
 #endif
 }
@@ -819,12 +984,14 @@ private final class WorkspaceLayoutPaneHostView: NSView {
     private var snapshot: WorkspaceLayoutPaneRenderSnapshot
     private let hostBridge: WorkspaceLayoutInteractionHandlers
     private var presentation: WorkspaceLayoutPresentationSnapshot
+    private var localTabDrag: WorkspaceLayoutLocalDragSnapshot?
     private let surfaceRegistry: WorkspaceSurfaceRegistry
 
     private let directContentSlotView = WorkspaceLayoutPaneContentSlotView(frame: .zero)
     private let tabBarView = WorkspaceLayoutNativeTabBarView(frame: .zero)
     private let dropOverlayView = WorkspaceLayoutPaneDropOverlayView(frame: .zero)
-    private var activeDropZone: DropZone? = nil
+    private var overlayPresentation: WorkspacePaneDropOverlayPresentation = .hidden
+    private var contentDropZone: DropZone? = nil
     private var mountedDirectContent: WorkspaceLayoutMountedTabEntry?
 
     init(
@@ -832,12 +999,18 @@ private final class WorkspaceLayoutPaneHostView: NSView {
         snapshot: WorkspaceLayoutPaneRenderSnapshot,
         hostBridge: WorkspaceLayoutInteractionHandlers,
         presentation: WorkspaceLayoutPresentationSnapshot,
+        localTabDrag: WorkspaceLayoutLocalDragSnapshot?,
+        overlayPresentation: WorkspacePaneDropOverlayPresentation,
+        contentDropZone: DropZone?,
         surfaceRegistry: WorkspaceSurfaceRegistry
     ) {
         self.rootHost = rootHost
         self.snapshot = snapshot
         self.hostBridge = hostBridge
         self.presentation = presentation
+        self.localTabDrag = localTabDrag
+        self.overlayPresentation = overlayPresentation
+        self.contentDropZone = contentDropZone
         self.surfaceRegistry = surfaceRegistry
         super.init(frame: .zero)
         wantsLayer = true
@@ -851,6 +1024,9 @@ private final class WorkspaceLayoutPaneHostView: NSView {
             snapshot: snapshot,
             hostBridge: hostBridge,
             presentation: presentation,
+            localTabDrag: localTabDrag,
+            overlayPresentation: overlayPresentation,
+            contentDropZone: contentDropZone,
             surfaceRegistry: surfaceRegistry
         )
     }
@@ -864,15 +1040,22 @@ private final class WorkspaceLayoutPaneHostView: NSView {
         snapshot: WorkspaceLayoutPaneRenderSnapshot,
         hostBridge: WorkspaceLayoutInteractionHandlers,
         presentation: WorkspaceLayoutPresentationSnapshot,
+        localTabDrag: WorkspaceLayoutLocalDragSnapshot?,
+        overlayPresentation: WorkspacePaneDropOverlayPresentation,
+        contentDropZone: DropZone?,
         surfaceRegistry: WorkspaceSurfaceRegistry
     ) {
         self.snapshot = snapshot
         self.presentation = presentation
+        self.localTabDrag = localTabDrag
+        self.overlayPresentation = overlayPresentation
+        self.contentDropZone = contentDropZone
 
         tabBarView.update(
             snapshot: snapshot.chrome,
             hostBridge: hostBridge,
-            presentation: presentation
+            presentation: presentation,
+            localTabDrag: localTabDrag
         )
         tabBarView.onTabMutation = { [weak self] in
             self?.rootHost?.notifyGeometryChanged(isDragging: false)
@@ -882,23 +1065,34 @@ private final class WorkspaceLayoutPaneHostView: NSView {
             paneId: snapshot.paneId,
             hostBridge: hostBridge,
             presentation: presentation,
-            activeDropZone: activeDropZone,
-            onZoneChanged: { [weak self] zone in
-                self?.setActiveDropZone(zone)
+            localTabDrag: localTabDrag,
+            overlayPresentation: overlayPresentation,
+            onZoneUpdated: { [weak self] zone in
+                self?.rootHost?.updatePaneDropZone(zone, for: snapshot.paneId)
+            },
+            onZoneCleared: { [weak self] in
+                self?.rootHost?.clearPaneDropZone(for: snapshot.paneId)
+            },
+            onHideAnimationCompleted: { [weak self] generation in
+                self?.rootHost?.completePaneDropOverlayHide(for: snapshot.paneId, generation: generation)
             },
             onDropPerformed: { [weak self] in
-                self?.setActiveDropZone(nil)
                 self?.rootHost?.notifyGeometryChanged(isDragging: false)
             }
         )
-        dropOverlayView.prefersNativeDropOverlay = snapshot.prefersNativeDropOverlay
         refreshDirectContentMount(surfaceRegistry: surfaceRegistry, reconcileLifecycle: true)
         needsLayout = true
     }
 
+    func updateLocalTabDrag(_ localTabDrag: WorkspaceLayoutLocalDragSnapshot?) {
+        guard self.localTabDrag != localTabDrag else { return }
+        self.localTabDrag = localTabDrag
+        tabBarView.updateLocalTabDrag(localTabDrag)
+        dropOverlayView.updateLocalTabDrag(localTabDrag)
+    }
+
     func prepareForRemoval() {
         clearDirectContent(surfaceRegistry: surfaceRegistry)
-        rootHost?.setActiveDropZone(nil, for: snapshot.paneId)
     }
 
     override func layout() {
@@ -917,12 +1111,21 @@ private final class WorkspaceLayoutPaneHostView: NSView {
         reconcileDirectContentLifecycle(reason: "windowMove")
     }
 
-    private func setActiveDropZone(_ zone: DropZone?) {
-        guard activeDropZone != zone else { return }
-        activeDropZone = zone
-        dropOverlayView.activeDropZone = zone
-        refreshDirectContentMount(surfaceRegistry: surfaceRegistry, reconcileLifecycle: false)
-        rootHost?.setActiveDropZone(zone, for: snapshot.paneId)
+    func updateDropPresentation(
+        overlayPresentation: WorkspacePaneDropOverlayPresentation,
+        contentDropZone: DropZone?,
+        surfaceRegistry: WorkspaceSurfaceRegistry
+    ) {
+        let didChangeOverlay = self.overlayPresentation != overlayPresentation
+        let didChangeContentDropZone = self.contentDropZone != contentDropZone
+        self.overlayPresentation = overlayPresentation
+        self.contentDropZone = contentDropZone
+        if didChangeOverlay {
+            dropOverlayView.updateOverlayPresentation(overlayPresentation)
+        }
+        if didChangeContentDropZone && !snapshot.content.usesDirectPaneHost {
+            refreshDirectContentMount(surfaceRegistry: surfaceRegistry, reconcileLifecycle: false)
+        }
     }
 
     private func refreshDirectContentMount(
@@ -951,11 +1154,12 @@ private final class WorkspaceLayoutPaneHostView: NSView {
             self.mountedDirectContent = nil
         }
 
+        let effectiveContentDropZone = snapshot.content.usesDirectPaneHost ? nil : self.contentDropZone
         surfaceRegistry.mountContent(
             snapshot.content,
             contentId: snapshot.contentId,
             in: directContentSlotView,
-            activeDropZone: activeDropZone
+            activeDropZone: effectiveContentDropZone
         )
         mountedDirectContent = nextMountedContent
         directContentSlotView.isHidden = false
@@ -988,11 +1192,23 @@ private final class WorkspaceLayoutPaneHostView: NSView {
     }
 
 #if DEBUG
+    var debugMountedDirectContentIdentity: WorkspacePaneMountIdentity? {
+        mountedDirectContent?.mountIdentity
+    }
+
+    var debugDirectContentBounds: CGRect {
+        directContentSlotView.bounds
+    }
+
     var debugUsesDirectTerminalHost: Bool {
         if case .terminal = mountedDirectContent?.content {
             return true
         }
         return false
+    }
+
+    var debugLocalTabDrag: WorkspaceLayoutLocalDragSnapshot? {
+        localTabDrag
     }
 #endif
 }
@@ -1315,6 +1531,7 @@ private final class WorkspaceLayoutNativeTabBarView: NSView {
     private var snapshot: WorkspaceLayoutPaneChromeSnapshot?
     private var hostBridge: (WorkspaceLayoutInteractionHandlers)?
     private var presentation: WorkspaceLayoutPresentationSnapshot?
+    private var localTabDrag: WorkspaceLayoutLocalDragSnapshot?
 
     private let scrollView = NSScrollView(frame: .zero)
     private let documentView = WorkspaceLayoutTabDocumentView(frame: .zero)
@@ -1384,11 +1601,13 @@ private final class WorkspaceLayoutNativeTabBarView: NSView {
     func update(
         snapshot: WorkspaceLayoutPaneChromeSnapshot,
         hostBridge: WorkspaceLayoutInteractionHandlers,
-        presentation: WorkspaceLayoutPresentationSnapshot
+        presentation: WorkspaceLayoutPresentationSnapshot,
+        localTabDrag: WorkspaceLayoutLocalDragSnapshot?
     ) {
         self.snapshot = snapshot
         self.hostBridge = hostBridge
         self.presentation = presentation
+        self.localTabDrag = localTabDrag
         wantsLayer = true
         layer?.backgroundColor = TabBarColors.nsColorPaneBackground(
             for: presentation.appearance
@@ -1409,13 +1628,20 @@ private final class WorkspaceLayoutNativeTabBarView: NSView {
         documentView.update(
             snapshot: snapshot,
             hostBridge: hostBridge,
-            presentation: presentation
+            presentation: presentation,
+            localTabDrag: localTabDrag
         )
         rebuildButtons()
         rebuildSplitButtons()
         updateSplitButtonsVisibility()
         needsLayout = true
         needsDisplay = true
+    }
+
+    func updateLocalTabDrag(_ localTabDrag: WorkspaceLayoutLocalDragSnapshot?) {
+        guard self.localTabDrag != localTabDrag else { return }
+        self.localTabDrag = localTabDrag
+        documentView.updateLocalTabDrag(localTabDrag)
     }
 
     override func layout() {
@@ -1672,6 +1898,7 @@ private final class WorkspaceLayoutTabDocumentView: NSView {
     private var snapshot: WorkspaceLayoutPaneChromeSnapshot?
     private var hostBridge: (WorkspaceLayoutInteractionHandlers)?
     private var presentation: WorkspaceLayoutPresentationSnapshot?
+    private var localTabDrag: WorkspaceLayoutLocalDragSnapshot?
     private var tabButtons: [WorkspaceLayoutNativeTabButtonView] = []
     private let dropIndicatorView = NSView(frame: .zero)
 
@@ -1698,11 +1925,17 @@ private final class WorkspaceLayoutTabDocumentView: NSView {
     func update(
         snapshot: WorkspaceLayoutPaneChromeSnapshot,
         hostBridge: WorkspaceLayoutInteractionHandlers,
-        presentation: WorkspaceLayoutPresentationSnapshot
+        presentation: WorkspaceLayoutPresentationSnapshot,
+        localTabDrag: WorkspaceLayoutLocalDragSnapshot?
     ) {
         self.snapshot = snapshot
         self.hostBridge = hostBridge
         self.presentation = presentation
+        self.localTabDrag = localTabDrag
+    }
+
+    func updateLocalTabDrag(_ localTabDrag: WorkspaceLayoutLocalDragSnapshot?) {
+        self.localTabDrag = localTabDrag
     }
 
     func setTabButtons(_ buttons: [WorkspaceLayoutNativeTabButtonView]) {
@@ -1770,7 +2003,7 @@ private final class WorkspaceLayoutTabDocumentView: NSView {
     private func validateSplitTabDrop(_ sender: NSDraggingInfo) -> Bool {
         guard let presentation else { return false }
         guard presentation.isInteractive else { return false }
-        if presentation.isHandlingLocalTabDrag {
+        if localTabDrag != nil {
             return true
         }
         guard let transfer = workspaceSplitDecodeTransfer(from: sender.draggingPasteboard),
@@ -1801,10 +2034,10 @@ private final class WorkspaceLayoutTabDocumentView: NSView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let snapshot, let hostBridge, let presentation else { return false }
+        guard let snapshot, let hostBridge else { return false }
         let destinationIndex = targetIndex(for: convert(sender.draggingLocation, from: nil))
 
-        if let localDrag = presentation.localTabDrag {
+        if let localDrag = localTabDrag {
             let draggedTabId = localDrag.tabId
             let sourcePaneId = localDrag.sourcePaneId
             if sourcePaneId == snapshot.paneId,
@@ -3008,20 +3241,13 @@ private final class WorkspaceLayoutPaneDropOverlayView: NSView {
     private var paneId: PaneID?
     private var hostBridge: (WorkspaceLayoutInteractionHandlers)?
     private var presentation: WorkspaceLayoutPresentationSnapshot?
-    private var onZoneChanged: ((DropZone?) -> Void)?
+    private var localTabDrag: WorkspaceLayoutLocalDragSnapshot?
+    private var onZoneUpdated: ((DropZone) -> Void)?
+    private var onZoneCleared: (() -> Void)?
+    private var onHideAnimationCompleted: ((UInt64) -> Void)?
     private var onDropPerformed: (() -> Void)?
-    var activeDropZone: DropZone? {
-        didSet {
-            needsDisplay = true
-        }
-    }
-
-    var prefersNativeDropOverlay = false {
-        didSet {
-            guard oldValue != prefersNativeDropOverlay else { return }
-            needsDisplay = true
-        }
-    }
+    private let overlayShapeView = NSView(frame: .zero)
+    private var overlayPresentation: WorkspacePaneDropOverlayPresentation = .hidden
 
     var hitTestPassthroughEnabled = false
 
@@ -3029,6 +3255,16 @@ private final class WorkspaceLayoutPaneDropOverlayView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
+        overlayShapeView.wantsLayer = true
+        overlayShapeView.isHidden = true
+        overlayShapeView.alphaValue = 1
+        if let layer = overlayShapeView.layer {
+            layer.cornerRadius = 8
+            layer.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor
+            layer.borderColor = NSColor.controlAccentColor.cgColor
+            layer.borderWidth = 2
+        }
+        addSubview(overlayShapeView)
         registerForDraggedTypes([
             NSPasteboard.PasteboardType(UTType.tabTransfer.identifier),
             .fileURL,
@@ -3045,42 +3281,143 @@ private final class WorkspaceLayoutPaneDropOverlayView: NSView {
         hitTestPassthroughEnabled ? nil : super.hitTest(point)
     }
 
+    override func layout() {
+        super.layout()
+        guard let zone = overlayPresentation.zone else { return }
+        let targetFrame = WorkspacePaneDropRouting.overlayFrame(for: zone, in: bounds.size)
+        if !Self.rectApproximatelyEqual(overlayShapeView.frame, targetFrame) {
+            overlayShapeView.frame = targetFrame
+        }
+    }
+
     func update(
         paneId: PaneID,
         hostBridge: WorkspaceLayoutInteractionHandlers,
         presentation: WorkspaceLayoutPresentationSnapshot,
-        activeDropZone: DropZone?,
-        onZoneChanged: @escaping (DropZone?) -> Void,
+        localTabDrag: WorkspaceLayoutLocalDragSnapshot?,
+        overlayPresentation: WorkspacePaneDropOverlayPresentation,
+        onZoneUpdated: @escaping (DropZone) -> Void,
+        onZoneCleared: @escaping () -> Void,
+        onHideAnimationCompleted: @escaping (UInt64) -> Void,
         onDropPerformed: @escaping () -> Void
     ) {
         self.paneId = paneId
         self.hostBridge = hostBridge
         self.presentation = presentation
-        self.activeDropZone = activeDropZone
-        self.onZoneChanged = onZoneChanged
+        self.localTabDrag = localTabDrag
+        self.onZoneUpdated = onZoneUpdated
+        self.onZoneCleared = onZoneCleared
+        self.onHideAnimationCompleted = onHideAnimationCompleted
         self.onDropPerformed = onDropPerformed
-        needsDisplay = true
+        updateOverlayPresentation(overlayPresentation)
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        guard let zone = activeDropZone else { return }
-        // Native pane hosts (for example terminal) can render their own drop overlay.
-        // Skip split-host fallback paint in that case.
-        if prefersNativeDropOverlay {
-            return
+    func updateLocalTabDrag(_ localTabDrag: WorkspaceLayoutLocalDragSnapshot?) {
+        self.localTabDrag = localTabDrag
+    }
+
+    func updateOverlayPresentation(_ overlayPresentation: WorkspacePaneDropOverlayPresentation) {
+        let previousPresentation = self.overlayPresentation
+        guard previousPresentation != overlayPresentation else { return }
+        self.overlayPresentation = overlayPresentation
+        applyOverlayPresentationTransition(from: previousPresentation, to: overlayPresentation)
+    }
+
+    private static func rectApproximatelyEqual(
+        _ lhs: CGRect,
+        _ rhs: CGRect,
+        epsilon: CGFloat = 0.5
+    ) -> Bool {
+        abs(lhs.origin.x - rhs.origin.x) <= epsilon &&
+            abs(lhs.origin.y - rhs.origin.y) <= epsilon &&
+            abs(lhs.size.width - rhs.size.width) <= epsilon &&
+            abs(lhs.size.height - rhs.size.height) <= epsilon
+    }
+
+    private func applyOverlayPresentationTransition(
+        from previousPresentation: WorkspacePaneDropOverlayPresentation,
+        to nextPresentation: WorkspacePaneDropOverlayPresentation
+    ) {
+        switch nextPresentation.phase {
+        case .hidden:
+            overlayShapeView.layer?.removeAllAnimations()
+            overlayShapeView.isHidden = true
+            overlayShapeView.alphaValue = 1
+
+        case .visible:
+            guard let zone = nextPresentation.zone else { return }
+            let targetFrame = WorkspacePaneDropRouting.overlayFrame(for: zone, in: bounds.size)
+            let isSameFrame = Self.rectApproximatelyEqual(overlayShapeView.frame, targetFrame)
+            let zoneChanged = previousPresentation.zone != zone
+
+            if overlayShapeView.isHidden || previousPresentation.phase != .visible {
+                overlayShapeView.layer?.removeAllAnimations()
+                overlayShapeView.frame = targetFrame
+                overlayShapeView.alphaValue = 0
+                overlayShapeView.isHidden = false
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.18
+                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    overlayShapeView.animator().alphaValue = 1
+                }
+                return
+            }
+
+            if zoneChanged && !isSameFrame {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.12
+                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    overlayShapeView.animator().frame = targetFrame
+                }
+            } else if !isSameFrame {
+                overlayShapeView.frame = targetFrame
+            }
+
+            if overlayShapeView.alphaValue < 1 {
+                overlayShapeView.layer?.removeAllAnimations()
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.12
+                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    overlayShapeView.animator().alphaValue = 1
+                }
+            }
+
+        case .hiding:
+            guard let zone = nextPresentation.zone else {
+                onHideAnimationCompleted?(nextPresentation.generation)
+                return
+            }
+
+            let targetFrame = WorkspacePaneDropRouting.overlayFrame(for: zone, in: bounds.size)
+            if !Self.rectApproximatelyEqual(overlayShapeView.frame, targetFrame) {
+                overlayShapeView.frame = targetFrame
+            }
+            overlayShapeView.layer?.removeAllAnimations()
+            guard !overlayShapeView.isHidden else {
+                onHideAnimationCompleted?(nextPresentation.generation)
+                return
+            }
+
+            let generation = nextPresentation.generation
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.14
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                overlayShapeView.animator().alphaValue = 0
+            } completionHandler: { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    guard self.overlayPresentation.phase == .hiding else { return }
+                    guard self.overlayPresentation.generation == generation else { return }
+                    self.overlayShapeView.isHidden = true
+                    self.overlayShapeView.alphaValue = 1
+                    self.onHideAnimationCompleted?(generation)
+                }
+            }
         }
-        let frame = WorkspacePaneDropRouting.overlayFrame(for: zone, in: bounds.size)
-        let path = NSBezierPath(roundedRect: frame, xRadius: 8, yRadius: 8)
-        NSColor.controlAccentColor.withAlphaComponent(0.25).setFill()
-        path.fill()
-        NSColor.controlAccentColor.setStroke()
-        path.lineWidth = 2
-        path.stroke()
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        draggingUpdated(sender)
+        return draggingUpdated(sender)
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -3088,12 +3425,12 @@ private final class WorkspaceLayoutPaneDropOverlayView: NSView {
         guard presentation.isInteractive else { return [] }
 
         if sender.draggingPasteboard.availableType(from: [NSPasteboard.PasteboardType(UTType.tabTransfer.identifier)]) != nil {
-            guard presentation.isHandlingLocalTabDrag
+            guard localTabDrag != nil
                 || workspaceSplitDecodeTransfer(from: sender.draggingPasteboard)?.isFromCurrentProcess == true else {
                 return []
             }
             let location = convert(sender.draggingLocation, from: nil)
-            let sourcePaneId = presentation.localTabDrag?.sourcePaneId
+            let sourcePaneId = localTabDrag?.sourcePaneId
             let decision = WorkspacePaneDropRouting.decision(
                 for: location,
                 in: bounds.size,
@@ -3101,15 +3438,13 @@ private final class WorkspaceLayoutPaneDropOverlayView: NSView {
                 sourcePaneId: sourcePaneId
             )
             let zone = decision.finalZone
-            activeDropZone = zone
-            onZoneChanged?(zone)
+            onZoneUpdated?(zone)
             return .move
         }
 
         let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self]) as? [URL]
         if let urls, !urls.isEmpty {
-            activeDropZone = .center
-            onZoneChanged?(.center)
+            onZoneUpdated?(.center)
             return .copy
         }
 
@@ -3117,8 +3452,7 @@ private final class WorkspaceLayoutPaneDropOverlayView: NSView {
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
-        activeDropZone = nil
-        onZoneChanged?(nil)
+        onZoneCleared?()
     }
 
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
@@ -3126,20 +3460,19 @@ private final class WorkspaceLayoutPaneDropOverlayView: NSView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let paneId, let hostBridge, let presentation else { return false }
+        guard let paneId, let hostBridge else { return false }
 
         if sender.draggingPasteboard.availableType(from: [NSPasteboard.PasteboardType(UTType.tabTransfer.identifier)]) != nil {
-            let zone = activeDropZone ?? WorkspacePaneDropRouting.zone(
+            let zone = overlayPresentation.zone ?? WorkspacePaneDropRouting.zone(
                 for: convert(sender.draggingLocation, from: nil),
                 in: bounds.size
             )
 
-            if let localDrag = presentation.localTabDrag {
+            if let localDrag = localTabDrag {
                 let draggedTabId = localDrag.tabId
                 let sourcePaneId = localDrag.sourcePaneId
                 hostBridge.clearDragState()
-                activeDropZone = nil
-                onZoneChanged?(nil)
+                onZoneCleared?()
 
                 if zone == .center {
                     if sourcePaneId != paneId {
@@ -3163,8 +3496,7 @@ private final class WorkspaceLayoutPaneDropOverlayView: NSView {
 
             guard let transfer = workspaceSplitDecodeTransfer(from: sender.draggingPasteboard),
                   transfer.isFromCurrentProcess else {
-                activeDropZone = nil
-                onZoneChanged?(nil)
+                onZoneCleared?()
                 return false
             }
 
@@ -3183,8 +3515,7 @@ private final class WorkspaceLayoutPaneDropOverlayView: NSView {
                 destination: destination
             )
             let handled = hostBridge.handleExternalTabDrop(request)
-            activeDropZone = nil
-            onZoneChanged?(nil)
+            onZoneCleared?()
             if handled {
                 onDropPerformed?()
             }
@@ -3193,8 +3524,7 @@ private final class WorkspaceLayoutPaneDropOverlayView: NSView {
 
         let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self]) as? [URL] ?? []
         let handled = hostBridge.handleFileDrop(urls, in: paneId)
-        activeDropZone = nil
-        onZoneChanged?(nil)
+        onZoneCleared?()
         if handled {
             onDropPerformed?()
         }
@@ -4644,14 +4974,14 @@ enum WorkspacePaneDropRouting {
         case .top:
             return CGRect(
                 x: padding,
-                y: padding,
+                y: size.height / 2,
                 width: size.width - (padding * 2),
                 height: (size.height / 2) - padding
             )
         case .bottom:
             return CGRect(
                 x: padding,
-                y: size.height / 2,
+                y: padding,
                 width: size.width - (padding * 2),
                 height: (size.height / 2) - padding
             )

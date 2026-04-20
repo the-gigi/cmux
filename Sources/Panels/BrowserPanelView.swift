@@ -6,6 +6,7 @@ import ObjectiveC
 @MainActor
 final class BrowserPanelWorkspaceContentView: NSView {
     private let hostingController = NSHostingController(rootView: AnyView(EmptyView()))
+    private let retainedWebViewHost = WebViewRepresentable.HostContainerView()
     private weak var currentPanel: BrowserPanel?
 
     override init(frame frameRect: NSRect) {
@@ -32,6 +33,8 @@ final class BrowserPanelWorkspaceContentView: NSView {
                 paneId: descriptor.paneId,
                 isFocused: descriptor.isFocused,
                 isVisibleInUI: descriptor.isVisibleInUI,
+                prefersLocalInlineHosting: descriptor.prefersLocalInlineHosting,
+                retainedWebViewHost: retainedWebViewHost,
                 portalPriority: descriptor.portalPriority,
                 onRequestPanelFocus: descriptor.onRequestPanelFocus
             )
@@ -47,6 +50,24 @@ final class BrowserPanelWorkspaceContentView: NSView {
     }
 
     func prepareForRemoval(reason: String) {
+#if DEBUG
+        if let currentPanel {
+            let line =
+                "browser.workspaceHost.remove ws=\(currentPanel.workspaceId.uuidString.prefix(5)) " +
+                "panel=\(currentPanel.id.uuidString.prefix(5)) " +
+                "web=\(browserPanelViewObjectID(currentPanel.webView)) " +
+                "reason=\(reason)"
+            dlog(line)
+        }
+#endif
+        if let currentPanel {
+            WebViewRepresentable.deactivatePortalHosts(
+                in: hostingController.view,
+                panel: currentPanel,
+                reason: reason
+            )
+            currentPanel.suspendPortalHosting(reason: reason)
+        }
         currentPanel?.setBrowserPortalVisibility(
             visibleInUI: false,
             zPriority: 0,
@@ -70,6 +91,12 @@ final class BrowserPanelWorkspaceContentView: NSView {
             addSubview(hostedView)
         }
     }
+
+#if DEBUG
+    var debugRetainedWebViewHost: NSView {
+        retainedWebViewHost
+    }
+#endif
 }
 
 private var cmuxBrowserPanelNeedsRenderingStateReattachKey: UInt8 = 0
@@ -466,6 +493,8 @@ struct BrowserPanelView: View {
     let paneId: PaneID
     let isFocused: Bool
     let isVisibleInUI: Bool
+    let prefersLocalInlineHosting: Bool
+    let retainedWebViewHost: WebViewRepresentable.HostContainerView?
     let portalPriority: Int
     let onRequestPanelFocus: () -> Void
     @Environment(\.colorScheme) private var colorScheme
@@ -838,6 +867,14 @@ struct BrowserPanelView: View {
     }
 
     private func handleVisibleInUIChange(_ visibleInUI: Bool) {
+#if DEBUG
+        let line =
+            "browser.visibleInUI ws=\(panel.workspaceId.uuidString.prefix(5)) " +
+            "panel=\(panel.id.uuidString.prefix(5)) web=\(browserPanelViewObjectID(panel.webView)) " +
+            "next=\(visibleInUI ? 1 : 0) focused=\(isFocused ? 1 : 0) " +
+            "window=\(panel.webView.window?.windowNumber ?? -1)"
+        dlog(line)
+#endif
         if visibleInUI {
             panel.cancelPendingDeveloperToolsVisibilityLossCheck()
             return
@@ -1374,6 +1411,7 @@ struct BrowserPanelView: View {
     }
 
     private var webView: some View {
+        let useLocalInlineHosting = prefersLocalInlineHosting && isCurrentPaneOwner
         let useLocalInlineDeveloperToolsHosting =
             panel.shouldUseLocalInlineDeveloperToolsHosting() &&
             isCurrentPaneOwner
@@ -1383,8 +1421,9 @@ struct BrowserPanelView: View {
                 WebViewRepresentable(
                     panel: panel,
                     paneId: paneId,
-                    shouldAttachWebView: isVisibleInUI && isCurrentPaneOwner && !useLocalInlineDeveloperToolsHosting,
-                    useLocalInlineHosting: useLocalInlineDeveloperToolsHosting,
+                    shouldAttachWebView: isVisibleInUI && isCurrentPaneOwner && !(useLocalInlineHosting || useLocalInlineDeveloperToolsHosting),
+                    useLocalInlineHosting: useLocalInlineHosting || useLocalInlineDeveloperToolsHosting,
+                    retainedHostView: retainedWebViewHost,
                     shouldFocusWebView: isFocused && !addressBarFocused,
                     isPanelFocused: isFocused,
                     portalZPriority: portalPriority,
@@ -1407,9 +1446,10 @@ struct BrowserPanelView: View {
                 )
                 .accessibilityIdentifier("BrowserWebViewSurface")
                 // Keep the host stable for normal pane churn, but force a remount when
-                // BrowserPanel replaces its underlying WKWebView after process termination
-                // or when the browser moves to a different WorkspaceSplit pane host.
-                .id("\(panel.webViewInstanceID.uuidString)-\(paneId.id.uuidString)")
+                // BrowserPanel replaces its underlying WKWebView after process termination.
+                // Pane moves now keep the same retained host view, so pane identity must not
+                // force a remount during browser drag/split reparenting.
+                .id(panel.webViewInstanceID.uuidString)
                 .contentShape(Rectangle())
                 .accessibilityIdentifier(browserContentAccessibilityIdentifier)
                 .simultaneousGesture(TapGesture().onEnded {
@@ -4533,6 +4573,7 @@ struct WebViewRepresentable: NSViewRepresentable {
     let paneId: PaneID
     let shouldAttachWebView: Bool
     let useLocalInlineHosting: Bool
+    let retainedHostView: HostContainerView?
     let shouldFocusWebView: Bool
     let isPanelFocused: Bool
     let portalZPriority: Int
@@ -6163,7 +6204,7 @@ struct WebViewRepresentable: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSView {
-        let container = HostContainerView()
+        let container = retainedHostView ?? HostContainerView()
         container.wantsLayer = true
         return container
     }
@@ -6173,6 +6214,19 @@ struct WebViewRepresentable: NSViewRepresentable {
         host.onDidMoveToWindow = nil
         host.onGeometryChanged = nil
         host.clearLocalInlineCallbacks()
+    }
+
+    static func deactivatePortalHosts(in root: NSView, panel: BrowserPanel, reason: String) {
+        if let host = root as? HostContainerView {
+            clearPortalCallbacks(for: host)
+            _ = panel.releasePortalHostIfOwned(
+                hostId: ObjectIdentifier(host),
+                reason: reason
+            )
+        }
+        for subview in root.subviews {
+            deactivatePortalHosts(in: subview, panel: panel, reason: reason)
+        }
     }
 
     private static func shouldPreserveExternalFullscreenHost(
@@ -6576,13 +6630,16 @@ struct WebViewRepresentable: NSViewRepresentable {
         let portalHostAccepted =
             shouldAttachWebView &&
             isCurrentPaneOwner &&
-            panel.claimPortalHost(
-                hostId: hostId,
-                paneId: paneId,
-                inWindow: host.window != nil,
-                bounds: host.bounds,
-                reason: "update"
-            )
+            {
+                panel.resumePortalHosting(reason: "update")
+                return panel.claimPortalHost(
+                    hostId: hostId,
+                    paneId: paneId,
+                    inWindow: host.window != nil,
+                    bounds: host.bounds,
+                    reason: "update"
+                )
+            }()
 #if DEBUG
         if !isCurrentPaneOwner && (shouldAttachWebView || host.window != nil) {
             dlog(
@@ -6602,6 +6659,7 @@ struct WebViewRepresentable: NSViewRepresentable {
             guard let host, let webView, let coordinator, let portalAnchorView, let browserPanel else { return }
             guard coordinator.attachGeneration == generation else { return }
             guard currentPaneDropContext()?.paneId.id == paneId.id else { return }
+            browserPanel.resumePortalHosting(reason: "didMoveToWindow")
             guard browserPanel.claimPortalHost(
                 hostId: ObjectIdentifier(host),
                 paneId: paneId,
@@ -6634,6 +6692,7 @@ struct WebViewRepresentable: NSViewRepresentable {
             guard let host, let webView, let coordinator, let portalAnchorView, let browserPanel else { return }
             guard coordinator.attachGeneration == generation else { return }
             guard currentPaneDropContext()?.paneId.id == paneId.id else { return }
+            browserPanel.resumePortalHosting(reason: "geometryChanged")
             guard browserPanel.claimPortalHost(
                 hostId: ObjectIdentifier(host),
                 paneId: paneId,
@@ -6743,7 +6802,7 @@ struct WebViewRepresentable: NSViewRepresentable {
 
         panel.restoreDeveloperToolsAfterAttachIfNeeded()
 
-        #if DEBUG
+#if DEBUG
         Self.logDevToolsState(
             panel,
             event: "portal.update",
@@ -6751,7 +6810,7 @@ struct WebViewRepresentable: NSViewRepresentable {
             retryCount: 0,
             details: Self.attachContext(webView: webView, host: host)
         )
-        #endif
+#endif
         return portalHostAccepted && !shouldPreserveExternalFullscreenHost
     }
 

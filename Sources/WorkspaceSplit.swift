@@ -3062,19 +3062,10 @@ enum WorkspacePaneMountIdentity: Hashable {
 extension WorkspacePaneContent {
     var usesDirectPaneHost: Bool {
         switch self {
-        case .terminal:
-            return true
-        case .browser, .markdown, .placeholder:
-            return false
-        }
-    }
-
-    var prefersNativeDropOverlay: Bool {
-        switch self {
         case .terminal, .browser:
-            true
+            return true
         case .markdown, .placeholder:
-            false
+            return false
         }
     }
 
@@ -3183,6 +3174,7 @@ struct WorkspaceBrowserPaneContent {
     let paneId: PaneID
     let isFocused: Bool
     let isVisibleInUI: Bool
+    let prefersLocalInlineHosting: Bool
     let portalPriority: Int
     let onRequestPanelFocus: () -> Void
 }
@@ -3222,7 +3214,6 @@ struct WorkspaceLayoutPaneRenderSnapshot {
     let chrome: WorkspaceLayoutPaneChromeSnapshot
     let contentId: UUID
     let content: WorkspacePaneContent
-    let prefersNativeDropOverlay: Bool
 }
 
 struct WorkspaceLayoutViewportSnapshot {
@@ -3267,9 +3258,115 @@ indirect enum WorkspaceLayoutRenderNodeSnapshot {
     }
 }
 
-struct WorkspaceLayoutLocalDragSnapshot {
+struct WorkspaceLayoutLocalDragSnapshot: Equatable {
     let tabId: TabID
     let sourcePaneId: PaneID
+}
+
+enum WorkspacePaneDropOverlayPhase: Equatable {
+    case hidden
+    case visible
+    case hiding
+}
+
+struct WorkspacePaneDropOverlayPresentation: Equatable {
+    let phase: WorkspacePaneDropOverlayPhase
+    let zone: DropZone?
+    let generation: UInt64
+
+    static let hidden = WorkspacePaneDropOverlayPresentation(
+        phase: .hidden,
+        zone: nil,
+        generation: 0
+    )
+
+    static func visible(zone: DropZone, generation: UInt64) -> WorkspacePaneDropOverlayPresentation {
+        WorkspacePaneDropOverlayPresentation(
+            phase: .visible,
+            zone: zone,
+            generation: generation
+        )
+    }
+
+    static func hiding(zone: DropZone, generation: UInt64) -> WorkspacePaneDropOverlayPresentation {
+        WorkspacePaneDropOverlayPresentation(
+            phase: .hiding,
+            zone: zone,
+            generation: generation
+        )
+    }
+}
+
+struct WorkspacePaneDropOverlayCoordinator {
+    private(set) var activeDropZones: [UUID: DropZone] = [:]
+    private(set) var presentations: [UUID: WorkspacePaneDropOverlayPresentation] = [:]
+    private var nextGenerationValue: UInt64 = 1
+
+    mutating func setZone(_ zone: DropZone, for paneId: PaneID) -> Bool {
+        let key = paneId.id
+        let previousZone = activeDropZones[key]
+        let previousPresentation = presentations[key] ?? .hidden
+        activeDropZones[key] = zone
+        if previousPresentation.phase != .visible || previousPresentation.zone != zone {
+            presentations[key] = .visible(zone: zone, generation: nextGeneration())
+        }
+        let nextPresentation = presentations[key] ?? .hidden
+        return previousZone != zone || previousPresentation != nextPresentation
+    }
+
+    mutating func clearZone(for paneId: PaneID) -> Bool {
+        let key = paneId.id
+        let previousZone = activeDropZones.removeValue(forKey: key)
+        let previousPresentation = presentations[key] ?? .hidden
+        let lastZone = previousPresentation.zone ?? previousZone
+        if let lastZone, previousPresentation.phase != .hiding {
+            presentations[key] = .hiding(zone: lastZone, generation: nextGeneration())
+        } else if lastZone == nil {
+            presentations.removeValue(forKey: key)
+        }
+        let nextPresentation = presentations[key] ?? .hidden
+        return previousZone != nil || previousPresentation != nextPresentation
+    }
+
+    mutating func completeHide(for paneId: PaneID, generation: UInt64) -> Bool {
+        let key = paneId.id
+        guard let presentation = presentations[key],
+              presentation.phase == .hiding,
+              presentation.generation == generation else {
+            return false
+        }
+        presentations.removeValue(forKey: key)
+        return true
+    }
+
+    func activeDropZone(for paneId: PaneID) -> DropZone? {
+        activeDropZones[paneId.id]
+    }
+
+    func overlayPresentation(for paneId: PaneID) -> WorkspacePaneDropOverlayPresentation {
+        presentations[paneId.id] ?? .hidden
+    }
+
+    func viewportDropZones() -> [UUID: DropZone?] {
+        activeDropZones.reduce(into: [:]) { partialResult, entry in
+            partialResult[entry.key] = entry.value
+        }
+    }
+
+    mutating func removePane(_ paneId: PaneID) {
+        activeDropZones.removeValue(forKey: paneId.id)
+        presentations.removeValue(forKey: paneId.id)
+    }
+
+    mutating func clearAll() {
+        activeDropZones.removeAll()
+        presentations.removeAll()
+    }
+
+    private mutating func nextGeneration() -> UInt64 {
+        defer { nextGenerationValue &+= 1 }
+        return nextGenerationValue
+    }
 }
 
 struct WorkspaceLayoutPresentationSnapshot {

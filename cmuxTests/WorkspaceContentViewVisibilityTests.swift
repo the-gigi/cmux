@@ -51,6 +51,7 @@ final class WorkspaceContentViewVisibilityTests: XCTestCase {
                 paneId: paneId,
                 isFocused: true,
                 isVisibleInUI: true,
+                prefersLocalInlineHosting: true,
                 portalPriority: 0,
                 onRequestPanelFocus: {}
             )
@@ -119,6 +120,28 @@ final class WorkspaceContentViewVisibilityTests: XCTestCase {
         WorkspaceLayoutNativeHost.dismantleNSView(rootHost, coordinator: ())
 
         XCTAssertEqual(BrowserWindowPortalRegistry.debugSnapshot(for: browserPanel.webView)?.visibleInUI, false)
+        let staleHostId = ObjectIdentifier(NSView())
+        XCTAssertFalse(
+            browserPanel.claimPortalHost(
+                hostId: staleHostId,
+                paneId: paneId,
+                inWindow: true,
+                bounds: CGRect(x: 0, y: 0, width: 220, height: 150),
+                reason: "unitTest.staleAfterWorkspaceRemoval"
+            ),
+            "Workspace host removal should suspend stale portal-host claims"
+        )
+        browserPanel.resumePortalHosting(reason: "unitTest.visibleReattach")
+        XCTAssertTrue(
+            browserPanel.claimPortalHost(
+                hostId: staleHostId,
+                paneId: paneId,
+                inWindow: true,
+                bounds: CGRect(x: 0, y: 0, width: 220, height: 150),
+                reason: "unitTest.visibleReattach"
+            ),
+            "Visible reattach should resume portal-host claims"
+        )
 
         BrowserWindowPortalRegistry.detach(webView: browserPanel.webView)
         NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: window)
@@ -445,26 +468,6 @@ final class WorkspaceContentViewVisibilityTests: XCTestCase {
         XCTAssertEqual(host.debugRevealPhase, .waitingForWindow)
     }
 
-    @MainActor
-    func testViewportHostDoesNotShowRevealCoverForBrowserSurface() {
-        let workspace = Workspace()
-        let paneId = PaneID(id: UUID())
-        let viewport = browserViewport(paneId: paneId, surfaceId: UUID())
-        let host = WorkspaceLayoutSurfaceViewportHostView(
-            mountIdentity: viewport.mountIdentity,
-            surfaceRegistry: workspace.surfaceRegistry,
-            debugCanvasName: "test"
-        )
-
-        host.apply(
-            snapshot: viewport,
-            surfaceRegistry: workspace.surfaceRegistry,
-            activeDropZone: nil
-        )
-
-        XCTAssertEqual(host.debugRevealPhase, .visible)
-        XCTAssertFalse(host.debugShowsRevealCover)
-    }
 }
 
 @MainActor

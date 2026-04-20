@@ -2033,6 +2033,22 @@ final class WorkspacePaneDropRoutingTests: XCTestCase {
         XCTAssertNil(decision.sourcePaneId)
         XCTAssertNil(decision.remapReason)
     }
+
+    func testTopOverlayFrameOccupiesUpperHalfInLocalCoordinates() {
+        let size = CGSize(width: 240, height: 180)
+
+        let frame = WorkspacePaneDropRouting.overlayFrame(for: .top, in: size)
+
+        XCTAssertEqual(frame, CGRect(x: 4, y: 90, width: 232, height: 86))
+    }
+
+    func testBottomOverlayFrameOccupiesLowerHalfInLocalCoordinates() {
+        let size = CGSize(width: 240, height: 180)
+
+        let frame = WorkspacePaneDropRouting.overlayFrame(for: .bottom, in: size)
+
+        XCTAssertEqual(frame, CGRect(x: 4, y: 4, width: 232, height: 86))
+    }
 }
 
 

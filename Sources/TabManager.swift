@@ -945,7 +945,8 @@ class TabManager: ObservableObject {
                 : 0
             dlog(
                 "ws.select.didSet id=\(switchId) from=\(Self.debugShortWorkspaceId(previousTabId)) " +
-                "to=\(Self.debugShortWorkspaceId(selectedTabId)) dt=\(Self.debugMsText(switchDtMs))"
+                "to=\(Self.debugShortWorkspaceId(selectedTabId)) dt=\(Self.debugMsText(switchDtMs)) " +
+                "\(debugSelectedWorkspacePanelSummary(for: selectedTabId))"
             )
 #endif
             selectionSideEffectsGeneration &+= 1
@@ -963,7 +964,8 @@ class TabManager: ObservableObject {
                     : 0
                 dlog(
                     "ws.select.asyncDone id=\(self.debugWorkspaceSwitchId) dt=\(Self.debugMsText(dtMs)) " +
-                    "selected=\(Self.debugShortWorkspaceId(self.selectedTabId))"
+                    "selected=\(Self.debugShortWorkspaceId(self.selectedTabId)) " +
+                    "\(self.debugSelectedWorkspacePanelSummary(for: self.selectedTabId))"
                 )
 #endif
             }
@@ -4871,6 +4873,32 @@ class TabManager: ObservableObject {
             "from=\(Self.debugShortWorkspaceId(from)) to=\(Self.debugShortWorkspaceId(to)) " +
             "hot=\(isWorkspaceCycleHot ? 1 : 0) tabs=\(tabs.count)"
         )
+    }
+
+    private func debugSelectedWorkspacePanelSummary(for workspaceId: UUID?) -> String {
+        guard let workspaceId,
+              let workspace = tabs.first(where: { $0.id == workspaceId }) else {
+            return "panel=nil kind=nil"
+        }
+
+        guard let panelId = workspace.focusedPanelId,
+              let panel = workspace.panels[panelId] else {
+            return "panel=nil kind=nil"
+        }
+
+        let kind: String
+        switch panel {
+        case is BrowserPanel:
+            kind = "browser"
+        case is TerminalPanel:
+            kind = "terminal"
+        case is MarkdownPanel:
+            kind = "markdown"
+        default:
+            kind = String(describing: type(of: panel))
+        }
+
+        return "panel=\(Self.debugShortWorkspaceId(panelId)) kind=\(kind)"
     }
 
     private static func debugShortWorkspaceId(_ id: UUID?) -> String {

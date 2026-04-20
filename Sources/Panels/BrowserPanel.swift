@@ -2233,6 +2233,7 @@ final class BrowserPanel: Panel, ObservableObject {
     private var activePortalHostLease: PortalHostLease?
     private var pendingDistinctPortalHostReplacementPaneId: UUID?
     private var lockedPortalHost: PortalHostLock?
+    private var isPortalHostingSuspended: Bool = false
     private var webViewCancellables = Set<AnyCancellable>()
     private var navigationDelegate: BrowserNavigationDelegate?
     private var uiDelegate: BrowserUIDelegate?
@@ -2342,6 +2343,30 @@ final class BrowserPanel: Panel, ObservableObject {
 #endif
     }
 
+    func suspendPortalHosting(reason: String) {
+        activePortalHostLease = nil
+        pendingDistinctPortalHostReplacementPaneId = nil
+        lockedPortalHost = nil
+        isPortalHostingSuspended = true
+#if DEBUG
+        let line =
+            "browser.portal.host.suspend panel=\(id.uuidString.prefix(5)) " +
+            "reason=\(reason)"
+        dlog(line)
+#endif
+    }
+
+    func resumePortalHosting(reason: String) {
+        guard isPortalHostingSuspended else { return }
+        isPortalHostingSuspended = false
+#if DEBUG
+        let line =
+            "browser.portal.host.resume panel=\(id.uuidString.prefix(5)) " +
+            "reason=\(reason)"
+        dlog(line)
+#endif
+    }
+
     func claimPortalHost(
         hostId: ObjectIdentifier,
         paneId: PaneID,
@@ -2349,6 +2374,17 @@ final class BrowserPanel: Panel, ObservableObject {
         bounds: CGRect,
         reason: String
     ) -> Bool {
+        if isPortalHostingSuspended {
+#if DEBUG
+            let line =
+                "browser.portal.host.skip panel=\(id.uuidString.prefix(5)) " +
+                "reason=\(reason).suspended host=\(hostId) pane=\(paneId.id.uuidString.prefix(5)) " +
+                "inWin=\(inWindow ? 1 : 0) size=\(String(format: "%.1fx%.1f", bounds.width, bounds.height))"
+            dlog(line)
+#endif
+            return false
+        }
+
         if shouldUseLocalInlineDeveloperToolsHosting() {
             activePortalHostLease = nil
             lockedPortalHost = nil

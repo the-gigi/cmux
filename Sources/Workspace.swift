@@ -404,7 +404,6 @@ private extension WorkspaceRetainedSurfaceHost {
 @MainActor
 private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfaceHost {
     private struct MountedTerminalState: Equatable {
-        let dropZone: DropZone?
         let presentation: WorkspaceTerminalPresentationState
     }
 
@@ -434,7 +433,6 @@ private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfa
 
         let hostedView = panel.hostedView
         let desiredState = MountedTerminalState(
-            dropZone: activeDropZone,
             presentation: WorkspaceTerminalPresentationState(
                 isVisibleInUI: descriptor.isVisibleInUI,
                 isActive: descriptor.isFocused
@@ -482,7 +480,6 @@ private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfa
             on: hostedView,
             from: lastMountedState,
             to: MountedTerminalState(
-                dropZone: nil,
                 presentation: WorkspaceTerminalPresentationState(
                     isVisibleInUI: false,
                     isActive: false
@@ -503,10 +500,6 @@ private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfa
         to next: MountedTerminalState,
         reason: String
     ) {
-        if previous?.dropZone != next.dropZone {
-            hostedView.setDropZoneOverlay(zone: next.dropZone)
-        }
-
         let operations = WorkspaceTerminalPresentationTransitionResolver.operations(
             previous: previous?.presentation,
             next: next.presentation
@@ -8366,6 +8359,7 @@ final class Workspace: Identifiable, ObservableObject {
                     paneId: paneId,
                     isFocused: presentationFacts.isFocused,
                     isVisibleInUI: presentationFacts.isVisibleInUI,
+                    prefersLocalInlineHosting: true,
                     portalPriority: context.workspacePortalPriority,
                     onRequestPanelFocus: { [weak self, weak browserPanel] in
                         guard let self, let browserPanel else { return }
@@ -8500,8 +8494,7 @@ final class Workspace: Identifiable, ObservableObject {
                     paneId: pane.id,
                     chrome: chrome,
                     contentId: displayedContent.contentId,
-                    content: displayedContent.content,
-                    prefersNativeDropOverlay: displayedContent.content.prefersNativeDropOverlay
+                    content: displayedContent.content
                 )
             )
         case .split(let split):
@@ -11146,6 +11139,7 @@ final class Workspace: Identifiable, ObservableObject {
         insertFirst: Bool,
         focusNewPane: Bool = true
     ) -> PaneID? {
+        let isBrowserDrag = browserPanel(for: panelId) != nil
         let sourcePaneId = paneId(forPanelId: panelId)
         let targetPaneId = targetPane ?? sourcePaneId
         let replacementPanelId = prepareReplacementPanelForSelfSplitIfNeeded(
@@ -11153,6 +11147,8 @@ final class Workspace: Identifiable, ObservableObject {
             sourcePaneId: sourcePaneId,
             targetPaneId: targetPaneId
         )
+        if isBrowserDrag {
+        }
 
         guard let newPaneId = splitSurface(
             panelId: panelId,
@@ -11164,11 +11160,16 @@ final class Workspace: Identifiable, ObservableObject {
             if let replacementPanelId {
                 _ = closePanel(replacementPanelId, force: true)
             }
+            if isBrowserDrag {
+            }
             return nil
         }
 
         if replacementPanelId != nil {
             scheduleFocusReconcile()
+        }
+
+        if isBrowserDrag {
         }
 
         return newPaneId

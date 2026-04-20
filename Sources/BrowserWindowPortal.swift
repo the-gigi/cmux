@@ -2919,12 +2919,12 @@ final class WindowBrowserPortal: NSObject {
 #if DEBUG
         let hadContainerSuperview = (entry.containerView?.superview === hostView) ? 1 : 0
         let hadWebSuperview = entry.webView?.superview == nil ? 0 : 1
-        dlog(
+        let line =
             "browser.portal.detach web=\(browserPortalDebugToken(entry.webView)) " +
             "container=\(browserPortalDebugToken(entry.containerView)) " +
             "anchor=\(browserPortalDebugToken(entry.anchorView)) " +
             "hadContainerSuperview=\(hadContainerSuperview) hadWebSuperview=\(hadWebSuperview)"
-        )
+        dlog(line)
 #endif
         if let webView = entry.webView, let containerView = entry.containerView {
             notifyHostedWebKitHidden(
@@ -2952,14 +2952,14 @@ final class WindowBrowserPortal: NSObject {
 
         let portalOwnsWebView = entry.webView?.superview === entry.containerView
 #if DEBUG
-        dlog(
+        let line =
             "browser.portal.discard web=\(browserPortalDebugToken(entry.webView)) " +
             "container=\(browserPortalDebugToken(entry.containerView)) " +
             "anchor=\(browserPortalDebugToken(entry.anchorView)) " +
             "source=\(source) preserve=\(preserveCurrentSuperview ? 1 : 0) " +
             "portalOwnsWeb=\(portalOwnsWebView ? 1 : 0) " +
             "currentSuper=\(browserPortalDebugToken(entry.webView?.superview))"
-        )
+        dlog(line)
 #endif
 
         if !(preserveCurrentSuperview && !portalOwnsWebView) {
@@ -3153,13 +3153,13 @@ final class WindowBrowserPortal: NSObject {
             priorityIncreased ||
             webView.superview !== containerView ||
             containerView.superview !== hostView {
-            dlog(
+            let line =
                 "browser.portal.bind web=\(browserPortalDebugToken(webView)) " +
                 "container=\(browserPortalDebugToken(containerView)) " +
                 "anchor=\(browserPortalDebugToken(anchorView)) prevAnchor=\(browserPortalDebugToken(previousEntry?.anchorView)) " +
                 "visible=\(visibleInUI ? 1 : 0) prevVisible=\((previousEntry?.visibleInUI ?? false) ? 1 : 0) " +
                 "z=\(zPriority) prevZ=\(previousEntry?.zPriority ?? Int.min)"
-            )
+            dlog(line)
         }
 #endif
 
@@ -3814,7 +3814,7 @@ final class WindowBrowserPortal: NSObject {
             _ = hostView.reapplyHostedInspectorDividerIfNeeded(in: containerView, reason: "portal.sync.postRefresh")
         }
 #if DEBUG
-        dlog(
+        let line =
             "browser.portal.sync.result web=\(browserPortalDebugToken(webView)) source=\(source) " +
             "container=\(browserPortalDebugToken(containerView)) " +
             "anchor=\(browserPortalDebugToken(anchorView)) host=\(browserPortalDebugToken(hostView)) " +
@@ -3832,7 +3832,7 @@ final class WindowBrowserPortal: NSObject {
             "inspectorInsets=\(String(format: "%.1f", inspectorHeightFromInsets)) " +
             "inspectorOverflow=\(String(format: "%.1f", inspectorHeightFromOverflow)) " +
             "inspectorSubviews=\(inspectorSubviews)"
-        )
+        dlog(line)
 #endif
     }
 

@@ -2623,7 +2623,7 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         }
     }
 
-    func testViewportSnapshotUsesPaneContentFrameBelowTabBar() {
+    func testSelectedBrowserRenderSnapshotOmitsViewportAndUsesDirectPaneContent() {
         let workspace = Workspace()
         guard let paneId = workspace.paneIds.first,
               let browserPanel = workspace.createBrowserPanel(
@@ -2654,35 +2654,16 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
             )
         )
 
-        guard let viewport = viewport(in: snapshot, for: paneId) else {
-            XCTFail("Expected browser viewport")
+        guard let pane = firstPaneSnapshot(from: snapshot) else {
+            XCTFail("Expected pane snapshot")
             return
         }
-
-        let layoutSnapshot = workspace.splitController.layoutSnapshot()
-        guard let paneGeometry = layoutSnapshot.panes.first(where: { $0.paneId == paneId.id.uuidString }) else {
-            XCTFail("Expected pane geometry")
-            return
+        XCTAssertEqual(pane.contentId, browserPanel.id)
+        if case .browser = pane.content {
+        } else {
+            XCTFail("Expected selected browser content in the pane snapshot")
         }
-
-        let paneFrame = CGRect(
-            x: CGFloat(paneGeometry.frame.x) - CGFloat(layoutSnapshot.containerFrame.x),
-            y: CGFloat(paneGeometry.frame.y) - CGFloat(layoutSnapshot.containerFrame.y),
-            width: CGFloat(paneGeometry.frame.width),
-            height: CGFloat(paneGeometry.frame.height)
-        )
-        let expectedHeight = max(
-            0,
-            paneFrame.height - min(
-                workspace.splitController.configuration.appearance.tabBarHeight,
-                max(0, paneFrame.height - 1)
-            )
-        )
-
-        XCTAssertEqual(viewport.frame.origin.x, paneFrame.origin.x, accuracy: 0.001)
-        XCTAssertEqual(viewport.frame.origin.y, paneFrame.origin.y, accuracy: 0.001)
-        XCTAssertEqual(viewport.frame.width, paneFrame.width, accuracy: 0.001)
-        XCTAssertEqual(viewport.frame.height, expectedHeight, accuracy: 0.001)
+        XCTAssertNil(viewport(in: snapshot, for: paneId))
     }
 
     func testRootHostMountsSelectedTerminalDirectlyInPaneHost() throws {
@@ -2750,6 +2731,104 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
 
         XCTAssertTrue(rootHost.debugPaneUsesDirectTerminalHost(paneId))
         XCTAssertFalse(rootHost.debugViewportMountIdentities.contains(WorkspacePaneMountIdentity.terminal(panel.id)))
+    }
+
+    func testRootHostMountsSelectedBrowserDirectlyInPaneHostBelowTabBar() throws {
+        _ = NSApplication.shared
+
+        let workspace = Workspace()
+        guard let paneId = workspace.focusedPaneId,
+              let browserPanel = workspace.createBrowserPanel(
+                inPane: paneId,
+                url: URL(string: "about:blank"),
+                focus: true
+              ) else {
+            XCTFail("Expected focused browser pane")
+            return
+        }
+
+        let renderContext = WorkspaceLayoutRenderContext(
+            notificationStore: nil,
+            isWorkspaceVisible: true,
+            isWorkspaceInputActive: true,
+            isMinimalMode: false,
+            appearance: PanelAppearance(
+                dividerColor: .clear,
+                unfocusedOverlayNSColor: .clear,
+                unfocusedOverlayOpacity: 0
+            ),
+            workspacePortalPriority: 0,
+            usesWorkspacePaneOverlay: false,
+            showSplitButtons: true
+        )
+        let rootHost = WorkspaceLayoutRootHostView(
+            hostBridge: workspace.layoutInteractionHandlers,
+            renderSnapshot: workspace.makeLayoutRenderSnapshot(context: renderContext),
+            surfaceRegistry: workspace.surfaceRegistry
+        )
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+        let contentView = try XCTUnwrap(window.contentView)
+        rootHost.frame = contentView.bounds
+        rootHost.autoresizingMask = [.width, .height]
+        contentView.addSubview(rootHost)
+
+        window.makeKeyAndOrderFront(nil)
+        window.displayIfNeeded()
+        contentView.layoutSubtreeIfNeeded()
+        rootHost.layoutSubtreeIfNeeded()
+
+        let mountedExpectation = expectation(description: "browser pane mounted directly")
+        func pollMounted() {
+            if rootHost.debugPaneMountedDirectContentIdentity(paneId) == .browser(browserPanel.id) &&
+                rootHost.debugPaneDirectContentBounds(paneId).height > 0 {
+                mountedExpectation.fulfill()
+            } else {
+                DispatchQueue.main.async {
+                    pollMounted()
+                }
+            }
+        }
+        pollMounted()
+        wait(for: [mountedExpectation], timeout: 2.0)
+
+        XCTAssertEqual(rootHost.debugPaneMountedDirectContentIdentity(paneId), .browser(browserPanel.id))
+        XCTAssertFalse(rootHost.debugViewportMountIdentities.contains(WorkspacePaneMountIdentity.browser(browserPanel.id)))
+        XCTAssertNotEqual(
+            BrowserWindowPortalRegistry.debugSnapshot(for: browserPanel.webView)?.visibleInUI,
+            true,
+            "Visible browser pane should not still be presented through the portal path"
+        )
+
+        let contentBounds = rootHost.debugPaneDirectContentBounds(paneId)
+        let layoutSnapshot = workspace.splitController.layoutSnapshot()
+        guard let paneGeometry = layoutSnapshot.panes.first(where: { $0.paneId == paneId.id.uuidString }) else {
+            XCTFail("Expected pane geometry")
+            return
+        }
+
+        let paneFrame = CGRect(
+            x: CGFloat(paneGeometry.frame.x) - CGFloat(layoutSnapshot.containerFrame.x),
+            y: CGFloat(paneGeometry.frame.y) - CGFloat(layoutSnapshot.containerFrame.y),
+            width: CGFloat(paneGeometry.frame.width),
+            height: CGFloat(paneGeometry.frame.height)
+        )
+        let expectedHeight = max(
+            0,
+            paneFrame.height - min(
+                workspace.splitController.configuration.appearance.tabBarHeight,
+                max(0, paneFrame.height - 1)
+            )
+        )
+
+        XCTAssertEqual(contentBounds.width, paneFrame.width, accuracy: 0.001)
+        XCTAssertEqual(contentBounds.height, expectedHeight, accuracy: 0.001)
     }
 
     func testHiddenWorkspaceRenderSnapshotOmitsViewportMounts() {
@@ -2881,6 +2960,90 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
             )
         )
         XCTAssertNil(clearedSnapshot.presentation.localTabDrag)
+    }
+
+    func testRootHostPropagatesLocalTabDragImmediatelyWithoutSnapshotRefresh() throws {
+        let workspace = Workspace()
+        guard let paneId = workspace.focusedPaneId,
+              let panelId = workspace.focusedPanelId else {
+            XCTFail("Expected focused pane and panel")
+            return
+        }
+
+        let renderContext = WorkspaceLayoutRenderContext(
+            notificationStore: nil,
+            isWorkspaceVisible: true,
+            isWorkspaceInputActive: true,
+            isMinimalMode: false,
+            appearance: PanelAppearance(
+                dividerColor: .clear,
+                unfocusedOverlayNSColor: .clear,
+                unfocusedOverlayOpacity: 0
+            ),
+            workspacePortalPriority: 0,
+            usesWorkspacePaneOverlay: false,
+            showSplitButtons: true
+        )
+        let renderSnapshot = workspace.makeLayoutRenderSnapshot(
+            context: renderContext
+        )
+        let rootHost = WorkspaceLayoutRootHostView(
+            hostBridge: workspace.layoutInteractionHandlers,
+            renderSnapshot: renderSnapshot,
+            surfaceRegistry: workspace.surfaceRegistry
+        )
+
+        XCTAssertNil(rootHost.debugPaneLocalTabDrag(paneId))
+
+        let draggedTabId = TabID(id: panelId)
+        let expectedDrag = WorkspaceLayoutLocalDragSnapshot(
+            tabId: draggedTabId,
+            sourcePaneId: paneId
+        )
+        rootHost.debugBeginLocalTabDrag(tabId: draggedTabId, sourcePaneId: paneId)
+
+        XCTAssertEqual(rootHost.debugPaneLocalTabDrag(paneId), expectedDrag)
+        XCTAssertEqual(workspace.makeLayoutRenderSnapshot(context: renderContext).presentation.localTabDrag, expectedDrag)
+
+        rootHost.debugClearLocalTabDrag()
+
+        XCTAssertNil(rootHost.debugPaneLocalTabDrag(paneId))
+        XCTAssertNil(workspace.makeLayoutRenderSnapshot(context: renderContext).presentation.localTabDrag)
+    }
+
+    func testPaneDropOverlayCoordinatorTransitionsVisibleToHidingOnlyOnceOnClear() {
+        let paneId = PaneID(id: UUID())
+        var coordinator = WorkspacePaneDropOverlayCoordinator()
+
+        XCTAssertTrue(coordinator.setZone(.left, for: paneId))
+        let visiblePresentation = coordinator.overlayPresentation(for: paneId)
+        XCTAssertEqual(visiblePresentation.phase, .visible)
+        XCTAssertEqual(visiblePresentation.zone, .left)
+        XCTAssertEqual(coordinator.activeDropZone(for: paneId), .left)
+
+        XCTAssertTrue(coordinator.clearZone(for: paneId))
+        let hidingPresentation = coordinator.overlayPresentation(for: paneId)
+        XCTAssertEqual(hidingPresentation.phase, .hiding)
+        XCTAssertEqual(hidingPresentation.zone, .left)
+        XCTAssertNil(coordinator.activeDropZone(for: paneId))
+
+        XCTAssertFalse(coordinator.clearZone(for: paneId))
+        XCTAssertEqual(coordinator.overlayPresentation(for: paneId), hidingPresentation)
+    }
+
+    func testPaneDropOverlayCoordinatorIgnoresStaleHideCompletion() {
+        let paneId = PaneID(id: UUID())
+        var coordinator = WorkspacePaneDropOverlayCoordinator()
+
+        XCTAssertTrue(coordinator.setZone(.right, for: paneId))
+        XCTAssertTrue(coordinator.clearZone(for: paneId))
+        let hidingPresentation = coordinator.overlayPresentation(for: paneId)
+
+        XCTAssertFalse(coordinator.completeHide(for: paneId, generation: hidingPresentation.generation + 1))
+        XCTAssertEqual(coordinator.overlayPresentation(for: paneId), hidingPresentation)
+
+        XCTAssertTrue(coordinator.completeHide(for: paneId, generation: hidingPresentation.generation))
+        XCTAssertEqual(coordinator.overlayPresentation(for: paneId), .hidden)
     }
 
     func testRenderSnapshotProjectsContextMenuStateFromWorkspaceFacts() throws {
@@ -3362,6 +3525,7 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
             paneId: paneId,
             isFocused: true,
             isVisibleInUI: true,
+            prefersLocalInlineHosting: true,
             portalPriority: 0,
             onRequestPanelFocus: {}
         )
@@ -3774,6 +3938,68 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
         )
 
         XCTAssertTrue(slotView.subviews.isEmpty)
+    }
+
+    func testBrowserMountPreservesRetainedWebViewHostAcrossSlotMove() throws {
+        let workspace = Workspace()
+        guard let paneId = workspace.focusedPaneId,
+              let panel = workspace.createBrowserPanel(inPane: paneId, focus: false) else {
+            XCTFail("Expected browser panel")
+            return
+        }
+
+        let sourceSlotView = WorkspaceLayoutPaneContentSlotView(
+            frame: NSRect(x: 0, y: 0, width: 320, height: 220)
+        )
+        let destinationSlotView = WorkspaceLayoutPaneContentSlotView(
+            frame: NSRect(x: 0, y: 0, width: 280, height: 200)
+        )
+        let sourceContent = WorkspacePaneContent.browser(
+            browserDescriptor(for: panel.id, paneId: paneId)
+        )
+        let destinationPaneId = PaneID()
+        let destinationContent = WorkspacePaneContent.browser(
+            browserDescriptor(for: panel.id, paneId: destinationPaneId)
+        )
+
+        workspace.surfaceRegistry.mountContent(
+            sourceContent,
+            contentId: panel.id,
+            in: sourceSlotView,
+            activeDropZone: nil
+        )
+
+        let sourceHost = try XCTUnwrap(
+            sourceSlotView.subviews.first as? BrowserPanelWorkspaceContentView,
+            "Expected retained browser content view in source slot"
+        )
+        let retainedWebViewHost = sourceHost.debugRetainedWebViewHost
+
+        workspace.surfaceRegistry.unmountContent(
+            sourceContent,
+            contentId: panel.id,
+            from: sourceSlotView
+        )
+        workspace.surfaceRegistry.mountContent(
+            destinationContent,
+            contentId: panel.id,
+            in: destinationSlotView,
+            activeDropZone: nil
+        )
+
+        let destinationHost = try XCTUnwrap(
+            destinationSlotView.subviews.first as? BrowserPanelWorkspaceContentView,
+            "Expected retained browser content view in destination slot"
+        )
+
+        XCTAssertTrue(
+            destinationHost === sourceHost,
+            "Expected browser pane move to reuse the retained browser workspace content view"
+        )
+        XCTAssertTrue(
+            destinationHost.debugRetainedWebViewHost === retainedWebViewHost,
+            "Expected browser pane move to preserve the same retained webview host"
+        )
     }
 
     func testMarkdownMountReusesRetainedContentViewAndUnmountClearsIt() throws {
