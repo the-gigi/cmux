@@ -223,11 +223,23 @@ func sidebarWorkspaceRowBackgroundStyle(
             forceBright: activeTabIndicatorStyle == .leftRail
         )
     }
+    let selectedCustomBackground = customColorHex.flatMap {
+        sidebarSelectedWorkspaceCustomBackgroundNSColor(hex: $0, colorScheme: colorScheme)
+    }
 
     switch activeTabIndicatorStyle {
     case .leftRail:
         if isActive {
-            return SidebarWorkspaceRowBackgroundStyle(color: selectedBackground, opacity: 1)
+            return SidebarWorkspaceRowBackgroundStyle(
+                color: selectedCustomBackground ?? selectedBackground,
+                opacity: 1
+            )
+        }
+        if let customBackground {
+            return SidebarWorkspaceRowBackgroundStyle(
+                color: customBackground,
+                opacity: isMultiSelected ? 0.28 : 0.16
+            )
         }
         if isMultiSelected {
             return SidebarWorkspaceRowBackgroundStyle(color: accentBackground, opacity: 0.25)
@@ -237,11 +249,7 @@ func sidebarWorkspaceRowBackgroundStyle(
     case .solidFill:
         if isActive {
             return SidebarWorkspaceRowBackgroundStyle(
-                color: sidebarSelectedWorkspaceBackgroundNSColor(
-                    for: colorScheme,
-                    customHex: customColorHex,
-                    sidebarSelectionColorHex: sidebarSelectionColorHex
-                ),
+                color: selectedCustomBackground ?? selectedBackground,
                 opacity: 1
             )
         }
