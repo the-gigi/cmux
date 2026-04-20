@@ -53,6 +53,18 @@ enum AuthEnvironment {
         )
     }
 
+    /// Base URL for the cmux-owned cloud VM backend (`/api/vm`, `/api/rivet`). Lives on the
+    /// website origin in both dev and prod because the routes are served by the Next.js app.
+    /// Override with CMUX_VM_API_BASE_URL when testing against a local `next dev`.
+    static var vmAPIBaseURL: URL {
+        canonicalizedLoopbackURL(
+            resolvedURL(
+                environmentKey: "CMUX_VM_API_BASE_URL",
+                fallback: defaultWebOrigin
+            )
+        )
+    }
+
     private static var cmuxPort: String {
         ProcessInfo.processInfo.environment["CMUX_PORT"]?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? "3000"

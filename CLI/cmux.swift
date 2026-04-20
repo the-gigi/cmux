@@ -2010,6 +2010,99 @@ struct CMUXCLI {
                 throw CLIError(message: "Usage: cmux auth <status|login|logout>")
             }
 
+        case "vm", "cloud":
+            let sub = commandArgs.first?.lowercased() ?? "ls"
+            let rest = Array(commandArgs.dropFirst())
+            switch sub {
+            case "ls", "list":
+                let response = try client.sendV2(method: "vm.list")
+                if jsonOutput {
+                    print(jsonString(response))
+                    break
+                }
+                let vms = (response["vms"] as? [[String: Any]]) ?? []
+                if vms.isEmpty {
+                    print("No cloud VMs. Try: cmux vm new")
+                    break
+                }
+                for vm in vms {
+                    let id = (vm["id"] as? String) ?? "?"
+                    let provider = (vm["provider"] as? String) ?? "?"
+                    let image = (vm["image"] as? String) ?? "?"
+                    print("\(id)  [\(provider)] \(image)")
+                }
+
+            case "new", "create":
+                let (imageOpt, rem0) = parseOption(rest, name: "--image")
+                let (providerOpt, remaining) = parseOption(rem0, name: "--provider")
+                if let unknown = remaining.first(where: { $0.hasPrefix("--") }) {
+                    throw CLIError(message: "vm new: unknown flag '\(unknown)'. Known flags: --image, --provider")
+                }
+                var params: [String: Any] = [:]
+                if let imageOpt { params["image"] = imageOpt }
+                if let providerOpt { params["provider"] = providerOpt }
+                let response = try client.sendV2(method: "vm.create", params: params)
+                if jsonOutput {
+                    print(jsonString(response))
+                    break
+                }
+                let id = (response["id"] as? String) ?? "?"
+                let provider = (response["provider"] as? String) ?? "?"
+                let image = (response["image"] as? String) ?? "?"
+                print("OK \(id)")
+                print("  provider: \(provider)")
+                print("  image:    \(image)")
+
+            case "rm", "destroy", "delete":
+                guard let vmId = rest.first else {
+                    throw CLIError(message: "Usage: cmux vm rm <id>")
+                }
+                _ = try client.sendV2(method: "vm.destroy", params: ["id": vmId])
+                if jsonOutput {
+                    print("{\"ok\":true,\"id\":\"\(vmId)\"}")
+                } else {
+                    print("OK \(vmId)")
+                }
+
+            case "exec":
+                guard let vmId = rest.first else {
+                    throw CLIError(message: "Usage: cmux vm exec <id> -- <command...>")
+                }
+                var commandArgsForVM: [String] = Array(rest.dropFirst())
+                // Consume a leading "--" separator if present.
+                if commandArgsForVM.first == "--" {
+                    commandArgsForVM.removeFirst()
+                }
+                guard !commandArgsForVM.isEmpty else {
+                    throw CLIError(message: "Usage: cmux vm exec <id> -- <command...>")
+                }
+                let command = commandArgsForVM.joined(separator: " ")
+                let response = try client.sendV2(
+                    method: "vm.exec",
+                    params: ["id": vmId, "command": command]
+                )
+                if jsonOutput {
+                    print(jsonString(response))
+                    break
+                }
+                let stdout = (response["stdout"] as? String) ?? ""
+                let stderr = (response["stderr"] as? String) ?? ""
+                let exitCode = (response["exit_code"] as? Int) ?? -1
+                if !stdout.isEmpty { print(stdout, terminator: stdout.hasSuffix("\n") ? "" : "\n") }
+                if !stderr.isEmpty {
+                    FileHandle.standardError.write(Data(stderr.utf8))
+                    if !stderr.hasSuffix("\n") {
+                        FileHandle.standardError.write(Data("\n".utf8))
+                    }
+                }
+                if exitCode != 0 {
+                    throw CLIError(message: "exit \(exitCode)")
+                }
+
+            default:
+                throw CLIError(message: "Usage: cmux \(command) <ls|new|rm|exec> [args...]")
+            }
+
         case "rpc":
             guard let method = commandArgs.first?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !method.isEmpty else {
@@ -6893,6 +6986,31 @@ struct CMUXCLI {
             status   Print whether the user is signed in (add `cmux --json` for JSON).
             login    Open the sign-in popup on the cmux mac app and wait for it to finish.
             logout   Clear the current session.
+            """
+        case "vm", "cloud":
+            return """
+            Usage: cmux \(command) <new|ls|rm|exec> [args...]
+
+            Manage cloud VMs. `cloud` is an alias for `vm`. Requires `cmux auth login`.
+
+            Subcommands:
+              ls                        List your cloud VMs.
+              new [--image <template>] [--provider <e2b|freestyle>]
+                                        Create a new VM. Defaults to the server-side default
+                                        template + provider (E2B today).
+              rm <id>                   Destroy a VM.
+              exec <id> -- <command...> Run a shell command inside the VM and print stdout.
+
+            Env:
+              CMUX_VM_API_BASE_URL       Override the backend origin (default: the cmux website).
+                                         Set to http://localhost:3777 when testing a local
+                                         `next dev` from the web worktree.
+
+            Example:
+              cmux vm new
+              cmux vm ls
+              cmux cloud exec <id> -- echo hello
+              cmux vm rm <id>
             """
         case "rpc":
             return """
@@ -14448,6 +14566,7 @@ struct CMUXCLI {
           version
           capabilities
           auth <status|login|logout>
+          vm <new|ls|rm|exec> [args...]          (alias: cloud)
           rpc <method> [json-params]
           identify [--workspace <id|ref|index>] [--surface <id|ref|index>] [--no-caller]
           list-windows

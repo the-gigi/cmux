@@ -564,6 +564,18 @@ final class AuthManager: ObservableObject {
         throw AuthManagerError.missingAccessToken
     }
 
+    /// Both the access and refresh token for the current session, for callers that need to
+    /// talk to cmux-owned backend endpoints (e.g. the cloud VM service) with the Stack Auth
+    /// Authorization + X-Stack-Refresh-Token header pair.
+    func currentTokens() async throws -> (accessToken: String, refreshToken: String) {
+        let access = await tokenStore.currentAccessToken()
+        let refresh = await tokenStore.currentRefreshToken()
+        guard let access, !access.isEmpty, let refresh, !refresh.isEmpty else {
+            throw AuthManagerError.missingAccessToken
+        }
+        return (access, refresh)
+    }
+
     private func restoreStoredSessionIfNeeded() async {
         let accessToken = await tokenStore.currentAccessToken()
         let refreshToken = await tokenStore.currentRefreshToken()

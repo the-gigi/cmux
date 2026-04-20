@@ -2084,6 +2084,43 @@ class TerminalController {
             semaphore.wait()
             return v2Ok(id: id, result: v2AuthStatusPayload(timedOut: false))
 
+        // Cloud VMs. Socket → Mac app → VMClient HTTP → cmux web backend. The CLI never touches
+        // Stack Auth tokens directly; AuthManager.shared inside the mac app does.
+        case "vm.list":
+            return v2VmCall(id: id) {
+                let items = try await VMClient.shared.list()
+                return [
+                    "vms": items.map { ["id": $0.id, "provider": $0.provider, "image": $0.image, "createdAt": $0.createdAt] as [String: Any] },
+                ]
+            }
+        case "vm.create":
+            let image = params["image"] as? String
+            let provider = params["provider"] as? String
+            return v2VmCall(id: id) {
+                let vm = try await VMClient.shared.create(image: image, provider: provider)
+                return ["id": vm.id, "provider": vm.provider, "image": vm.image, "createdAt": vm.createdAt]
+            }
+        case "vm.destroy":
+            guard let vmId = params["id"] as? String else {
+                return v2Error(id: id, code: "invalid_params", message: "vm.destroy requires `id`")
+            }
+            return v2VmCall(id: id) {
+                try await VMClient.shared.destroy(id: vmId)
+                return ["ok": true]
+            }
+        case "vm.exec":
+            guard let vmId = params["id"] as? String else {
+                return v2Error(id: id, code: "invalid_params", message: "vm.exec requires `id`")
+            }
+            guard let command = params["command"] as? String else {
+                return v2Error(id: id, code: "invalid_params", message: "vm.exec requires `command`")
+            }
+            let timeoutMs = (params["timeout_ms"] as? Int) ?? 30_000
+            return v2VmCall(id: id) {
+                let r = try await VMClient.shared.exec(id: vmId, command: command, timeoutMs: timeoutMs)
+                return ["exit_code": r.exitCode, "stdout": r.stdout, "stderr": r.stderr]
+            }
+
         // Windows
         case "window.list":
             return v2Result(id: id, self.v2WindowList(params: params))
@@ -2487,6 +2524,10 @@ class TerminalController {
             "auth.status",
             "auth.begin_sign_in",
             "auth.sign_out",
+            "vm.list",
+            "vm.create",
+            "vm.destroy",
+            "vm.exec",
             "window.list",
             "window.current",
             "window.focus",
@@ -3023,6 +3064,32 @@ class TerminalController {
             "ok": true,
             "result": result
         ])
+    }
+
+    /// Bridge an async throws closure into a socket RPC response. Runs the work on a detached
+    /// Task (so VMClient's URLSession hops are free to use any actor) and blocks the socket
+    /// worker thread on a semaphore. Mirrors the auth.begin_sign_in pattern above.
+    private func v2VmCall(id: Any?, _ work: @escaping () async throws -> [String: Any]) -> String {
+        let semaphore = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var payload: [String: Any]? = nil
+        nonisolated(unsafe) var caughtError: Error? = nil
+        Task {
+            do {
+                payload = try await work()
+            } catch {
+                caughtError = error
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        if let payload {
+            return v2Ok(id: id, result: payload)
+        }
+        return v2Error(
+            id: id,
+            code: "vm_error",
+            message: caughtError.map { String(describing: $0) } ?? "unknown vm error"
+        )
     }
 
     private func v2Error(id: Any?, code: String, message: String, data: Any? = nil) -> String {
