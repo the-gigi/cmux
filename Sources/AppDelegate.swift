@@ -6799,17 +6799,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// user's workspace windows keep their relative z-order and the
     /// Settings window lands on top.
     private func raiseWindowsAfterAuthCallback() {
-        // Second activate to catch the case where the activation request
-        // was queued during the synchronous handler but hadn't landed yet.
         NSApp.activate()
         NSRunningApplication.current.activate(options: [.activateAllWindows])
 
         let settingsWindow = SettingsWindowController.shared.window
         let visible = NSApp.orderedWindows.filter { $0.isVisible }
-        // Iterate back-to-front so `makeKeyAndOrderFront` on the first
-        // workspace window forces activation (where `orderFrontRegardless`
-        // alone does not), and subsequent windows layer above it in their
-        // original relative order.
         let workspaceWindows = visible.reversed().filter { $0 !== settingsWindow }
         for (idx, window) in workspaceWindows.enumerated() {
             if idx == 0 {
