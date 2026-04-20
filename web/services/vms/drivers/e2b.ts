@@ -1,0 +1,94 @@
+import { Sandbox } from "e2b";
+import {
+  NotImplementedError,
+  ProviderError,
+  type CreateOptions,
+  type ExecResult,
+  type SSHEndpoint,
+  type SnapshotRef,
+  type VMHandle,
+  type VMProvider,
+} from "./types";
+
+// Default cmux-sandbox template. Built from scratch/vm-experiments/images/build-e2b.ts and
+// kept in sync via the E2B_SANDBOX_TEMPLATE env var. The template already bakes sshd, mutagen-agent,
+// git, and the `cmux` user; sshd is started on demand by openSSH (not as the E2B start command,
+// because E2B sandboxes run unprivileged and can't bind port 22).
+const DEFAULT_TEMPLATE = process.env.E2B_SANDBOX_TEMPLATE ?? "cmux-sandbox:v0-71a954b8e53b";
+
+export class E2BProvider implements VMProvider {
+  readonly id = "e2b" as const;
+
+  async create(options: CreateOptions): Promise<VMHandle> {
+    const image = options.image || DEFAULT_TEMPLATE;
+    try {
+      const sandbox = await Sandbox.create(image);
+      return {
+        provider: "e2b",
+        providerVmId: sandbox.sandboxId,
+        status: "running",
+        image,
+        createdAt: Date.now(),
+      };
+    } catch (err) {
+      throw new ProviderError("e2b", `create(${image}) failed`, err);
+    }
+  }
+
+  async destroy(vmId: string): Promise<void> {
+    await Sandbox.kill(vmId);
+  }
+
+  async pause(vmId: string): Promise<void> {
+    await Sandbox.pause(vmId);
+  }
+
+  async resume(vmId: string): Promise<VMHandle> {
+    const sbx = await Sandbox.connect(vmId);
+    const info = await Sandbox.getInfo(vmId);
+    return {
+      provider: "e2b",
+      providerVmId: sbx.sandboxId,
+      status: "running",
+      image: info.templateId,
+      createdAt: info.startedAt.getTime(),
+    };
+  }
+
+  async exec(vmId: string, command: string, opts?: { timeoutMs?: number }): Promise<ExecResult> {
+    const sbx = await Sandbox.connect(vmId);
+    const r = await sbx.commands.run(command, {
+      timeoutMs: opts?.timeoutMs ?? 30_000,
+    });
+    return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+  }
+
+  async snapshot(vmId: string, name?: string): Promise<SnapshotRef> {
+    const sbx = await Sandbox.connect(vmId);
+    const snap = await sbx.createSnapshot();
+    const id =
+      (snap as { snapshotId?: string }).snapshotId ??
+      (snap as { snapshot_id?: string }).snapshot_id ??
+      JSON.stringify(snap);
+    return { id, createdAt: Date.now(), name };
+  }
+
+  async restore(snapshotId: string): Promise<VMHandle> {
+    const sbx = await Sandbox.create(snapshotId);
+    return {
+      provider: "e2b",
+      providerVmId: sbx.sandboxId,
+      status: "running",
+      image: snapshotId,
+      createdAt: Date.now(),
+    };
+  }
+
+  async openSSH(vmId: string): Promise<SSHEndpoint> {
+    // Short-term strategy: E2B sandboxes expose ports via https://<port>-<sandbox-id>.e2b.app.
+    // A full SSH plumb requires either a WebSocket-tunneled ssh or provider-level SSH egress,
+    // neither of which E2B ships out of the box. Deferred until M1.1 when we decide whether
+    // to tunnel SSH over WebSocket or switch to provider-native shell.
+    throw new NotImplementedError("e2b", `openSSH(${vmId})`);
+  }
+}

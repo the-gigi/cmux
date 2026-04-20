@@ -1,0 +1,77 @@
+// Unified driver contract over each VM provider. No cloudrouter, no shared base class — just two
+// implementations behind an interface. Callers hold a `VMProvider` and never reach into specifics.
+
+export type ProviderId = "e2b" | "freestyle";
+
+export type VMStatus = "creating" | "running" | "paused" | "destroyed";
+
+export type VMHandle = {
+  provider: ProviderId;
+  providerVmId: string;
+  status: VMStatus;
+  image: string; // e.g. "cmux-sandbox:v0-71a954b8e53b" for e2b
+  createdAt: number;
+};
+
+export type CreateOptions = {
+  image: string; // provider-specific template/snapshot identifier
+};
+
+export type SSHEndpoint = {
+  host: string;
+  port: number;
+  username: string;
+  publicKeyFingerprint: string | null;
+  // One-time credential for this attach session. Drivers decide whether that's a password,
+  // a bearer over an SSH ProxyCommand, or an authorized_keys line the client pushes.
+  credential: { kind: "password"; value: string } | { kind: "authorizedKey"; privateKeyPem: string };
+};
+
+export type ExecResult = {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+};
+
+export type SnapshotRef = {
+  id: string;
+  createdAt: number;
+  name?: string;
+};
+
+export interface VMProvider {
+  readonly id: ProviderId;
+
+  create(options: CreateOptions): Promise<VMHandle>;
+  destroy(vmId: string): Promise<void>;
+
+  pause(vmId: string): Promise<void>;
+  resume(vmId: string): Promise<VMHandle>;
+
+  exec(vmId: string, command: string, opts?: { timeoutMs?: number }): Promise<ExecResult>;
+
+  snapshot(vmId: string, name?: string): Promise<SnapshotRef>;
+  restore(snapshotId: string): Promise<VMHandle>;
+
+  // Returns a live SSH endpoint the client can dial into. Drivers are responsible for ensuring
+  // sshd is running (some providers need an explicit start step).
+  openSSH(vmId: string): Promise<SSHEndpoint>;
+}
+
+export class ProviderError extends Error {
+  constructor(
+    public readonly provider: ProviderId,
+    message: string,
+    public readonly cause?: unknown,
+  ) {
+    super(`[${provider}] ${message}`);
+    this.name = "ProviderError";
+  }
+}
+
+export class NotImplementedError extends ProviderError {
+  constructor(provider: ProviderId, operation: string) {
+    super(provider, `${operation}: not implemented yet`);
+    this.name = "NotImplementedError";
+  }
+}
