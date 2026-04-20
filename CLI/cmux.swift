@@ -13849,7 +13849,10 @@ struct CMUXCLI {
         let newHooks = buildHooksDict(for: def)
 
         // Remove existing cmux-owned entries (both the per-agent hook
-        // dispatcher and the feed-hook bridge).
+        // dispatcher and the feed-hook bridge). Non-cmux entries are
+        // always preserved — even when the user mixed them into the
+        // same group as a cmux hook, we only prune our own entries
+        // within that group so the user's stays put.
         let isCmuxOwnedCommand: (String) -> Bool = { cmd in
             cmd.contains(def.hookMarker) || cmd.contains(Self.feedHookMarker)
         }
@@ -13861,11 +13864,23 @@ struct CMUXCLI {
                 hooks[event] = entries.isEmpty ? nil : entries
             case .nested:
                 guard var groups = value as? [[String: Any]] else { continue }
-                groups.removeAll { group in
-                    guard let hookList = group["hooks"] as? [[String: Any]] else { return false }
-                    return hookList.allSatisfy { isCmuxOwnedCommand($0["command"] as? String ?? "") }
+                var rewrittenGroups: [[String: Any]] = []
+                for var group in groups {
+                    guard var hookList = group["hooks"] as? [[String: Any]] else {
+                        // Unknown shape — preserve verbatim so we don't
+                        // accidentally mutate user custom data.
+                        rewrittenGroups.append(group)
+                        continue
+                    }
+                    hookList.removeAll { isCmuxOwnedCommand($0["command"] as? String ?? "") }
+                    if hookList.isEmpty {
+                        // Fully cmux-owned group → drop it entirely.
+                        continue
+                    }
+                    group["hooks"] = hookList
+                    rewrittenGroups.append(group)
                 }
-                hooks[event] = groups.isEmpty ? nil : groups
+                hooks[event] = rewrittenGroups.isEmpty ? nil : rewrittenGroups
             }
         }
 
@@ -13960,13 +13975,20 @@ struct CMUXCLI {
                 hooks[event] = entries.isEmpty ? nil : entries
             case .nested:
                 guard var groups = value as? [[String: Any]] else { continue }
-                let before = groups.count
-                groups.removeAll { group in
-                    guard let hookList = group["hooks"] as? [[String: Any]] else { return false }
-                    return hookList.allSatisfy { isCmuxOwnedCommand($0["command"] as? String ?? "") }
+                var rewrittenGroups: [[String: Any]] = []
+                for var group in groups {
+                    guard var hookList = group["hooks"] as? [[String: Any]] else {
+                        rewrittenGroups.append(group)
+                        continue
+                    }
+                    let before = hookList.count
+                    hookList.removeAll { isCmuxOwnedCommand($0["command"] as? String ?? "") }
+                    removed += before - hookList.count
+                    if hookList.isEmpty { continue }
+                    group["hooks"] = hookList
+                    rewrittenGroups.append(group)
                 }
-                removed += before - groups.count
-                hooks[event] = groups.isEmpty ? nil : groups
+                hooks[event] = rewrittenGroups.isEmpty ? nil : rewrittenGroups
             }
         }
 
