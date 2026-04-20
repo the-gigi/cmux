@@ -1,6 +1,6 @@
 # Cloud VMs service
 
-Backend for `cmux vm new/ls/rm` and the upcoming sidebar Cloud button. Stack Auth gated, manaflow-owned provider keys (no BYO). Default provider is E2B; Freestyle is stubbed until its baked snapshot lands.
+Backend for `cmux vm new/ls/rm/exec/attach` and the upcoming sidebar Cloud button. Stack Auth gated, manaflow-owned provider keys (no BYO). **Default provider is Freestyle** for all interactive work (shell attach, workspace attach). E2B stays available for scratch `vm exec` use via `--provider e2b --detach`; E2B sandboxes don't expose raw TCP so they can't be attached to interactively.
 
 ## Layout
 
@@ -36,12 +36,25 @@ Auth cookie path.
 See `web/.env.example`. The VM-specific vars:
 
 - `E2B_API_KEY` — manaflow's key, used by E2BProvider.
-- `FREESTYLE_API_KEY` — populated but unused (driver stubbed).
-- `E2B_SANDBOX_TEMPLATE` — template name to spawn from. Defaults to
-  `cmux-sandbox:v0-71a954b8e53b`, produced by
+- `FREESTYLE_API_KEY` — manaflow's key, used by FreestyleProvider.
+- `E2B_SANDBOX_TEMPLATE` — E2B template name for `vm exec` scratch sandboxes. Produced by
   `scratch/vm-experiments/images/build-e2b.ts`.
-- `FREESTYLE_SANDBOX_SNAPSHOT` — empty until the Freestyle baked snapshot lands.
-- `CMUX_VM_DEFAULT_PROVIDER` — `e2b` or `freestyle`. Defaults to `e2b`.
+- `FREESTYLE_SANDBOX_SNAPSHOT` — Freestyle snapshot id for `vm new` / `vm attach`. Produced by
+  `scratch/vm-experiments/images/build-freestyle.ts`.
+- `CMUX_VM_DEFAULT_PROVIDER` — `freestyle` (default, interactive) or `e2b` (scratch-only).
+
+## Provider matrix
+
+| Verb                        | Freestyle | E2B            |
+|-----------------------------|-----------|----------------|
+| `cmux vm new` (shell)       | ✓         | error          |
+| `cmux vm new --workspace`   | ✓         | error          |
+| `cmux vm new --detach`      | ✓         | ✓              |
+| `cmux vm attach <id>`       | ✓         | error          |
+| `cmux vm exec <id> -- ...`  | ✓         | ✓              |
+| `cmux vm ls / rm`           | ✓         | ✓              |
+
+E2B interactive paths return a user-facing error explaining the limitation. See `drivers/e2b.ts`.
 
 ## Lifecycle
 
@@ -58,10 +71,13 @@ See `web/.env.example`. The VM-specific vars:
 
 ## Next steps
 
-- Add `/api/vm/:id/pause`, `/api/vm/:id/resume`, `/api/vm/:id/exec`, `/api/vm/:id/snapshot` REST
-  wrappers once Swift client wants them (or let the Swift side hit `/api/rivet/*` actions
-  directly, which is what the plan prefers).
-- Wire the Freestyle driver once the baked snapshot lands.
-- Implement `openSSH` for the real mutagen-over-ssh sync path.
+- Finish the Freestyle driver (today stubbed) and ship the baked snapshot. Unblocks
+  `cmux vm new` shell + workspace modes.
+- Add `POST /api/vm/:id/ssh-endpoint` that mints short-lived ssh keys per attach session and
+  returns `{ host, port, username, privateKeyPem, fingerprint }`. Mac client hands those to the
+  existing `cmux ssh` transport — no Next.js tunneling in the data plane.
+- Add `/api/vm/:id/pause`, `/api/vm/:id/resume`, `/api/vm/:id/snapshot` REST wrappers once Swift
+  client wants them.
 
-See `plans/task-cmux-vm-cloud/cloud-vms-and-per-surface-ssh.md` for the full roadmap.
+See `plans/task-cmux-vm-cloud/cloud-vms-and-per-surface-ssh.md` for the full roadmap and
+`plans/task-cmux-vm-cloud/cli-vm-new-shell-and-workspace.md` for the latest CLI shape.

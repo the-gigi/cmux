@@ -1,41 +1,191 @@
+import { Freestyle } from "freestyle";
 import {
-  NotImplementedError,
+  ProviderError,
   type CreateOptions,
   type ExecResult,
   type SSHEndpoint,
   type SnapshotRef,
   type VMHandle,
   type VMProvider,
+  type VMStatus,
 } from "./types";
 
-// Stub. The upstream Freestyle snapshot-import step was hanging during M0 so we skipped
-// shipping this driver. Flip by replacing method bodies with calls to the `freestyle` SDK
-// once the baked snapshot lands (see scratch/vm-experiments/FINDINGS.md).
+// Default cmux-sandbox snapshot. Produced by scratch/vm-experiments/images/build-freestyle.ts.
+// Override via FREESTYLE_SANDBOX_SNAPSHOT. Image bakes sshd + cmuxd-remote + mutagen-agent.
+const DEFAULT_SNAPSHOT_ID = () => process.env.FREESTYLE_SANDBOX_SNAPSHOT ?? "";
+
+// Freestyle VMs reach the outside world only via their SSH gateway, which terminates on
+// `vm-ssh.freestyle.sh:22`. `ssh <vmId>+<user>@vm-ssh.freestyle.sh` authenticates against
+// an identity token the backend mints per attach session (short TTL, revoked on rm).
+const SSH_HOST = "vm-ssh.freestyle.sh";
+const SSH_PORT = 22;
+const CMUX_LINUX_USER = "cmux"; // must match Resources/install.sh in scratch/vm-experiments
+
+function client(): Freestyle {
+  // Long fetch: some provider calls (VM create, snapshot ensure) can take a while.
+  const longFetch: typeof fetch = (input, init) =>
+    fetch(input as Request, { ...(init ?? {}), signal: AbortSignal.timeout(15 * 60 * 1000) });
+  return new Freestyle({ fetch: longFetch });
+}
+
+function mapStatus(state: string | null | undefined): VMStatus {
+  switch (state) {
+    case "starting":
+      return "creating";
+    case "running":
+      return "running";
+    case "suspending":
+    case "suspended":
+      return "paused";
+    case "stopped":
+      return "destroyed";
+    default:
+      return "running";
+  }
+}
+
 export class FreestyleProvider implements VMProvider {
   readonly id = "freestyle" as const;
 
-  async create(_options: CreateOptions): Promise<VMHandle> {
-    throw new NotImplementedError("freestyle", "create");
+  async create(options: CreateOptions): Promise<VMHandle> {
+    const image = options.image || DEFAULT_SNAPSHOT_ID();
+    const fs = client();
+    try {
+      const body: Parameters<typeof fs.vms.create>[0] = image
+        ? { snapshotId: image }
+        : {};
+      // Build images can take several minutes if the snapshot cache misses. 10-minute ceiling.
+      const created = await fs.vms.create({
+        ...body,
+        readySignalTimeoutSeconds: 600,
+      });
+      return {
+        provider: "freestyle",
+        providerVmId: created.vmId,
+        status: "running",
+        image: image || "freestyle:default",
+        createdAt: Date.now(),
+      };
+    } catch (err) {
+      throw new ProviderError("freestyle", `create(${image || "<default>"})`, err);
+    }
   }
-  async destroy(_vmId: string): Promise<void> {
-    throw new NotImplementedError("freestyle", "destroy");
+
+  async destroy(vmId: string): Promise<void> {
+    try {
+      const fs = client();
+      const ref = fs.vms.ref({ vmId });
+      await ref.delete();
+    } catch (err) {
+      throw new ProviderError("freestyle", `destroy(${vmId})`, err);
+    }
   }
-  async pause(_vmId: string): Promise<void> {
-    throw new NotImplementedError("freestyle", "pause");
+
+  async pause(vmId: string): Promise<void> {
+    try {
+      const fs = client();
+      const ref = fs.vms.ref({ vmId });
+      await ref.suspend();
+    } catch (err) {
+      throw new ProviderError("freestyle", `pause(${vmId})`, err);
+    }
   }
-  async resume(_vmId: string): Promise<VMHandle> {
-    throw new NotImplementedError("freestyle", "resume");
+
+  async resume(vmId: string): Promise<VMHandle> {
+    try {
+      const fs = client();
+      const ref = fs.vms.ref({ vmId });
+      await ref.start();
+      const info = await ref.getInfo();
+      return {
+        provider: "freestyle",
+        providerVmId: info.id,
+        status: mapStatus(info.state),
+        image: "freestyle:resumed",
+        createdAt: Date.now(),
+      };
+    } catch (err) {
+      throw new ProviderError("freestyle", `resume(${vmId})`, err);
+    }
   }
-  async exec(_vmId: string, _cmd: string, _opts?: { timeoutMs?: number }): Promise<ExecResult> {
-    throw new NotImplementedError("freestyle", "exec");
+
+  async exec(
+    vmId: string,
+    command: string,
+    opts?: { timeoutMs?: number },
+  ): Promise<ExecResult> {
+    try {
+      const fs = client();
+      const ref = fs.vms.ref({ vmId });
+      const r = await ref.exec({ command, timeoutMs: opts?.timeoutMs ?? 30_000 });
+      // ResponsePostV1VmsVmIdExecAwait200 shape: { stdout, stderr, statusCode }
+      return {
+        exitCode: (r as { statusCode?: number }).statusCode ?? 0,
+        stdout: (r as { stdout?: string | null }).stdout ?? "",
+        stderr: (r as { stderr?: string | null }).stderr ?? "",
+      };
+    } catch (err) {
+      throw new ProviderError("freestyle", `exec(${vmId})`, err);
+    }
   }
-  async snapshot(_vmId: string, _name?: string): Promise<SnapshotRef> {
-    throw new NotImplementedError("freestyle", "snapshot");
+
+  async snapshot(vmId: string, name?: string): Promise<SnapshotRef> {
+    try {
+      const fs = client();
+      const ref = fs.vms.ref({ vmId });
+      const out = await ref.snapshot(name ? { name } : undefined);
+      const id =
+        (out as { snapshotId?: string }).snapshotId ??
+        (out as { id?: string }).id ??
+        "";
+      if (!id) throw new Error("snapshot response missing snapshotId");
+      return { id, createdAt: Date.now(), name };
+    } catch (err) {
+      throw new ProviderError("freestyle", `snapshot(${vmId})`, err);
+    }
   }
-  async restore(_snapshotId: string): Promise<VMHandle> {
-    throw new NotImplementedError("freestyle", "restore");
+
+  async restore(snapshotId: string): Promise<VMHandle> {
+    try {
+      const fs = client();
+      const created = await fs.vms.create({ snapshotId });
+      return {
+        provider: "freestyle",
+        providerVmId: created.vmId,
+        status: "running",
+        image: snapshotId,
+        createdAt: Date.now(),
+      };
+    } catch (err) {
+      throw new ProviderError("freestyle", `restore(${snapshotId})`, err);
+    }
   }
-  async openSSH(_vmId: string): Promise<SSHEndpoint> {
-    throw new NotImplementedError("freestyle", "openSSH");
+
+  /**
+   * Mint a short-lived SSH token + permission scoped to this VM, return the endpoint the mac
+   * client will dial. Freestyle's gateway terminates at `vm-ssh.freestyle.sh:22`, username is
+   * `<vmId>+<linuxUser>`, password is the access token we just minted.
+   */
+  async openSSH(vmId: string): Promise<SSHEndpoint> {
+    try {
+      const fs = client();
+      // A fresh identity per attach session. Token lifetime is tied to the identity;
+      // `vmActor.onDisconnect` revokes the token so it doesn't linger.
+      const { identity } = await fs.identities.create({});
+      await identity.permissions.vms.grant({
+        vmId,
+        allowedUsers: [CMUX_LINUX_USER],
+      });
+      const { token } = await identity.tokens.create();
+      return {
+        host: SSH_HOST,
+        port: SSH_PORT,
+        username: `${vmId}+${CMUX_LINUX_USER}`,
+        publicKeyFingerprint: null,
+        credential: { kind: "password", value: token },
+      };
+    } catch (err) {
+      throw new ProviderError("freestyle", `openSSH(${vmId})`, err);
+    }
   }
 }

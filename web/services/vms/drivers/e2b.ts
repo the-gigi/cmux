@@ -84,11 +84,18 @@ export class E2BProvider implements VMProvider {
     };
   }
 
-  async openSSH(vmId: string): Promise<SSHEndpoint> {
-    // Short-term strategy: E2B sandboxes expose ports via https://<port>-<sandbox-id>.e2b.app.
-    // A full SSH plumb requires either a WebSocket-tunneled ssh or provider-level SSH egress,
-    // neither of which E2B ships out of the box. Deferred until M1.1 when we decide whether
-    // to tunnel SSH over WebSocket or switch to provider-native shell.
-    throw new NotImplementedError("e2b", `openSSH(${vmId})`);
+  async openSSH(_vmId: string): Promise<SSHEndpoint> {
+    // E2B sandboxes expose ports only via https://<port>-<sandbox-id>.e2b.app — they don't
+    // route raw TCP/22 from outside, so mac client can't SSH directly into an E2B VM.
+    // cmux's interactive paths (`cmux vm new` shell, `cmux vm new --workspace`) require
+    // direct SSH + cmuxd-remote, so we surface a user-facing error. Use --provider freestyle
+    // for interactive work, or --provider e2b --detach for scratch `vm exec` use.
+    throw new ProviderError(
+      "e2b",
+      "E2B sandboxes don't support interactive attach (no raw TCP egress). " +
+        "Use `cmux vm new` without `--provider e2b` (Freestyle is the default), " +
+        "or `cmux vm new --provider e2b --detach` to create without attach, " +
+        "then `cmux vm exec <id> -- <cmd>`.",
+    );
   }
 }
