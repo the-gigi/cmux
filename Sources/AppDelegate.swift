@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Bonsplit
+import CMUXWorkstream
 import CoreServices
 import UserNotifications
 import Sentry
@@ -2551,6 +2552,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         AppIconLaunchState.markDidFinishLaunching()
 
         claimAuthCallbackURLSchemes()
+
+        // Install the Feed (workstream) store. Separate from the transport
+        // wiring: the store is a plain singleton here, and the socket
+        // `feed.*` V2 verbs in `TerminalController` push into it directly
+        // via `FeedCoordinator`.
+        FeedCoordinator.shared.install(
+            store: WorkstreamStore(
+                transport: NullWorkstreamTransport(),
+                persistence: WorkstreamPersistence(fileURL: WorkstreamPersistence.defaultFileURL())
+            )
+        )
+        Task { @MainActor in
+            await FeedCoordinator.shared.store?.start()
+        }
 
         DistributedNotificationCenter.default().addObserver(
             self,

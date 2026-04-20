@@ -20,6 +20,7 @@
 		46F6AC15863EC84DCD3770A2 /* TerminalAndGhosttyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02FC74F2C27127CC565B3E8C /* TerminalAndGhosttyTests.swift */; };
 		5EDB6027B346C46521A93C74 /* CMUXAuthCore in Frameworks */ = {isa = PBXBuildFile; productRef = 29813FE5A6CBC1019289A251 /* CMUXAuthCore */; };
 		AA11BB22CC33DD44EE550001 /* CMUXWorkstream in Frameworks */ = {isa = PBXBuildFile; productRef = AA11BB22CC33DD44EE550002 /* CMUXWorkstream */; };
+		FEED0000000000000000F002 /* FeedCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEED0000000000000000F001 /* FeedCoordinator.swift */; };
 		698944F99A6ADFBA24A7BFB9 /* AuthSettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1EA8948C5F126FE63CFB4E /* AuthSettingsStore.swift */; };
 		6B524A0BA34FD46A771335AB /* WorkspaceUnitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71F8ED91A4B55D34BE6A0668 /* WorkspaceUnitTests.swift */; };
 		734F49D37E543DD01C2F4FEF /* NotificationAndMenuBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2C075029771815DD5DA1332 /* NotificationAndMenuBarTests.swift */; };
@@ -230,6 +231,7 @@
 		3023B1003023B1003023B100 /* ConfigSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings/ConfigSource.swift; sourceTree = "<group>"; };
 		3023B1013023B1013023B101 /* ConfigSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings/ConfigSettingsView.swift; sourceTree = "<group>"; };
 		312DE7503B4658DD173121B8 /* AuthManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthManager.swift; sourceTree = "<group>"; };
+		FEED0000000000000000F001 /* FeedCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FeedCoordinator.swift; sourceTree = "<group>"; };
 		42092CDB2109E250F7F2A76E /* TabManagerUnitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabManagerUnitTests.swift; sourceTree = "<group>"; };
 		43430FA5929121E2EAAB3091 /* AuthEnvironment.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthEnvironment.swift; sourceTree = "<group>"; };
 		491751CE2321474474F27DCF /* TerminalControllerSocketSecurityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalControllerSocketSecurityTests.swift; sourceTree = "<group>"; };
@@ -440,6 +442,15 @@
 			path = Auth;
 			sourceTree = "<group>";
 		};
+		FEED0000000000000000F003 /* Feed */ = {
+			isa = PBXGroup;
+			children = (
+				FEED0000000000000000F001 /* FeedCoordinator.swift */,
+			);
+			name = Feed;
+			path = Feed;
+			sourceTree = "<group>";
+		};
 		3196C9C2D01F054C1D3385DD /* cmuxUITests */ = {
 			isa = PBXGroup;
 			children = (
@@ -555,6 +566,7 @@
 				FE003002 /* SessionIndexView.swift */,
 				FE003003 /* RightSidebarPanelView.swift */,
 				105D8421DF4E2E09D255D785 /* Auth */,
+				FEED0000000000000000F003 /* Feed */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -917,6 +929,7 @@
 				FE003101 /* SessionIndexStore.swift in Sources */,
 				FE003102 /* SessionIndexView.swift in Sources */,
 				FE003103 /* RightSidebarPanelView.swift in Sources */,
+				FEED0000000000000000F002 /* FeedCoordinator.swift in Sources */,
 				36CE99ED050785B5E96B72BB /* AuthCallbackRouter.swift in Sources */,
 				D9FEC58D5BACCF76459F1BBE /* AuthEnvironment.swift in Sources */,
 				350DAC5EBD38642A3E81471A /* AuthManager.swift in Sources */,
