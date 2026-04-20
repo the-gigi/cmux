@@ -1,5 +1,7 @@
+import AppKit
 import CMUXWorkstream
 import Foundation
+import UserNotifications
 
 /// App-level coordinator that owns the shared `WorkstreamStore` and
 /// mediates between the socket thread (which processes `feed.*` V2
@@ -56,6 +58,13 @@ final class FeedCoordinator: @unchecked Sendable {
                 FeedCoordinator.shared.store.ingest(event)
                 itemIdSlot.value = FeedCoordinator.shared.store.items.last?.id
             }
+        }
+
+        // If this is a blocking actionable event and the app window isn't
+        // focused, post a native notification banner with inline action
+        // buttons so the user can respond without switching windows.
+        if waitTimeout > 0, let requestId = event.requestId {
+            postFeedNotification(event: event, requestId: requestId)
         }
 
         guard let requestId = event.requestId, waitTimeout > 0 else {
@@ -167,11 +176,159 @@ extension FeedCoordinator {
         return slot.value
     }
 
-    /// Stub that the UI PR replaces with a real resolution against
-    /// `SessionIndexStore` + `workspace.select` / `surface.focus`.
+    /// Parses `workstreamId` in the form `<agent>-<sessionId>` and
+    /// looks up the matching hook-session entry in
+    /// `~/.cmuxterm/<agent>-hook-sessions.json` (written by
+    /// `cmux <agent>-hook session-start`). Returns `true` if a match
+    /// was found so the UI can gate the jump gesture.
+    ///
+    /// Actual focus (workspace.select + surface.focus) is scheduled via
+    /// `FeedJumpResolver.focusIfPossible` on the main actor.
     func resolvePossibleSurface(for workstreamId: String) -> Bool {
-        _ = workstreamId
-        return false
+        guard let parsed = FeedJumpResolver.parse(workstreamId) else {
+            return false
+        }
+        return FeedJumpResolver.lookup(agent: parsed.agent, sessionId: parsed.sessionId) != nil
+    }
+
+    /// Fires a best-effort focus for the given `workstreamId`. Returns
+    /// `true` if a target was found and the focus commands were
+    /// dispatched. Runs on the main actor because the focus commands
+    /// touch AppKit state.
+    @MainActor
+    func focusIfPossible(workstreamId: String) -> Bool {
+        guard let parsed = FeedJumpResolver.parse(workstreamId),
+              let target = FeedJumpResolver.lookup(
+                agent: parsed.agent, sessionId: parsed.sessionId
+              )
+        else { return false }
+        FeedJumpResolver.focus(workspaceId: target.workspaceId, surfaceId: target.surfaceId)
+        return true
+    }
+}
+
+/// Reads the per-agent hook session stores (`~/.cmuxterm/<agent>-hook-sessions.json`)
+/// to map a feed `workstream_id` back to a cmux `(workspaceId, surfaceId)` pair.
+/// The schema is the same one written by `cmux <agent>-hook session-start`.
+enum FeedJumpResolver {
+    struct Target: Equatable {
+        let workspaceId: String
+        let surfaceId: String
+    }
+
+    static func parse(_ workstreamId: String) -> (agent: String, sessionId: String)? {
+        guard let dash = workstreamId.firstIndex(of: "-") else { return nil }
+        let agent = String(workstreamId[..<dash])
+        let sessionId = String(workstreamId[workstreamId.index(after: dash)...])
+        guard !agent.isEmpty, !sessionId.isEmpty else { return nil }
+        return (agent, sessionId)
+    }
+
+    static func lookup(agent: String, sessionId: String) -> Target? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let file = home
+            .appendingPathComponent(".cmuxterm", isDirectory: true)
+            .appendingPathComponent("\(agent)-hook-sessions.json", isDirectory: false)
+        guard let data = try? Data(contentsOf: file),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        // Stores have a consistent shape: top-level `sessions` dict keyed
+        // by sessionId. Tolerate older flat layouts too.
+        let sessions: [String: Any]
+        if let nested = root["sessions"] as? [String: Any] {
+            sessions = nested
+        } else {
+            sessions = root
+        }
+        guard let entry = sessions[sessionId] as? [String: Any],
+              let workspaceId = entry["workspaceId"] as? String,
+              let surfaceId = entry["surfaceId"] as? String,
+              !workspaceId.isEmpty, !surfaceId.isEmpty
+        else { return nil }
+        return Target(workspaceId: workspaceId, surfaceId: surfaceId)
+    }
+
+    /// Dispatches a workspace-select + surface-focus intent. Posts
+    /// through the existing cmux notification pathway so we don't need
+    /// to bind directly to the TerminalController V2 handlers from the
+    /// Feed layer.
+    @MainActor
+    static func focus(workspaceId: String, surfaceId: String) {
+        NotificationCenter.default.post(
+            name: .feedRequestFocus,
+            object: nil,
+            userInfo: [
+                "workspaceId": workspaceId,
+                "surfaceId": surfaceId,
+            ]
+        )
+    }
+}
+
+extension Notification.Name {
+    static let feedRequestFocus = Notification.Name("cmux.feedRequestFocus")
+}
+
+// MARK: - Native notification banner
+
+/// Posts a UNUserNotificationCenter banner with inline action buttons
+/// for the given Feed event. Skips if the app window is already key/
+/// focused so the user isn't double-notified.
+private func postFeedNotification(event: WorkstreamEvent, requestId: String) {
+    DispatchQueue.main.async {
+        // Don't pester users while the app is already up front.
+        if NSApp.isActive {
+            return
+        }
+
+        let categoryId: String
+        let title: String
+        let body: String
+        switch event.hookEventName {
+        case .permissionRequest:
+            categoryId = "CMUXFeedPermission"
+            title = "\(event.source.capitalized) permission"
+            body = event.toolName.map { "\($0) · \(event.cwd ?? "")" } ?? "Decision needed"
+        case .exitPlanMode:
+            categoryId = "CMUXFeedExitPlan"
+            title = "\(event.source.capitalized) plan ready"
+            body = event.toolInputJSON ?? "Review and approve the plan"
+        case .askUserQuestion:
+            categoryId = "CMUXFeedQuestion"
+            title = "\(event.source.capitalized) question"
+            body = event.toolName ?? "Agent is asking a question"
+        default:
+            return
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.categoryIdentifier = categoryId
+        content.userInfo = [
+            "requestId": requestId,
+            "workstreamId": event.sessionId,
+        ]
+
+        let request = UNNotificationRequest(
+            identifier: "feed.\(requestId)",
+            content: content,
+            trigger: nil
+        )
+
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional:
+                center.add(request) { _ in /* best effort */ }
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    if granted { center.add(request) { _ in } }
+                }
+            default:
+                break
+            }
+        }
     }
 }
 

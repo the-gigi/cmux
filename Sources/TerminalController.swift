@@ -1651,6 +1651,14 @@ class TerminalController {
         }
     }
 
+    /// Public entry point mirroring the socket's `processCommand` path so
+    /// in-process callers (e.g. the Feed coordinator's `feed.jump` focus
+    /// request) can reuse the full V1/V2 dispatcher without duplicating
+    /// its auth/policy wrappers.
+    func handleSocketLine(_ line: String) -> String {
+        return processCommand(line)
+    }
+
     private func processCommand(_ command: String) -> String {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "ERROR: Empty command" }

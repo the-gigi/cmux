@@ -1888,6 +1888,21 @@ struct CMUXCLI {
             }
         }
 
+        // Feed helpers: clear the persistent workstream history.
+        if command == "feed" {
+            let sub = commandArgs.first?.lowercased() ?? "help"
+            switch sub {
+            case "clear":
+                try runFeedClear()
+                return
+            case "help", "--help", "-h":
+                print("Usage: cmux feed clear [--yes]")
+                return
+            default:
+                throw CLIError(message: "Unknown feed subcommand: \(sub)")
+            }
+        }
+
         // OpenCode plugin install/uninstall (plugin JS, not a hook file)
         if command == "opencode" {
             let sub = commandArgs.first?.lowercased() ?? "help"
@@ -14085,6 +14100,31 @@ struct CMUXCLI {
         }
 
         print("{}")
+    }
+
+    // MARK: - Feed history
+
+    private func runFeedClear() throws {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let path = home
+            .appendingPathComponent(".cmuxterm", isDirectory: true)
+            .appendingPathComponent("workstream.jsonl", isDirectory: false)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: path.path) else {
+            print("No Feed history to clear (\(path.path) does not exist).")
+            return
+        }
+        let skipConfirm = ProcessInfo.processInfo.arguments.contains("--yes")
+            || ProcessInfo.processInfo.arguments.contains("-y")
+        if !skipConfirm {
+            print("This will permanently delete \(path.path). Proceed? [y/N] ", terminator: "")
+            guard readLine()?.lowercased().hasPrefix("y") == true else {
+                print("Aborted.")
+                return
+            }
+        }
+        try fm.removeItem(at: path)
+        print("Cleared \(path.path)")
     }
 
     // MARK: - OpenCode plugin install

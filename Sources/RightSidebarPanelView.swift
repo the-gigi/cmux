@@ -1,5 +1,6 @@
 import AppKit
 import CMUXWorkstream
+import Observation
 import SwiftUI
 
 /// Mode shown in the right sidebar (the panel toggled by ⌘⌥B).
@@ -32,6 +33,13 @@ struct RightSidebarPanelView: View {
     @ObservedObject var sessionIndexStore: SessionIndexStore
     let onResumeSession: ((SessionEntry) -> Void)?
 
+    // Re-reading the observable store inside modeBar causes SwiftUI to
+    // track the pending count so the badge updates live when hooks push
+    // new items.
+    private var feedPendingCount: Int {
+        FeedCoordinator.shared.store?.pending.count ?? 0
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             modeBar
@@ -46,7 +54,8 @@ struct RightSidebarPanelView: View {
             ForEach(RightSidebarMode.allCases, id: \.rawValue) { mode in
                 ModeBarButton(
                     mode: mode,
-                    isSelected: fileExplorerState.mode == mode
+                    isSelected: fileExplorerState.mode == mode,
+                    badgeCount: mode == .feed ? feedPendingCount : 0
                 ) {
                     if fileExplorerState.mode != mode {
                         fileExplorerState.mode = mode
@@ -90,6 +99,7 @@ struct RightSidebarPanelView: View {
 private struct ModeBarButton: View {
     let mode: RightSidebarMode
     let isSelected: Bool
+    var badgeCount: Int = 0
     let action: () -> Void
 
     @State private var isHovered: Bool = false
@@ -97,8 +107,14 @@ private struct ModeBarButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                Image(systemName: mode.symbolName)
-                    .font(.system(size: 11, weight: .medium))
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: mode.symbolName)
+                        .font(.system(size: 11, weight: .medium))
+                    if badgeCount > 0 {
+                        pendingBadge
+                            .offset(x: 6, y: -5)
+                    }
+                }
                 Text(mode.label)
                     .font(.system(size: 11, weight: .medium))
             }
@@ -113,7 +129,14 @@ private struct ModeBarButton: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .help(mode.label)
+        .help(helpText)
+    }
+
+    private var helpText: String {
+        if badgeCount > 0 {
+            return "\(mode.label) · \(badgeCount) pending"
+        }
+        return mode.label
     }
 
     private var backgroundColor: Color {
@@ -124,5 +147,17 @@ private struct ModeBarButton: View {
             return Color.primary.opacity(0.05)
         }
         return Color.clear
+    }
+
+    private var pendingBadge: some View {
+        let countText = badgeCount > 9 ? "9+" : String(badgeCount)
+        return Text(countText)
+            .font(.system(size: 9, weight: .bold).monospacedDigit())
+            .foregroundColor(.white)
+            .padding(.horizontal, 3)
+            .frame(minWidth: 12, minHeight: 12)
+            .background(
+                Capsule().fill(Color.red)
+            )
     }
 }

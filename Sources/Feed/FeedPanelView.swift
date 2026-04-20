@@ -136,6 +136,7 @@ private struct FeedListView: View {
 /// never hold a reference to the store.
 struct FeedItemSnapshot: Equatable {
     let id: UUID
+    let workstreamId: String
     let source: WorkstreamSource
     let kind: WorkstreamKind
     let title: String?
@@ -146,6 +147,7 @@ struct FeedItemSnapshot: Equatable {
 
     init(item: WorkstreamItem) {
         self.id = item.id
+        self.workstreamId = item.workstreamId
         self.source = item.source
         self.kind = item.kind
         self.title = item.title
@@ -154,6 +156,10 @@ struct FeedItemSnapshot: Equatable {
         self.status = item.status
         self.payload = item.payload
     }
+}
+
+private func snapshotWorkstreamId(_ s: FeedItemSnapshot) -> String {
+    s.workstreamId
 }
 
 /// Closure bundle; binds to `FeedCoordinator` by default.
@@ -189,8 +195,10 @@ struct FeedRowActions {
                     )
                 }
             },
-            jump: { _ in
-                // TODO: route through workspace.select / surface.focus
+            jump: { workstreamId in
+                Task { @MainActor in
+                    _ = FeedCoordinator.shared.focusIfPossible(workstreamId: workstreamId)
+                }
             }
         )
     }
@@ -234,6 +242,21 @@ private struct FeedItemRow: View {
         )
         .onHover { isHovered = $0 }
         .help(helpText)
+        .onTapGesture(count: 2) {
+            actions.jump(workstreamIdForJump)
+        }
+    }
+
+    private var workstreamIdForJump: String {
+        // Store mirror of the workstream id; snapshot doesn't carry it
+        // directly because payloads do. Fall back to source-only when
+        // the item kind doesn't embed a session linkage.
+        switch snapshot.payload {
+        case .permissionRequest, .exitPlan, .question:
+            return snapshotWorkstreamId(snapshot)
+        default:
+            return snapshotWorkstreamId(snapshot)
+        }
     }
 
     private var header: some View {

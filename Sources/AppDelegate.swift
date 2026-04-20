@@ -2580,6 +2580,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             name: .reactGrabDidCopySelection,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleFeedRequestFocus(_:)),
+            name: .feedRequestFocus,
+            object: nil
+        )
 
 #if DEBUG
         // UI tests run on a shared VM user profile, so persisted shortcuts can drift and make
@@ -7564,6 +7570,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(payload, forType: .string)
+    }
+
+    @objc private func handleFeedRequestFocus(_ notification: Notification) {
+        guard let workspaceId = notification.userInfo?["workspaceId"] as? String,
+              let surfaceId = notification.userInfo?["surfaceId"] as? String
+        else { return }
+
+        // Invoke the existing V2 commands so the Feed-layer focus request
+        // goes through the same code path as a socket-initiated focus.
+        // Serialize through JSON so we reuse the v2 command parser.
+        let controller = TerminalController.shared
+        let invoke: (String, [String: Any]) -> Void = { method, params in
+            let payload: [String: Any] = [
+                "id": UUID().uuidString,
+                "method": method,
+                "params": params
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: payload),
+                  let line = String(data: data, encoding: .utf8)
+            else { return }
+            _ = controller.handleSocketLine(line)
+        }
+        invoke("workspace.select", ["workspace": workspaceId])
+        invoke("surface.focus", ["surface": surfaceId])
     }
 
     @objc private func handleReactGrabDidCopySelection(_ notification: Notification) {
@@ -12639,9 +12669,88 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             options: [.customDismissAction]
         )
 
+        // Feed categories with inline decision buttons. Identifiers and
+        // action strings are matched in `handleFeedNotificationResponse`.
+        let permissionCategory = UNNotificationCategory(
+            identifier: "CMUXFeedPermission",
+            actions: [
+                UNNotificationAction(identifier: "feed.permission.once", title: "Allow Once"),
+                UNNotificationAction(identifier: "feed.permission.always", title: "Always"),
+                UNNotificationAction(
+                    identifier: "feed.permission.deny", title: "Deny",
+                    options: [.destructive]
+                ),
+            ],
+            intentIdentifiers: [],
+            options: []
+        )
+        let exitPlanCategory = UNNotificationCategory(
+            identifier: "CMUXFeedExitPlan",
+            actions: [
+                UNNotificationAction(identifier: "feed.exit_plan.bypassPermissions", title: "Bypass"),
+                UNNotificationAction(identifier: "feed.exit_plan.autoAccept", title: "Auto-accept"),
+                UNNotificationAction(identifier: "feed.exit_plan.manual", title: "Manual"),
+            ],
+            intentIdentifiers: [],
+            options: []
+        )
+        let questionCategory = UNNotificationCategory(
+            identifier: "CMUXFeedQuestion",
+            actions: [
+                UNNotificationAction(
+                    identifier: "feed.question.open", title: "Reply",
+                    options: [.foreground]
+                ),
+            ],
+            intentIdentifiers: [],
+            options: []
+        )
+
         let center = UNUserNotificationCenter.current()
-        center.setNotificationCategories([category])
+        center.setNotificationCategories([
+            category, permissionCategory, exitPlanCategory, questionCategory
+        ])
         center.delegate = self
+    }
+
+    /// Routes a notification action identifier like
+    /// `feed.permission.once` back to `FeedCoordinator.deliverReply`.
+    /// Returns `true` if the identifier was Feed-owned.
+    private func handleFeedNotificationResponse(_ response: UNNotificationResponse) -> Bool {
+        let categoryId = response.notification.request.content.categoryIdentifier
+        guard categoryId == "CMUXFeedPermission"
+           || categoryId == "CMUXFeedExitPlan"
+           || categoryId == "CMUXFeedQuestion"
+        else { return false }
+
+        guard let requestId = response.notification.request.content.userInfo["requestId"] as? String else {
+            return true
+        }
+
+        switch response.actionIdentifier {
+        case "feed.permission.once":
+            FeedCoordinator.shared.deliverReply(requestId: requestId, decision: .permission(.once))
+        case "feed.permission.always":
+            FeedCoordinator.shared.deliverReply(requestId: requestId, decision: .permission(.always))
+        case "feed.permission.deny":
+            FeedCoordinator.shared.deliverReply(requestId: requestId, decision: .permission(.deny))
+        case "feed.exit_plan.bypassPermissions":
+            FeedCoordinator.shared.deliverReply(requestId: requestId, decision: .exitPlan(.bypassPermissions))
+        case "feed.exit_plan.autoAccept":
+            FeedCoordinator.shared.deliverReply(requestId: requestId, decision: .exitPlan(.autoAccept))
+        case "feed.exit_plan.manual":
+            FeedCoordinator.shared.deliverReply(requestId: requestId, decision: .exitPlan(.manual))
+        case "feed.question.open":
+            // Open the app / focus the Feed sidebar; actual reply happens in-app.
+            NSApp.activate(ignoringOtherApps: true)
+        case UNNotificationDismissActionIdentifier,
+             UNNotificationDefaultActionIdentifier:
+            // Tap on the banner body opens the app so user can act in-UI.
+            NSApp.activate(ignoringOtherApps: true)
+        default:
+            break
+        }
+        return true
     }
 
     private func disableNativeTabbingShortcut() {
@@ -12781,6 +12890,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func handleNotificationResponse(_ response: UNNotificationResponse) {
+        if handleFeedNotificationResponse(response) {
+            return
+        }
         guard let tabIdString = response.notification.request.content.userInfo["tabId"] as? String,
               let tabId = UUID(uuidString: tabIdString) else {
             return
