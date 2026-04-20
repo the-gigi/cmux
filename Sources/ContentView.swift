@@ -2994,11 +2994,7 @@ struct ContentView: View {
 
     private func syncTrafficLightInset() {
         let inset: CGFloat = (isMinimalMode && !sidebarState.isVisible && !isFullScreen) ? 80 : 0
-        for tab in tabManager.tabs {
-            if tab.bonsplitController.configuration.appearance.tabBarLeadingInset != inset {
-                tab.bonsplitController.configuration.appearance.tabBarLeadingInset = inset
-            }
-        }
+        tabManager.syncWorkspaceTabBarLeadingInset(inset)
     }
 
     private func updateTitlebarText() {
@@ -3729,6 +3725,10 @@ struct ContentView: View {
         })
 
         view = AnyView(view.onChange(of: isMinimalMode) { _, _ in
+            syncTrafficLightInset()
+        })
+
+        view = AnyView(view.onChange(of: tabManager.tabs.map(\.id)) { _ in
             syncTrafficLightInset()
         })
 
