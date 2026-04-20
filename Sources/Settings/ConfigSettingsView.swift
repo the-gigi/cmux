@@ -22,7 +22,10 @@ struct ConfigSettingsView: View {
     private var currentBannerText: String? {
         switch configSource {
         case .cmux:
-            return nil
+            return String(
+                localized: "settings.config.banner.cmux",
+                defaultValue: "This is the config file cmux reads. Edit it here, then Save to reload cmux."
+            )
         case .ghostty:
             if currentSnapshot.hasBackingFile {
                 return String(
@@ -84,21 +87,12 @@ struct ConfigSettingsView: View {
 
             Group {
                 if configSource == .cmux {
-                    TextEditor(text: $cmuxDraft)
-                        .font(.system(size: 12, weight: .regular, design: .monospaced))
-                        .scrollContentBackground(.hidden)
-                        .padding(10)
+                    ConfigSettingsTextView(text: $cmuxDraft, isEditable: true)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .background(editorBackground)
                         .accessibilityIdentifier("ConfigSettingsCmuxEditor")
                 } else {
-                    ScrollView {
-                        Text(verbatim: currentSnapshot.contents)
-                            .font(.system(size: 12, weight: .regular, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                    }
+                    ConfigSettingsTextView(text: .constant(currentSnapshot.contents), isEditable: false)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .background(editorBackground)
                     .accessibilityIdentifier("ConfigSettingsReadOnlyView")
@@ -107,6 +101,7 @@ struct ConfigSettingsView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
                     .stroke(Color(nsColor: .separatorColor).opacity(0.25), lineWidth: 1)
+                    .allowsHitTesting(false)
             )
             .clipShape(RoundedRectangle(cornerRadius: 10))
 
@@ -295,6 +290,77 @@ private struct ConfigSettingsBanner: View {
             RoundedRectangle(cornerRadius: 10)
                 .fill(Color(nsColor: .controlBackgroundColor))
         )
+    }
+}
+
+private struct ConfigSettingsTextView: NSViewRepresentable {
+    @Binding var text: String
+    let isEditable: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+
+        let textView = NSTextView()
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.allowsUndo = true
+        textView.isEditable = isEditable
+        textView.isSelectable = true
+        textView.string = text
+        textView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        textView.textColor = .textColor
+        textView.backgroundColor = .textBackgroundColor
+        textView.insertionPointColor = .textColor
+        textView.textContainerInset = NSSize(width: 10, height: 10)
+        textView.autoresizingMask = [.width]
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(
+            width: scrollView.contentSize.width,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.delegate = context.coordinator
+
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.text = $text
+
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        if textView.string != text {
+            textView.string = text
+        }
+        textView.isEditable = isEditable
+        textView.isSelectable = true
+        textView.backgroundColor = .textBackgroundColor
+        textView.textColor = .textColor
+        textView.insertionPointColor = .textColor
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var text: Binding<String>
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            text.wrappedValue = textView.string
+        }
     }
 }
 

@@ -49135,6 +49135,23 @@
         }
       }
     },
+    "settings.config.banner.cmux": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This is the config file cmux reads. Edit it here, then Save to reload cmux."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "これは cmux が読み込む設定ファイルです。ここで編集し、保存すると cmux が再読み込みされます。"
+          }
+        }
+      }
+    },
     "settings.config.banner.ghostty": {
       "extractionState": "manual",
       "localizations": {
