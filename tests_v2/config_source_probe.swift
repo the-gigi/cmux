@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 private struct SnapshotPayload: Encodable {
@@ -18,7 +19,7 @@ private struct ConfigSourceProbe {
     static func main() throws {
         guard CommandLine.arguments.count >= 2 else {
             fputs("usage: config_source_probe <home-directory>\n", stderr)
-            Foundation.exit(64)
+            Darwin.exit(64)
         }
 
         let homeDirectoryURL = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
