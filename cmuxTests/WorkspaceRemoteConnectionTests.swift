@@ -1429,6 +1429,51 @@ final class CLINotifyProcessIntegrationTests: XCTestCase {
         )
     }
 
+    private func closedPipeWriteHandle(named name: String) throws -> FileHandle {
+        var pipeFDs = [Int32](repeating: 0, count: 2)
+        guard pipe(&pipeFDs) == 0 else {
+            throw NSError(
+                domain: NSPOSIXErrorDomain,
+                code: Int(errno),
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create \(name) pipe"]
+            )
+        }
+
+        let readFD = pipeFDs[0]
+        let writeFD = pipeFDs[1]
+        guard Darwin.close(readFD) == 0 else {
+            let code = Int(errno)
+            Darwin.close(writeFD)
+            throw NSError(
+                domain: NSPOSIXErrorDomain,
+                code: code,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to close read end of \(name) pipe"]
+            )
+        }
+
+        return FileHandle(fileDescriptor: writeFD, closeOnDealloc: false)
+    }
+
+    private func cliTestEnvironment() -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["CMUX_CLI_SENTRY_DISABLED"] = "1"
+        environment["CMUX_CLAUDE_HOOK_SENTRY_DISABLED"] = "1"
+        return environment
+    }
+
+    private func waitForExit(
+        of process: Process,
+        description: String,
+        timeout: TimeInterval = 5
+    ) -> XCTWaiter.Result {
+        let exited = expectation(description: description)
+        DispatchQueue.global(qos: .userInitiated).async {
+            process.waitUntilExit()
+            exited.fulfill()
+        }
+        return XCTWaiter().wait(for: [exited], timeout: timeout)
+    }
+
     private func bindUnixSocket(at path: String) throws -> Int32 {
         unlink(path)
 
@@ -1547,17 +1592,38 @@ final class CLINotifyProcessIntegrationTests: XCTestCase {
     }
 
     @MainActor
-    func testReadScreenArgumentErrorDoesNotAbortWhenStderrPipeIsClosed() throws {
+    func testVersionDoesNotAbortWhenStdoutPipeIsClosed() throws {
+        let cliPath = try bundledCLIPath()
+        let process = Process()
+        let stdoutHandle = try closedPipeWriteHandle(named: "stdout")
+        defer { try? stdoutHandle.close() }
+
+        process.executableURL = URL(fileURLWithPath: cliPath)
+        process.arguments = ["version"]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = stdoutHandle
+        process.standardError = Pipe()
+        process.environment = cliTestEnvironment()
+
+        try process.run()
+
+        let waitResult = waitForExit(of: process, description: "cli exited after closed stdout pipe")
+        guard waitResult == .completed else {
+            process.terminate()
+            XCTFail("CLI did not exit within 5s after closed stdout pipe")
+            return
+        }
+
+        XCTAssertEqual(process.terminationReason, .exit)
+        XCTAssertEqual(process.terminationStatus, 0)
+    }
+
+    @MainActor
+    func testReadScreenArgumentErrorPreservesExitCodeWhenStderrPipeIsClosed() throws {
         let cliPath = try bundledCLIPath()
         let process = Process()
         let stdoutPipe = Pipe()
-        var stderrPipeFDs = [Int32](repeating: 0, count: 2)
-        XCTAssertEqual(pipe(&stderrPipeFDs), 0)
-        let stderrReadFD = stderrPipeFDs[0]
-        let stderrWriteFD = stderrPipeFDs[1]
-        XCTAssertEqual(Darwin.close(stderrReadFD), 0)
-
-        let stderrHandle = FileHandle(fileDescriptor: stderrWriteFD, closeOnDealloc: false)
+        let stderrHandle = try closedPipeWriteHandle(named: "stderr")
         defer { try? stderrHandle.close() }
 
         process.executableURL = URL(fileURLWithPath: cliPath)
@@ -1566,19 +1632,11 @@ final class CLINotifyProcessIntegrationTests: XCTestCase {
         process.standardOutput = stdoutPipe
         process.standardError = stderrHandle
 
-        var environment = ProcessInfo.processInfo.environment
-        environment["CMUX_CLI_SENTRY_DISABLED"] = "1"
-        environment["CMUX_CLAUDE_HOOK_SENTRY_DISABLED"] = "1"
-        process.environment = environment
+        process.environment = cliTestEnvironment()
 
         try process.run()
 
-        let exited = expectation(description: "cli exited after closed stderr pipe")
-        DispatchQueue.global(qos: .userInitiated).async {
-            process.waitUntilExit()
-            exited.fulfill()
-        }
-        let waitResult = XCTWaiter().wait(for: [exited], timeout: 5)
+        let waitResult = waitForExit(of: process, description: "cli exited after closed stderr pipe")
         guard waitResult == .completed else {
             process.terminate()
             XCTFail("CLI did not exit within 5s after closed stderr pipe")
@@ -1593,9 +1651,27 @@ final class CLINotifyProcessIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(
             process.terminationStatus,
-            0,
-            "Expected closed stderr pipe to be treated as a clean exit; stdout=\(stdout)"
+            1,
+            "Expected closed stderr pipe to preserve the command failure exit code; stdout=\(stdout)"
         )
+    }
+
+    @MainActor
+    func testSIGPIPEProbeChildrenSeeDefaultDisposition() throws {
+        let cliPath = try bundledCLIPath()
+        for mode in ["spawn", "exec"] {
+            let result = runProcess(
+                executablePath: cliPath,
+                arguments: ["__sigpipe-probe", mode],
+                environment: cliTestEnvironment(),
+                timeout: 5
+            )
+
+            XCTAssertFalse(result.timedOut, "Mode \(mode) timed out: \(result.stderr)")
+            XCTAssertEqual(result.status, 0, "Mode \(mode) failed: \(result.stderr)")
+            XCTAssertEqual(result.stdout, "default\n", "Mode \(mode) inherited the wrong SIGPIPE disposition")
+            XCTAssertTrue(result.stderr.isEmpty, "Mode \(mode) wrote unexpected stderr: \(result.stderr)")
+        }
     }
 
     @MainActor
@@ -2839,4 +2915,3 @@ final class CLINotifyProcessIntegrationTests: XCTestCase {
         )
     }
 }
-
