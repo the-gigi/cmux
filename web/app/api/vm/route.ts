@@ -51,7 +51,15 @@ export async function GET(request: Request): Promise<Response> {
     const bearer = requireBearer(request);
     if (!bearer) return unauthorized();
     const client = clientFor(request, bearer);
-    const vms = await client.userVmsActor.getOrCreate([user.id]).list();
+    const entries = await client.userVmsActor.getOrCreate([user.id]).list();
+    // REST adapter: expose `id` at the top level so existing CLI + curl users don't need to
+    // learn the new `providerVmId` field name. Swift CLI reads `vm["id"]`.
+    const vms = entries.map((entry) => ({
+      id: entry.providerVmId,
+      provider: entry.provider,
+      image: entry.image,
+      createdAt: entry.createdAt,
+    }));
     return jsonResponse({ vms });
   } catch (err) {
     console.error("/api/vm GET failed", err);
@@ -77,7 +85,12 @@ export async function POST(request: Request): Promise<Response> {
 
     const client = clientFor(request, bearer);
     const created = await client.userVmsActor.getOrCreate([user.id]).create({ image, provider });
-    return jsonResponse({ id: created.id, provider: created.provider, image: created.image });
+    return jsonResponse({
+      id: created.providerVmId,
+      provider: created.provider,
+      image: created.image,
+      createdAt: created.createdAt,
+    });
   } catch (err) {
     console.error("/api/vm POST failed", err);
     return errorResponse(
