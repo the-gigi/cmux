@@ -729,13 +729,19 @@ class TabManager: ObservableObject {
         let pullRequest: WorkspacePullRequestSnapshot
     }
 
-    private struct CommandResult {
+    struct CommandResult: Sendable {
         let stdout: String?
         let stderr: String?
         let exitStatus: Int32?
         let timedOut: Bool
         let executionError: String?
     }
+
+#if DEBUG
+    nonisolated(unsafe) static var commandRunnerForTesting: (
+        @Sendable (String, String, [String], TimeInterval?) -> CommandResult?
+    )?
+#endif
 
     private struct WorkspaceGitProbeKey: Hashable, Sendable {
         let workspaceId: UUID
@@ -3081,6 +3087,11 @@ class TabManager: ObservableObject {
         arguments: [String],
         timeout: TimeInterval? = nil
     ) -> CommandResult? {
+#if DEBUG
+        if let commandRunnerForTesting {
+            return commandRunnerForTesting(directory, executable, arguments, timeout)
+        }
+#endif
         let process = Process()
         let stdout = Pipe()
         let stderr = Pipe()
