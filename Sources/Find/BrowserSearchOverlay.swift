@@ -89,9 +89,6 @@ struct BrowserSearchOverlay: View {
                     }
                 }
                 Button(action: {
-                    #if DEBUG
-                    dlog("browser.findbar.next panel=\(panelId.uuidString.prefix(5))")
-                    #endif
                     onNext()
                 }) {
                     Image(systemName: "chevron.up")
@@ -100,9 +97,6 @@ struct BrowserSearchOverlay: View {
                 .safeHelp("Next match (Return)")
 
                 Button(action: {
-                    #if DEBUG
-                    dlog("browser.findbar.prev panel=\(panelId.uuidString.prefix(5))")
-                    #endif
                     onPrevious()
                 }) {
                     Image(systemName: "chevron.down")
@@ -111,9 +105,6 @@ struct BrowserSearchOverlay: View {
                 .safeHelp("Previous match (Shift+Return)")
 
                 Button(action: {
-                    #if DEBUG
-                    dlog("browser.findbar.close panel=\(panelId.uuidString.prefix(5))")
-                    #endif
                     onClose()
                 }) {
                     Image(systemName: "xmark")
@@ -125,11 +116,6 @@ struct BrowserSearchOverlay: View {
             .background(.background)
             .clipShape(clipShape)
             .shadow(radius: 4)
-            .onAppear {
-#if DEBUG
-                dlog("browser.findbar.appear panel=\(panelId.uuidString.prefix(5))")
-#endif
-            }
             .background(
                 GeometryReader { barGeo in
                     Color.clear.onAppear {

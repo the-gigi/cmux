@@ -735,6 +735,12 @@ final class WorkspaceLayoutRootHostView: NSView {
 #endif
 }
 
+func workspaceLayoutRemoveSubviewIfOwned(_ child: NSView?, from container: NSView) {
+    guard let child,
+          child.superview === container else { return }
+    child.removeFromSuperview()
+}
+
 @MainActor
 private final class WorkspaceLayoutNativeSplitView: NSSplitView, NSSplitViewDelegate {
     private let hostBridge: WorkspaceLayoutInteractionHandlers
@@ -822,12 +828,8 @@ private final class WorkspaceLayoutNativeSplitView: NSSplitView, NSSplitViewDele
     }
 
     func removeAllChildren() {
-        if firstChild?.superview === firstContainer {
-            firstChild?.removeFromSuperview()
-        }
-        if secondChild?.superview === secondContainer {
-            secondChild?.removeFromSuperview()
-        }
+        workspaceLayoutRemoveSubviewIfOwned(firstChild, from: firstContainer)
+        workspaceLayoutRemoveSubviewIfOwned(secondChild, from: secondContainer)
         firstChild = nil
         secondChild = nil
     }
@@ -847,7 +849,7 @@ private final class WorkspaceLayoutNativeSplitView: NSSplitView, NSSplitViewDele
 
     private func install(child: NSView, in container: NSView, current: inout NSView?) {
         if current !== child {
-            current?.removeFromSuperview()
+            workspaceLayoutRemoveSubviewIfOwned(current, from: container)
             if child.superview !== container {
                 child.removeFromSuperview()
                 container.addSubview(child)

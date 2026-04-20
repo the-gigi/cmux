@@ -2138,7 +2138,8 @@ final class WorkspaceLayoutController {
         guard configuration.allowSplits else { return nil }
 
         let targetPaneId = paneId ?? focusedPaneId
-        guard let targetPaneId else { return nil }
+        guard let targetPaneId,
+              rootNode.findPane(targetPaneId) != nil else { return nil }
         let previousPaneIds = Set(rootNode.allPaneIds)
 
         // Check with delegate
@@ -2154,9 +2155,9 @@ final class WorkspaceLayoutController {
             focusNewPane: focusNewPane
         )
 
-        let newPaneId = Set(rootNode.allPaneIds)
+        guard let newPaneId = Set(rootNode.allPaneIds)
             .subtracting(previousPaneIds)
-            .first ?? focusedPaneId!
+            .first else { return nil }
 
         // Notify delegate
         delegate?.workspaceSplit(didSplitPane: targetPaneId, newPane: newPaneId, orientation: orientation)
@@ -2188,7 +2189,8 @@ final class WorkspaceLayoutController {
         guard configuration.allowSplits else { return nil }
 
         let targetPaneId = paneId ?? focusedPaneId
-        guard let targetPaneId else { return nil }
+        guard let targetPaneId,
+              rootNode.findPane(targetPaneId) != nil else { return nil }
         let previousPaneIds = Set(rootNode.allPaneIds)
 
         // Check with delegate
@@ -2205,9 +2207,9 @@ final class WorkspaceLayoutController {
             focusNewPane: focusNewPane
         )
 
-        let newPaneId = Set(rootNode.allPaneIds)
+        guard let newPaneId = Set(rootNode.allPaneIds)
             .subtracting(previousPaneIds)
-            .first ?? focusedPaneId!
+            .first else { return nil }
 
         // Notify delegate
         delegate?.workspaceSplit(didSplitPane: targetPaneId, newPane: newPaneId, orientation: orientation)
@@ -2244,9 +2246,11 @@ final class WorkspaceLayoutController {
         guard let (sourcePaneId, tabIndex) = findTabInternal(tabId),
               let sourcePane = rootNode.findPane(sourcePaneId) else { return nil }
         let surfaceId = sourcePane.tabIds[tabIndex]
+        let sourceWasSelected = sourcePane.selectedTabId == surfaceId
 
         // Default target to the tab's current pane to match edge-drop behavior on the source pane.
         let targetPaneId = paneId ?? sourcePaneId
+        guard rootNode.findPane(targetPaneId) != nil else { return nil }
 
         // Check with delegate
         if delegate?.workspaceSplit(shouldSplitPane: targetPaneId, orientation: orientation) == false {
@@ -2258,14 +2262,6 @@ final class WorkspaceLayoutController {
             pane.removeTab(surfaceId)
         }
 
-        let updatedSourcePane = rootNode.findPane(sourcePaneId)
-        if updatedSourcePane?.tabIds.isEmpty == true {
-            if sourcePaneId != targetPaneId, rootNode.allPaneIds.count > 1 {
-                // If the source pane is now empty, close it (unless it's also the split target).
-                performClosePane(sourcePaneId)
-            }
-        }
-
         // Perform split with the moved tab.
         performSplitPaneWithTab(
             PaneID(id: targetPaneId.id),
@@ -2275,9 +2271,27 @@ final class WorkspaceLayoutController {
             focusNewPane: focusNewPane
         )
 
-        let newPaneId = Set(rootNode.allPaneIds)
+        guard let newPaneId = Set(rootNode.allPaneIds)
             .subtracting(previousPaneIds)
-            .first ?? focusedPaneId!
+            .first else {
+            rootNode.updatePane(sourcePaneId) { pane in
+                pane.insertTab(surfaceId, at: tabIndex, select: sourceWasSelected)
+            }
+            return nil
+        }
+
+        let updatedSourcePane = rootNode.findPane(sourcePaneId)
+        if updatedSourcePane?.tabIds.isEmpty == true,
+           sourcePaneId != targetPaneId,
+           rootNode.allPaneIds.count > 1 {
+            // If the source pane is now empty, close it after the split succeeds.
+            performClosePane(sourcePaneId)
+        }
+
+        let desiredFocusPaneId = focusNewPane ? newPaneId : targetPaneId
+        if rootNode.findPane(desiredFocusPaneId) != nil {
+            focusPane(desiredFocusPaneId)
+        }
 
         // Notify delegate
         delegate?.workspaceSplit(didSplitPane: targetPaneId, newPane: newPaneId, orientation: orientation)

@@ -3321,6 +3321,34 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         XCTAssertEqual(Double(liveDividerPosition), 0.33, accuracy: 0.001)
     }
 
+    func testLayoutControllerSplitPaneReturnsNilForUnknownPaneId() throws {
+        let initialPane = PaneState(tabIds: [UUID()])
+        let controller = WorkspaceLayoutController(rootNode: .pane(initialPane))
+        let stalePaneId = PaneID(id: UUID())
+
+        XCTAssertNil(controller.splitPane(stalePaneId, orientation: .horizontal))
+        XCTAssertEqual(controller.allPaneIds.count, 1)
+    }
+
+    func testLayoutControllerSplitPaneWithTabReturnsNilForUnknownPaneId() throws {
+        let existingTabId = UUID()
+        let initialPane = PaneState(tabIds: [existingTabId], selectedTabId: existingTabId)
+        let controller = WorkspaceLayoutController(rootNode: .pane(initialPane))
+        let stalePaneId = PaneID(id: UUID())
+        let newTabId = TabID(id: UUID())
+
+        XCTAssertNil(
+            controller.splitPane(
+                stalePaneId,
+                orientation: .horizontal,
+                withTabId: newTabId,
+                insertFirst: false
+            )
+        )
+        let paneId = try XCTUnwrap(controller.allPaneIds.first)
+        XCTAssertEqual(controller.tabIds(inPane: paneId), [TabID(id: existingTabId)])
+    }
+
     func testLayoutControllerStartsWithGenuinelyEmptyPane() throws {
         let controller = WorkspaceLayoutController()
         let paneId = try XCTUnwrap(controller.allPaneIds.first, "Expected initial pane")
@@ -3358,6 +3386,49 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         XCTAssertNil(controller.selectedTabId(inPane: paneId))
         XCTAssertEqual(controller.tabIds(inPane: newPaneId), [TabID(id: surfaceId)])
         XCTAssertEqual(controller.allTabIds, [TabID(id: surfaceId)])
+    }
+
+    func testMovingTabSplitRejectsUnknownTargetAndPreservesSourcePane() throws {
+        let surfaceId = UUID()
+        let sourcePaneId = PaneID()
+        let controller = WorkspaceLayoutController(
+            rootNode: .pane(
+                PaneState(
+                    id: sourcePaneId,
+                    tabIds: [surfaceId],
+                    selectedTabId: surfaceId
+                )
+            )
+        )
+        let staleTargetPaneId = PaneID(id: UUID())
+
+        XCTAssertNil(
+            controller.splitPane(
+                staleTargetPaneId,
+                orientation: .horizontal,
+                movingTab: TabID(id: surfaceId),
+                insertFirst: false
+            )
+        )
+
+        XCTAssertEqual(controller.allPaneIds, [sourcePaneId])
+        XCTAssertEqual(controller.tabIds(inPane: sourcePaneId), [TabID(id: surfaceId)])
+        XCTAssertEqual(controller.selectedTabId(inPane: sourcePaneId), TabID(id: surfaceId))
+    }
+
+    func testWorkspaceLayoutRemoveSubviewIfOwnedPreservesReparentedChild() {
+        let oldContainer = NSView(frame: .zero)
+        let newContainer = NSView(frame: .zero)
+        let child = NSView(frame: .zero)
+        newContainer.addSubview(child)
+
+        workspaceLayoutRemoveSubviewIfOwned(child, from: oldContainer)
+
+        XCTAssertTrue(child.superview === newContainer)
+
+        workspaceLayoutRemoveSubviewIfOwned(child, from: newContainer)
+
+        XCTAssertNil(child.superview)
     }
 }
 

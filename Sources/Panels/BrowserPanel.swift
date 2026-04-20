@@ -4996,17 +4996,7 @@ extension BrowserPanel {
         }
         clearAddressBarSubfocus()
         NotificationCenter.default.post(name: .browserDidBlurAddressBar, object: id)
-        let requestId = requestFindFieldFocus(reason: "startFind")
-#if DEBUG
-        let window = webView.window
-        dlog(
-            "browser.find.start panel=\(id.uuidString.prefix(5)) " +
-            "created=\(created ? 1 : 0) render=\(shouldRenderWebView ? 1 : 0) " +
-            "request=\(requestId.uuidString.prefix(8)) " +
-            "window=\(window?.windowNumber ?? -1) key=\(NSApp.keyWindow === window ? 1 : 0) " +
-            "firstResponder=\(String(describing: window?.firstResponder))"
-        )
-#endif
+        _ = requestFindFieldFocus(reason: "startFind")
     }
 
     func findNext() {
@@ -5205,13 +5195,6 @@ extension BrowserPanel {
     func noteFindFieldFocused(requestId: UUID? = nil) {
         if let requestId,
            pendingFindFieldFocusRequestId != requestId {
-#if DEBUG
-            dlog(
-                "browser.find.focus.requestAck panel=\(id.uuidString.prefix(5)) " +
-                "request=\(requestId.uuidString.prefix(8)) result=ignored " +
-                "pending=\(pendingFindFieldFocusRequestId?.uuidString.prefix(8) ?? "nil")"
-            )
-#endif
             return
         }
         updateSubfocusState(.findField(.active))
@@ -5453,12 +5436,6 @@ extension BrowserPanel {
     private func requestFindFieldFocus(reason: String) -> UUID {
         let requestId = UUID()
         updateSubfocusState(.findField(.pending(requestId)))
-#if DEBUG
-        dlog(
-            "browser.find.focusRequest panel=\(id.uuidString.prefix(5)) " +
-            "request=\(requestId.uuidString.prefix(8)) reason=\(reason)"
-        )
-#endif
         return requestId
     }
 
