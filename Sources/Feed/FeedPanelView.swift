@@ -1,14 +1,14 @@
 import CMUXWorkstream
 import SwiftUI
 
-/// Right-sidebar Feed view. Shows actionable items (permission /
-/// exit-plan / question) at the top with inline decision buttons, and
-/// optionally the full activity stream when the user flips the
-/// Actionable / All segment.
+/// Right-sidebar Feed view. Matches the Sessions page visual language:
+/// compact rows with SF Symbol + 13pt title + secondary metadata,
+/// rounded-rect hover backgrounds with 6px inset, and control-bar
+/// pill buttons styled like `GroupingButton` in `SessionIndexView`.
 ///
-/// Follows the CLAUDE.md snapshot-boundary rule: rows receive immutable
-/// value snapshots and closure action bundles only. The store is read
-/// here in the outer panel body — never inside row views.
+/// Pending items float above resolved; telemetry is hidden unless the
+/// user flips the Actionable / All filter. Rows receive immutable
+/// snapshots + closure action bundles only (snapshot-boundary rule).
 struct FeedPanelView: View {
     enum Filter: String, CaseIterable, Identifiable {
         case actionable
@@ -22,13 +22,19 @@ struct FeedPanelView: View {
                 return String(localized: "feed.filter.all", defaultValue: "All")
             }
         }
+        var symbolName: String {
+            switch self {
+            case .actionable: return "exclamationmark.circle"
+            case .all: return "list.bullet"
+            }
+        }
     }
 
     @State private var filter: Filter = .actionable
 
     var body: some View {
         VStack(spacing: 0) {
-            filterBar
+            controlBar
             Divider()
             FeedListView(
                 filter: filter,
@@ -37,16 +43,22 @@ struct FeedPanelView: View {
         }
     }
 
-    private var filterBar: some View {
-        Picker("", selection: $filter) {
+    private var controlBar: some View {
+        HStack(spacing: 6) {
             ForEach(Filter.allCases) { f in
-                Text(f.label).tag(f)
+                FeedPillButton(
+                    label: f.label,
+                    symbolName: f.symbolName,
+                    isSelected: filter == f
+                ) {
+                    filter = f
+                }
             }
+            Spacer(minLength: 4)
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
         .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .padding(.vertical, 3)
+        .frame(height: 29)
     }
 }
 
@@ -58,14 +70,12 @@ private struct FeedListView: View {
 
     var body: some View {
         if let store {
-            // `@Observable` store: reading computed props in the body
-            // registers a dependency automatically.
             let items = snapshot(from: store)
             if items.isEmpty {
                 emptyState
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 4) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(items, id: \.id) { item in
                             FeedItemRow(
                                 snapshot: FeedItemSnapshot(item: item),
@@ -73,8 +83,7 @@ private struct FeedListView: View {
                             )
                         }
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 4)
                 }
             }
         } else {
@@ -90,8 +99,6 @@ private struct FeedListView: View {
         case .all:
             base = store.items
         }
-        // Newest first. Pending items always float above resolved so the
-        // user's attention isn't buried when they scroll.
         return base.sorted { a, b in
             if a.status.isPending != b.status.isPending {
                 return a.status.isPending
@@ -101,23 +108,25 @@ private struct FeedListView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "dot.radiowaves.left.and.right")
-                .font(.system(size: 24))
-                .foregroundStyle(.secondary)
-            Text(
-                filter == .actionable
-                    ? String(localized: "feed.empty.actionable",
-                             defaultValue: "No pending decisions.")
-                    : String(localized: "feed.empty.all",
-                             defaultValue: "No feed activity yet.")
-            )
-            .font(.system(size: 12))
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
+        VStack(spacing: 4) {
+            Text(filter == .actionable
+                 ? String(localized: "feed.empty.actionable.title",
+                          defaultValue: "No pending decisions")
+                 : String(localized: "feed.empty.all.title",
+                          defaultValue: "No feed activity yet"))
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+            Text(filter == .actionable
+                 ? String(localized: "feed.empty.actionable.subtitle",
+                          defaultValue: "Permission, plan, and question requests from AI agents will appear here.")
+                 : String(localized: "feed.empty.all.subtitle",
+                          defaultValue: "Tool use, messages, and session events will appear here."))
+                .font(.system(size: 11))
+                .foregroundColor(.secondary.opacity(0.7))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
     }
 }
 
@@ -147,8 +156,7 @@ struct FeedItemSnapshot: Equatable {
     }
 }
 
-/// Closure bundle; binds to `FeedCoordinator` by default, can be
-/// overridden in tests.
+/// Closure bundle; binds to `FeedCoordinator` by default.
 struct FeedRowActions {
     let approvePermission: (UUID, WorkstreamPermissionMode) -> Void
     let replyQuestion: (UUID, [String]) -> Void
@@ -181,9 +189,8 @@ struct FeedRowActions {
                     )
                 }
             },
-            jump: { workstreamId in
+            jump: { _ in
                 // TODO: route through workspace.select / surface.focus
-                _ = workstreamId
             }
         )
     }
@@ -202,151 +209,247 @@ struct FeedRowActions {
     }
 }
 
-// MARK: - Row view
+// MARK: - Row (matches SessionIndexView row aesthetic)
 
 private struct FeedItemRow: View {
     let snapshot: FeedItemSnapshot
     let actions: FeedRowActions
 
+    @State private var isHovered: Bool = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             header
-            switch snapshot.payload {
-            case .permissionRequest(_, let toolName, let toolInputJSON, _):
-                PermissionRow(
-                    toolName: toolName,
-                    toolInputJSON: toolInputJSON,
-                    status: snapshot.status,
-                    onApprove: { mode in actions.approvePermission(snapshot.id, mode) }
-                )
-            case .exitPlan(_, let plan, _):
-                ExitPlanRow(
-                    plan: plan,
-                    status: snapshot.status,
-                    onApprove: { mode in actions.approveExitPlan(snapshot.id, mode) }
-                )
-            case .question(_, let prompt, let options, let multiSelect):
-                QuestionRow(
-                    prompt: prompt,
-                    options: options,
-                    multiSelect: multiSelect,
-                    status: snapshot.status,
-                    onReply: { selections in actions.replyQuestion(snapshot.id, selections) }
-                )
-            default:
-                TelemetryRow(snapshot: snapshot)
-            }
+            actionArea
         }
-        .padding(8)
+        .padding(.leading, 32)
+        .padding(.trailing, 12)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.primary.opacity(0.04))
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
+                .padding(.horizontal, 6)
         )
+        .onHover { isHovered = $0 }
+        .help(helpText)
     }
 
     private var header: some View {
         HStack(spacing: 6) {
             Image(systemName: snapshot.kind.symbolName)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-            Text(snapshot.source.rawValue.capitalized)
                 .font(.system(size: 11, weight: .medium))
-            if let title = snapshot.title, !title.isEmpty {
-                Text(title)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                .foregroundColor(snapshot.status.isPending ? .orange : .secondary.opacity(0.8))
+                .frame(width: 12, height: 12)
+            Text(primaryTitle)
+                .font(.system(size: 13))
+                .foregroundColor(.primary.opacity(0.92))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 8)
+            if snapshot.status.isPending {
+                statusTag(
+                    String(localized: "feed.status.pending", defaultValue: "Pending"),
+                    color: .orange
+                )
+            } else if case .resolved(let decision, _) = snapshot.status {
+                statusTag(resolvedBadgeLabel(decision), color: .green)
+            } else if case .expired = snapshot.status {
+                statusTag(
+                    String(localized: "feed.status.expired", defaultValue: "Expired"),
+                    color: .secondary
+                )
             }
-            Spacer()
-            statusBadge
+            Text(relativeTime(snapshot.createdAt))
+                .font(.system(size: 12).monospacedDigit())
+                .foregroundColor(.secondary.opacity(0.65))
+                .fixedSize()
         }
     }
 
     @ViewBuilder
-    private var statusBadge: some View {
-        switch snapshot.status {
-        case .pending:
-            Text(String(localized: "feed.status.pending", defaultValue: "Pending"))
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.orange)
-        case .resolved(let decision, _):
-            Text(decisionBadgeLabel(decision))
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.green)
-        case .expired:
-            Text(String(localized: "feed.status.expired", defaultValue: "Expired"))
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
-        case .telemetry:
-            EmptyView()
+    private var actionArea: some View {
+        switch snapshot.payload {
+        case .permissionRequest(_, let toolName, let toolInputJSON, _):
+            PermissionActionArea(
+                toolName: toolName,
+                toolInputJSON: toolInputJSON,
+                status: snapshot.status,
+                onApprove: { mode in actions.approvePermission(snapshot.id, mode) }
+            )
+        case .exitPlan(_, let plan, _):
+            ExitPlanActionArea(
+                plan: plan,
+                status: snapshot.status,
+                onApprove: { mode in actions.approveExitPlan(snapshot.id, mode) }
+            )
+        case .question(_, let prompt, let options, let multiSelect):
+            QuestionActionArea(
+                prompt: prompt,
+                options: options,
+                multiSelect: multiSelect,
+                status: snapshot.status,
+                onReply: { selections in actions.replyQuestion(snapshot.id, selections) }
+            )
+        default:
+            TelemetryActionArea(snapshot: snapshot)
         }
     }
 
-    private func decisionBadgeLabel(_ decision: WorkstreamDecision) -> String {
+    private var primaryTitle: String {
+        switch snapshot.payload {
+        case .permissionRequest(_, let toolName, _, _):
+            return "\(snapshot.source.rawValue.capitalized) · \(toolName)"
+        case .exitPlan:
+            return "\(snapshot.source.rawValue.capitalized) · ExitPlanMode"
+        case .question:
+            return "\(snapshot.source.rawValue.capitalized) · Question"
+        default:
+            if let title = snapshot.title, !title.isEmpty {
+                return "\(snapshot.source.rawValue.capitalized) · \(title)"
+            }
+            return snapshot.source.rawValue.capitalized
+        }
+    }
+
+    private var helpText: String {
+        var lines: [String] = [primaryTitle]
+        if let cwd = snapshot.cwd { lines.append(cwd) }
+        lines.append(absoluteTime(snapshot.createdAt))
+        return lines.joined(separator: "\n")
+    }
+
+    private func resolvedBadgeLabel(_ decision: WorkstreamDecision) -> String {
         switch decision {
         case .permission(let m):
-            return "\(String(localized: "feed.badge.allowed", defaultValue: "Allowed")): \(m.rawValue)"
+            return "\(String(localized: "feed.badge.allowed", defaultValue: "Allowed")) · \(m.rawValue)"
         case .exitPlan(let m):
-            return m.rawValue
+            return String(localized: "feed.badge.plan", defaultValue: "Plan") + " · \(m.rawValue)"
         case .question:
             return String(localized: "feed.badge.answered", defaultValue: "Answered")
         }
     }
+
+    private func statusTag(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundColor(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(color.opacity(0.12))
+            )
+    }
+
+    private func relativeTime(_ date: Date) -> String {
+        Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    private func absoluteTime(_ date: Date) -> String {
+        Self.absoluteFormatter.string(from: date)
+    }
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f
+    }()
+
+    private static let absoluteFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
 }
 
-// MARK: - Per-kind rows
+// MARK: - Per-kind action areas
 
-private struct PermissionRow: View {
+private struct PermissionActionArea: View {
     let toolName: String
     let toolInputJSON: String
     let status: WorkstreamStatus
     let onApprove: (WorkstreamPermissionMode) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(toolName)
-                .font(.system(size: 12, weight: .semibold))
-            Text(toolInputJSON)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
+        VStack(alignment: .leading, spacing: 4) {
+            if !toolInputJSON.isEmpty && toolInputJSON != "{}" {
+                Text(toolInputJSON)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary.opacity(0.9))
+                    .lineLimit(3)
+                    .truncationMode(.tail)
+            }
             if status.isPending {
                 HStack(spacing: 4) {
-                    feedButton(String(localized: "feed.permission.once", defaultValue: "Once")) { onApprove(.once) }
-                    feedButton(String(localized: "feed.permission.always", defaultValue: "Always")) { onApprove(.always) }
-                    feedButton(String(localized: "feed.permission.all", defaultValue: "All")) { onApprove(.all) }
-                    feedButton(String(localized: "feed.permission.bypass", defaultValue: "Bypass")) { onApprove(.bypass) }
-                    feedButton(String(localized: "feed.permission.deny", defaultValue: "Deny"), isDestructive: true) { onApprove(.deny) }
+                    FeedPillButton(
+                        label: String(localized: "feed.permission.once", defaultValue: "Once"),
+                        symbolName: "checkmark.circle"
+                    ) { onApprove(.once) }
+                    FeedPillButton(
+                        label: String(localized: "feed.permission.always", defaultValue: "Always"),
+                        symbolName: "infinity"
+                    ) { onApprove(.always) }
+                    FeedPillButton(
+                        label: String(localized: "feed.permission.all", defaultValue: "All tools"),
+                        symbolName: "checkmark.seal"
+                    ) { onApprove(.all) }
+                    FeedPillButton(
+                        label: String(localized: "feed.permission.bypass", defaultValue: "Bypass"),
+                        symbolName: "bolt"
+                    ) { onApprove(.bypass) }
+                    Spacer(minLength: 4)
+                    FeedPillButton(
+                        label: String(localized: "feed.permission.deny", defaultValue: "Deny"),
+                        symbolName: "xmark.circle",
+                        tint: .red
+                    ) { onApprove(.deny) }
                 }
             }
         }
     }
 }
 
-private struct ExitPlanRow: View {
+private struct ExitPlanActionArea: View {
     let plan: String
     let status: WorkstreamStatus
     let onApprove: (WorkstreamExitPlanMode) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(plan)
                 .font(.system(size: 11))
-                .foregroundStyle(.primary)
+                .foregroundColor(.primary.opacity(0.85))
                 .lineLimit(6)
             if status.isPending {
                 HStack(spacing: 4) {
-                    feedButton(String(localized: "feed.exitplan.bypass", defaultValue: "Bypass")) { onApprove(.bypassPermissions) }
-                    feedButton(String(localized: "feed.exitplan.autoaccept", defaultValue: "Auto-accept")) { onApprove(.autoAccept) }
-                    feedButton(String(localized: "feed.exitplan.manual", defaultValue: "Manual")) { onApprove(.manual) }
-                    feedButton(String(localized: "feed.exitplan.deny", defaultValue: "Deny"), isDestructive: true) { onApprove(.deny) }
+                    FeedPillButton(
+                        label: String(localized: "feed.exitplan.bypass", defaultValue: "Bypass"),
+                        symbolName: "bolt"
+                    ) { onApprove(.bypassPermissions) }
+                    FeedPillButton(
+                        label: String(localized: "feed.exitplan.autoaccept", defaultValue: "Auto-accept"),
+                        symbolName: "wand.and.stars"
+                    ) { onApprove(.autoAccept) }
+                    FeedPillButton(
+                        label: String(localized: "feed.exitplan.manual", defaultValue: "Manual"),
+                        symbolName: "hand.raised"
+                    ) { onApprove(.manual) }
+                    Spacer(minLength: 4)
+                    FeedPillButton(
+                        label: String(localized: "feed.exitplan.deny", defaultValue: "Deny"),
+                        symbolName: "xmark.circle",
+                        tint: .red
+                    ) { onApprove(.deny) }
                 }
             }
         }
     }
 }
 
-private struct QuestionRow: View {
+private struct QuestionActionArea: View {
     let prompt: String
     let options: [WorkstreamQuestionOption]
     let multiSelect: Bool
@@ -356,35 +459,40 @@ private struct QuestionRow: View {
     @State private var selectedIds: Set<String> = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             if !prompt.isEmpty {
                 Text(prompt)
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
+                    .foregroundColor(.primary.opacity(0.9))
             }
             if options.isEmpty {
-                Text(String(localized: "feed.question.noOptions", defaultValue: "Agent provided no options"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                Text(String(localized: "feed.question.noOptions",
+                            defaultValue: "Agent provided no options."))
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
             } else {
                 ForEach(options, id: \.id) { option in
                     Button {
                         if multiSelect {
-                            if selectedIds.contains(option.id) {
-                                selectedIds.remove(option.id)
-                            } else {
-                                selectedIds.insert(option.id)
-                            }
+                            if selectedIds.contains(option.id) { selectedIds.remove(option.id) }
+                            else { selectedIds.insert(option.id) }
                         } else {
                             selectedIds = [option.id]
                         }
                     } label: {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 6) {
                             Image(systemName: selectedIds.contains(option.id)
                                 ? (multiSelect ? "checkmark.square.fill" : "largecircle.fill.circle")
                                 : (multiSelect ? "square" : "circle"))
-                            Text(option.label).font(.system(size: 11))
+                                .font(.system(size: 11))
+                                .foregroundColor(selectedIds.contains(option.id) ? .accentColor : .secondary)
+                                .frame(width: 12, height: 12)
+                            Text(option.label)
+                                .font(.system(size: 12))
+                                .foregroundColor(.primary.opacity(0.9))
                             Spacer()
                         }
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
@@ -392,24 +500,30 @@ private struct QuestionRow: View {
             if status.isPending {
                 HStack {
                     Spacer()
-                    feedButton(String(localized: "feed.question.submit", defaultValue: "Submit")) {
-                        onReply(Array(selectedIds))
-                    }
+                    FeedPillButton(
+                        label: String(localized: "feed.question.submit", defaultValue: "Submit"),
+                        symbolName: "paperplane",
+                        tint: selectedIds.isEmpty ? .secondary : .accentColor
+                    ) { onReply(Array(selectedIds)) }
                     .disabled(selectedIds.isEmpty)
+                    .opacity(selectedIds.isEmpty ? 0.5 : 1)
                 }
             }
         }
     }
 }
 
-private struct TelemetryRow: View {
+private struct TelemetryActionArea: View {
     let snapshot: FeedItemSnapshot
 
     var body: some View {
-        Text(summary)
-            .font(.system(size: 10, design: .monospaced))
-            .foregroundStyle(.secondary)
-            .lineLimit(4)
+        if !summary.isEmpty {
+            Text(summary)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.secondary.opacity(0.85))
+                .lineLimit(3)
+                .truncationMode(.tail)
+        }
     }
 
     private var summary: String {
@@ -429,32 +543,74 @@ private struct TelemetryRow: View {
             let pending = todos.filter { $0.state == .pending }.count
             return "todos: \(done) done, \(inProgress) in progress, \(pending) pending"
         default:
-            return snapshot.kind.rawValue
+            return ""
         }
     }
 }
 
-// MARK: - Small helpers
+// MARK: - Pill button (matches `GroupingButton` in SessionIndexView)
 
-@ViewBuilder
-private func feedButton(
-    _ label: String,
-    isDestructive: Bool = false,
-    action: @escaping () -> Void
-) -> some View {
-    Button(action: action) {
-        Text(label)
-            .font(.system(size: 10, weight: .medium))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
+private struct FeedPillButton: View {
+    let label: String
+    let symbolName: String?
+    var isSelected: Bool = false
+    var tint: Color = .primary
+    let action: () -> Void
+
+    @State private var isHovered: Bool = false
+
+    init(
+        label: String,
+        symbolName: String? = nil,
+        isSelected: Bool = false,
+        tint: Color = .primary,
+        action: @escaping () -> Void
+    ) {
+        self.label = label
+        self.symbolName = symbolName
+        self.isSelected = isSelected
+        self.tint = tint
+        self.action = action
     }
-    .buttonStyle(.borderless)
-    .foregroundStyle(isDestructive ? .red : .primary)
-    .background(
-        RoundedRectangle(cornerRadius: 4, style: .continuous)
-            .fill(Color.primary.opacity(0.06))
-    )
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                if let symbolName {
+                    Image(systemName: symbolName)
+                        .font(.system(size: 10, weight: .medium))
+                }
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundColor(tint == .primary
+                             ? (isSelected ? .primary : .secondary)
+                             : tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(backgroundFill)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(label)
+    }
+
+    private var backgroundFill: Color {
+        if isSelected { return Color.primary.opacity(0.10) }
+        if isHovered {
+            return tint == .red
+                ? Color.red.opacity(0.10)
+                : Color.primary.opacity(0.07)
+        }
+        return Color.primary.opacity(0.03)
+    }
 }
+
+// MARK: - Kind → SF Symbol
 
 private extension WorkstreamKind {
     var symbolName: String {
