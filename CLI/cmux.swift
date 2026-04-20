@@ -14163,10 +14163,11 @@ struct CMUXCLI {
     // MARK: - Install preview (ANSI-colored diff)
 
     /// Prints a colored diff preview framed with the target path both
-    /// above and below the diff, so the user always knows which file is
-    /// about to be written regardless of scrollback position. Applies a
-    /// lightweight JSON syntax highlight to context lines and colors
-    /// +/− lines green/red.
+    /// above and below the diff. Every changed line is prefixed with
+    /// `+` (addition) or `-` (deletion) and colored accordingly so the
+    /// user can see at a glance what's being added/removed. A summary
+    /// line above the diff counts adds/deletes so users who pipe the
+    /// output into tee/less still see the shape of the change.
     static func printInstallPreview(
         path: String,
         oldContent: String,
@@ -14174,20 +14175,56 @@ struct CMUXCLI {
         fallbackContent: String
     ) {
         let tty = isatty(fileno(stdout)) != 0
-        let header = AnsiStyle.bold(tty) + "─── Will write to \(path) ───" + AnsiStyle.reset(tty)
-        let footer = AnsiStyle.bold(tty) + "─── The above will be written to \(path) ───" + AnsiStyle.reset(tty)
+        let verb = oldContent.isEmpty ? "create" : "update"
+        let header = AnsiStyle.bold(tty)
+            + "─── Will \(verb) \(path) ───" + AnsiStyle.reset(tty)
+        let footer = AnsiStyle.bold(tty)
+            + "─── The above will be written to \(path) ───" + AnsiStyle.reset(tty)
 
         print("")
         print(header)
+
+        if oldContent == newContent {
+            print(AnsiStyle.dim(tty) + "(no changes — file already matches target)" + AnsiStyle.reset(tty))
+            print(footer)
+            return
+        }
+
         if let diff = unifiedDiff(old: oldContent, new: newContent), !diff.isEmpty {
+            let (adds, dels) = countAddDeleteLines(diff)
+            let summary = AnsiStyle.bold(tty)
+                + AnsiStyle.green(tty) + "+\(adds) additions" + AnsiStyle.reset(tty)
+                + AnsiStyle.bold(tty) + ", "
+                + AnsiStyle.red(tty) + "-\(dels) deletions" + AnsiStyle.reset(tty)
+            print(summary)
+            print("")
             print(colorizeDiff(diff, tty: tty))
         } else {
-            // No diff available (new file or `diff` missing on PATH) —
-            // fall back to the plain content so the user still sees
-            // exactly what's about to land.
-            print(jsonHighlight(fallbackContent, tty: tty))
+            // Diff unavailable (binary `/usr/bin/diff` missing, or
+            // temp-file write failed). Fall back to the full pretty-
+            // printed content with every line prefixed `+` so the user
+            // still sees what will land.
+            print(AnsiStyle.bold(tty) + "(diff unavailable — full content follows)" + AnsiStyle.reset(tty))
+            for line in fallbackContent.split(separator: "\n", omittingEmptySubsequences: false) {
+                let plus = AnsiStyle.green(tty) + AnsiStyle.bold(tty) + "+" + AnsiStyle.reset(tty)
+                print("\(plus) " + jsonHighlight(String(line), tty: tty))
+            }
         }
         print(footer)
+    }
+
+    /// Counts added and deleted lines in a unified-diff body, ignoring
+    /// file header lines (`+++ …`, `--- …`).
+    private static func countAddDeleteLines(_ diff: String) -> (adds: Int, dels: Int) {
+        var adds = 0
+        var dels = 0
+        for raw in diff.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(raw)
+            if line.hasPrefix("+++") || line.hasPrefix("---") { continue }
+            if line.hasPrefix("+") { adds += 1 }
+            if line.hasPrefix("-") { dels += 1 }
+        }
+        return (adds, dels)
     }
 
     /// Shells out to `/usr/bin/diff -u` against two temp files. Returns
@@ -14221,11 +14258,11 @@ struct CMUXCLI {
         return String(data: data, encoding: .utf8)
     }
 
-    /// Colors a unified diff: headers dim/bold, hunks cyan, additions
-    /// green, deletions red, context uncolored. Newly-added lines also
-    /// get a light JSON syntax highlight so cmux hooks stand out.
+    /// Colors a unified diff: file headers dim, hunks cyan, additions
+    /// bright-green-bold, deletions bright-red-bold, context uncolored.
+    /// Non-tty output still retains the leading +/- markers so the
+    /// change shape is obvious even when piped into a file or pager.
     private static func colorizeDiff(_ diff: String, tty: Bool) -> String {
-        guard tty else { return diff }
         var out: [String] = []
         for line in diff.split(separator: "\n", omittingEmptySubsequences: false) {
             let s = String(line)
@@ -14234,9 +14271,9 @@ struct CMUXCLI {
             } else if s.hasPrefix("@@") {
                 out.append(AnsiStyle.cyan(tty) + s + AnsiStyle.reset(tty))
             } else if s.hasPrefix("+") {
-                out.append(AnsiStyle.green(tty) + s + AnsiStyle.reset(tty))
+                out.append(AnsiStyle.bold(tty) + AnsiStyle.green(tty) + s + AnsiStyle.reset(tty))
             } else if s.hasPrefix("-") {
-                out.append(AnsiStyle.red(tty) + s + AnsiStyle.reset(tty))
+                out.append(AnsiStyle.bold(tty) + AnsiStyle.red(tty) + s + AnsiStyle.reset(tty))
             } else {
                 out.append(s)
             }
