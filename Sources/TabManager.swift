@@ -3081,6 +3081,7 @@ class TabManager: ObservableObject {
         arguments: [String],
         timeout: TimeInterval? = nil
     ) -> CommandResult? {
+        assert(!Thread.isMainThread, "TabManager.runCommandResult must not run on the main thread")
         let process = Process()
         let stdout = Pipe()
         let stderr = Pipe()
