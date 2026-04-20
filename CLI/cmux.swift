@@ -1888,6 +1888,18 @@ struct CMUXCLI {
             }
         }
 
+        // OpenCode plugin install/uninstall (plugin JS, not a hook file)
+        if command == "opencode" {
+            let sub = commandArgs.first?.lowercased() ?? "help"
+            if sub == "install-hooks" {
+                try runOpenCodeInstallHooks()
+                return
+            } else if sub == "uninstall-hooks" {
+                try runOpenCodeUninstallHooks()
+                return
+            }
+        }
+
         // Unified hook setup for all agents
         if command == "setup-hooks" || command == "uninstall-hooks" {
             try runSetupHooks(uninstall: command == "uninstall-hooks")
@@ -13579,6 +13591,12 @@ struct CMUXCLI {
         let hookMarker: String      // Marker in commands: "cmux cursor-hook"
         let format: HookFormat
         let events: [HookEvent]
+        /// Feed-hook events. Each entry installs a second hook for
+        /// `agentEvent` that invokes `cmux feed-hook --source <name>`
+        /// with a 120s timeout so the socket reply wait doesn't trip the
+        /// agent's default hook timeout when the user takes time to
+        /// approve/deny a permission / plan / question.
+        let feedHookEvents: [String]
         let postInstallAction: PostInstallAction?
 
         enum HookFormat {
@@ -13608,12 +13626,15 @@ struct CMUXCLI {
         init(name: String, displayName: String, statusKey: String,
              configDir: String, configFile: String, configDirEnvOverride: String? = nil,
              sessionStoreSuffix: String, disableEnvVar: String, hookMarker: String,
-             format: HookFormat, events: [HookEvent], postInstallAction: PostInstallAction? = nil) {
+             format: HookFormat, events: [HookEvent],
+             feedHookEvents: [String] = [],
+             postInstallAction: PostInstallAction? = nil) {
             self.name = name; self.displayName = displayName; self.statusKey = statusKey
             self.configDir = configDir; self.configFile = configFile
             self.configDirEnvOverride = configDirEnvOverride
             self.sessionStoreSuffix = sessionStoreSuffix; self.disableEnvVar = disableEnvVar
             self.hookMarker = hookMarker; self.format = format; self.events = events
+            self.feedHookEvents = feedHookEvents
             self.postInstallAction = postInstallAction
         }
     }
@@ -13645,6 +13666,7 @@ struct CMUXCLI {
                 .init(agentEvent: "UserPromptSubmit", cmuxSubcommand: "prompt-submit"),
                 .init(agentEvent: "Stop", cmuxSubcommand: "stop"),
             ],
+            feedHookEvents: ["PreToolUse"],
             postInstallAction: .codexConfigToml
         ),
         AgentHookDef(
@@ -13658,7 +13680,8 @@ struct CMUXCLI {
                 .init(agentEvent: "afterAgentResponse", cmuxSubcommand: "agent-response"),
                 .init(agentEvent: "beforeShellExecution", cmuxSubcommand: "shell-exec"),
                 .init(agentEvent: "afterShellExecution", cmuxSubcommand: "shell-done"),
-            ]
+            ],
+            feedHookEvents: ["beforeShellExecution"]
         ),
         AgentHookDef(
             name: "gemini", displayName: "Gemini", statusKey: "gemini",
@@ -13670,7 +13693,8 @@ struct CMUXCLI {
                 .init(agentEvent: "BeforeAgent", cmuxSubcommand: "prompt-submit"),
                 .init(agentEvent: "AfterAgent", cmuxSubcommand: "stop"),
                 .init(agentEvent: "SessionEnd", cmuxSubcommand: "session-end"),
-            ]
+            ],
+            feedHookEvents: ["PreToolUse"]
         ),
         AgentHookDef(
             name: "copilot", displayName: "Copilot", statusKey: "copilot",
@@ -13682,7 +13706,8 @@ struct CMUXCLI {
                 .init(agentEvent: "Stop", cmuxSubcommand: "stop"),
                 .init(agentEvent: "Notification", cmuxSubcommand: "stop"),
                 .init(agentEvent: "SessionEnd", cmuxSubcommand: "session-end"),
-            ]
+            ],
+            feedHookEvents: ["PreToolUse"]
         ),
         AgentHookDef(
             name: "codebuddy", displayName: "CodeBuddy", statusKey: "codebuddy",
@@ -13694,7 +13719,8 @@ struct CMUXCLI {
                 .init(agentEvent: "Stop", cmuxSubcommand: "stop"),
                 .init(agentEvent: "Notification", cmuxSubcommand: "stop"),
                 .init(agentEvent: "SessionEnd", cmuxSubcommand: "session-end"),
-            ]
+            ],
+            feedHookEvents: ["PreToolUse"]
         ),
         AgentHookDef(
             name: "factory", displayName: "Factory", statusKey: "factory",
@@ -13706,7 +13732,8 @@ struct CMUXCLI {
                 .init(agentEvent: "Stop", cmuxSubcommand: "stop"),
                 .init(agentEvent: "Notification", cmuxSubcommand: "stop"),
                 .init(agentEvent: "SessionEnd", cmuxSubcommand: "session-end"),
-            ]
+            ],
+            feedHookEvents: ["PreToolUse"]
         ),
         AgentHookDef(
             name: "qoder", displayName: "Qoder", statusKey: "qoder",
@@ -13717,7 +13744,8 @@ struct CMUXCLI {
                 .init(agentEvent: "SessionStart", cmuxSubcommand: "session-start"),
                 .init(agentEvent: "Stop", cmuxSubcommand: "stop"),
                 .init(agentEvent: "SessionEnd", cmuxSubcommand: "session-end"),
-            ]
+            ],
+            feedHookEvents: ["PreToolUse"]
         ),
     ]
 
@@ -13731,15 +13759,52 @@ struct CMUXCLI {
         "[ -n \"$CMUX_SURFACE_ID\" ] && [ \"$\(def.disableEnvVar)\" != \"1\" ] && command -v cmux >/dev/null 2>&1 && cmux \(def.name)-hook \(event.cmuxSubcommand) || echo '{}'"
     }
 
+    /// Shell command the agent runs for a feed-hook event. 120s timeout
+    /// inside the shell is applied via the agent's `timeout` field in the
+    /// nested hook config (see `buildHooksDict`); the shell command
+    /// itself just dispatches.
+    private func feedHookCommand(for def: AgentHookDef) -> String {
+        "[ -n \"$CMUX_SURFACE_ID\" ] && [ \"$\(def.disableEnvVar)\" != \"1\" ] && command -v cmux >/dev/null 2>&1 && cmux feed-hook --source \(def.name) || echo '{}'"
+    }
+
+    /// Marker substring we look for when removing / upgrading our own
+    /// feed-hook entries on reinstall or uninstall.
+    private static let feedHookMarker = "cmux feed-hook --source"
+
     private func buildHooksDict(for def: AgentHookDef) -> [String: Any] {
         var result: [String: Any] = [:]
         for event in def.events {
             let cmd = hookCommand(for: def, event: event)
             switch def.format {
             case .flat:
-                result[event.agentEvent] = [["command": cmd]]
+                var entries = result[event.agentEvent] as? [[String: Any]] ?? []
+                entries.append(["command": cmd])
+                result[event.agentEvent] = entries
             case .nested(let timeoutMs):
-                result[event.agentEvent] = [["hooks": [["type": "command", "command": cmd, "timeout": timeoutMs] as [String: Any]]] as [String: Any]]
+                var groups = result[event.agentEvent] as? [[String: Any]] ?? []
+                groups.append([
+                    "hooks": [["type": "command", "command": cmd, "timeout": timeoutMs] as [String: Any]]
+                ] as [String: Any])
+                result[event.agentEvent] = groups
+            }
+        }
+        // Layer in feed-hook entries with a long (120000 ms = 120s)
+        // timeout so blocking user decisions don't trip the agent's
+        // default per-event timeout.
+        let feedCmd = feedHookCommand(for: def)
+        let feedTimeoutMs = 120_000
+        for agentEvent in def.feedHookEvents {
+            switch def.format {
+            case .flat:
+                var entries = result[agentEvent] as? [[String: Any]] ?? []
+                entries.append(["command": feedCmd])
+                result[agentEvent] = entries
+            case .nested:
+                var groups = result[agentEvent] as? [[String: Any]] ?? []
+                groups.append([
+                    "hooks": [["type": "command", "command": feedCmd, "timeout": feedTimeoutMs] as [String: Any]]
+                ] as [String: Any])
+                result[agentEvent] = groups
             }
         }
         return result
@@ -13768,18 +13833,22 @@ struct CMUXCLI {
         var hooks = existing["hooks"] as? [String: Any] ?? [:]
         let newHooks = buildHooksDict(for: def)
 
-        // Remove existing cmux-owned entries
+        // Remove existing cmux-owned entries (both the per-agent hook
+        // dispatcher and the feed-hook bridge).
+        let isCmuxOwnedCommand: (String) -> Bool = { cmd in
+            cmd.contains(def.hookMarker) || cmd.contains(Self.feedHookMarker)
+        }
         for (event, value) in hooks {
             switch def.format {
             case .flat:
                 guard var entries = value as? [[String: Any]] else { continue }
-                entries.removeAll { ($0["command"] as? String)?.contains(def.hookMarker) == true }
+                entries.removeAll { isCmuxOwnedCommand($0["command"] as? String ?? "") }
                 hooks[event] = entries.isEmpty ? nil : entries
             case .nested:
                 guard var groups = value as? [[String: Any]] else { continue }
                 groups.removeAll { group in
                     guard let hookList = group["hooks"] as? [[String: Any]] else { return false }
-                    return hookList.allSatisfy { ($0["command"] as? String)?.contains(def.hookMarker) == true }
+                    return hookList.allSatisfy { isCmuxOwnedCommand($0["command"] as? String ?? "") }
                 }
                 hooks[event] = groups.isEmpty ? nil : groups
             }
@@ -13863,12 +13932,15 @@ struct CMUXCLI {
         var hooks = json["hooks"] as? [String: Any] ?? [:]
         var removed = 0
 
+        let isCmuxOwnedCommand: (String) -> Bool = { cmd in
+            cmd.contains(def.hookMarker) || cmd.contains(Self.feedHookMarker)
+        }
         for (event, value) in hooks {
             switch def.format {
             case .flat:
                 guard var entries = value as? [[String: Any]] else { continue }
                 let before = entries.count
-                entries.removeAll { ($0["command"] as? String)?.contains(def.hookMarker) == true }
+                entries.removeAll { isCmuxOwnedCommand($0["command"] as? String ?? "") }
                 removed += before - entries.count
                 hooks[event] = entries.isEmpty ? nil : entries
             case .nested:
@@ -13876,7 +13948,7 @@ struct CMUXCLI {
                 let before = groups.count
                 groups.removeAll { group in
                     guard let hookList = group["hooks"] as? [[String: Any]] else { return false }
-                    return hookList.allSatisfy { ($0["command"] as? String)?.contains(def.hookMarker) == true }
+                    return hookList.allSatisfy { isCmuxOwnedCommand($0["command"] as? String ?? "") }
                 }
                 removed += before - groups.count
                 hooks[event] = groups.isEmpty ? nil : groups
@@ -14013,6 +14085,91 @@ struct CMUXCLI {
         }
 
         print("{}")
+    }
+
+    // MARK: - OpenCode plugin install
+
+    /// Marker matching the `// cmux-feed-plugin-marker` line emitted at
+    /// the top of the generated plugin JS. Lets us detect our own
+    /// plugin file and upgrade/uninstall without touching user plugins.
+    private static let openCodePluginMarker = "cmux-feed-plugin-marker"
+
+    private static let openCodePluginFileName = "cmux-feed.js"
+
+    private func openCodePluginPath(projectLocal: Bool) -> String {
+        if projectLocal {
+            let cwd = FileManager.default.currentDirectoryPath
+            return "\(cwd)/.opencode/plugins/\(Self.openCodePluginFileName)"
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/.config/opencode/plugins/\(Self.openCodePluginFileName)"
+    }
+
+    private func bundledOpenCodePluginSource() throws -> String {
+        // The plugin JS is bundled into the .app via `Resources/opencode-plugin.js`.
+        // When running from the dev CLI binary (out of DerivedData), Bundle.main
+        // might resolve to the .app bundle or fall back to a checked-in resource
+        // copy next to the running binary.
+        if let url = Bundle.main.url(forResource: "opencode-plugin", withExtension: "js"),
+           let contents = try? String(contentsOf: url, encoding: .utf8) {
+            return contents
+        }
+        // Fallback for `swift run`-style local dev.
+        let devRelative = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources/opencode-plugin.js")
+        if let contents = try? String(contentsOf: devRelative, encoding: .utf8) {
+            return contents
+        }
+        throw CLIError(message: "bundled opencode-plugin.js not found (Bundle.main + fallback)")
+    }
+
+    private func installOpenCodePlugin(projectLocal: Bool) throws {
+        let source = try bundledOpenCodePluginSource()
+        let path = openCodePluginPath(projectLocal: projectLocal)
+        let fm = FileManager.default
+        // If an existing non-cmux plugin lives at the same path, refuse
+        // to overwrite. Users can delete it manually or pick a different
+        // name; we never clobber user content.
+        if fm.fileExists(atPath: path),
+           let existing = try? String(contentsOfFile: path, encoding: .utf8),
+           !existing.contains(Self.openCodePluginMarker)
+        {
+            throw CLIError(message: "\(path) exists and is not a cmux plugin; leaving it alone")
+        }
+        let parent = (path as NSString).deletingLastPathComponent
+        try fm.createDirectory(
+            atPath: parent, withIntermediateDirectories: true
+        )
+        try source.write(toFile: path, atomically: true, encoding: .utf8)
+        print("OpenCode plugin installed at \(path)")
+    }
+
+    private func uninstallOpenCodePlugin(projectLocal: Bool = false) throws {
+        let fm = FileManager.default
+        for path in [openCodePluginPath(projectLocal: false),
+                     openCodePluginPath(projectLocal: true)] {
+            guard fm.fileExists(atPath: path) else { continue }
+            guard let existing = try? String(contentsOfFile: path, encoding: .utf8),
+                  existing.contains(Self.openCodePluginMarker)
+            else {
+                print("Skipping \(path) (no cmux marker)")
+                continue
+            }
+            try fm.removeItem(atPath: path)
+            print("OpenCode plugin removed from \(path)")
+        }
+    }
+
+    private func runOpenCodeInstallHooks() throws {
+        let args = ProcessInfo.processInfo.arguments
+        let projectLocal = args.contains("--project")
+        try installOpenCodePlugin(projectLocal: projectLocal)
+    }
+
+    private func runOpenCodeUninstallHooks() throws {
+        try uninstallOpenCodePlugin()
     }
 
     // MARK: - Feed (workstream) hook bridge
@@ -14283,13 +14440,23 @@ struct CMUXCLI {
 
         var count = 0
         var skipped = 0
+        var skippedNoBinary: [String] = []
 
         for def in Self.agentDefs {
             if let filter = agentFilter, filter.lowercased() != def.name { continue }
             let configDir = def.resolvedConfigDir()
             if !fm.fileExists(atPath: configDir) {
-                print("  \(def.name): skipped (not found)")
+                print("  \(def.name): skipped (config dir not found)")
                 skipped += 1
+                continue
+            }
+            // On install, also skip agents whose binary isn't on PATH.
+            // On uninstall, always proceed so stale configs can be
+            // cleaned up regardless of whether the binary still exists.
+            if !isUninstall && !Self.isBinaryOnPath(def.name) {
+                print("  \(def.name): skipped (binary not found on PATH)")
+                skipped += 1
+                skippedNoBinary.append(def.name)
                 continue
             }
             print("  \(def.name):")
@@ -14302,7 +14469,44 @@ struct CMUXCLI {
             print("")
         }
 
+        // OpenCode plugin install, conditional on binary presence. It
+        // uses a different config path (~/.config/opencode/plugins/…)
+        // and a JS plugin rather than a hook file, so it sits outside
+        // the agentDefs loop.
+        if agentFilter == nil || agentFilter?.lowercased() == "opencode" {
+            if isUninstall {
+                do { try uninstallOpenCodePlugin() } catch {
+                    print("  opencode: \(error.localizedDescription)")
+                }
+            } else if Self.isBinaryOnPath("opencode") {
+                do { try installOpenCodePlugin(projectLocal: false) } catch {
+                    print("  opencode: \(error.localizedDescription)")
+                }
+            } else {
+                print("  opencode: skipped (binary not found on PATH)")
+                skippedNoBinary.append("opencode")
+                skipped += 1
+            }
+        }
+
         print("Done: \(count) \(isUninstall ? "uninstalled" : "installed"), \(skipped) skipped")
+        if !skippedNoBinary.isEmpty {
+            print("  skipped \(skippedNoBinary.count) agents (not found on PATH): \(skippedNoBinary.joined(separator: ", "))")
+        }
+    }
+
+    /// Cross-platform `command -v <name>` for the install gate.
+    private static func isBinaryOnPath(_ name: String) -> Bool {
+        let process = Process()
+        process.launchPath = "/bin/sh"
+        process.arguments = ["-c", "command -v \(name) >/dev/null 2>&1"]
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
     }
 
 
