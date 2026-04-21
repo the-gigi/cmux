@@ -117,21 +117,12 @@ private struct FeedListView: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    let pending = visible.filter { $0.status.isPending }
-                    let rest = visible.filter { !$0.status.isPending }
-                    ForEach(pending, id: \.id) { item in
-                        FeedItemRow(
-                            snapshot: FeedItemSnapshot(
-                                item: item,
-                                userPromptEcho: lastPromptByWorkstream[item.workstreamId]
-                            ),
-                            actions: FeedRowActions.bound()
-                        )
-                    }
-                    if !pending.isEmpty && !rest.isEmpty {
-                        ResolvedDivider()
-                    }
-                    ForEach(rest, id: \.id) { item in
+                    // Single chronological stream — resolved cards stay
+                    // where they are instead of jumping to a "Resolved"
+                    // section. Each card's own header already says
+                    // Submitted / Resolved, so position doesn't need to
+                    // double-encode the state.
+                    ForEach(visible, id: \.id) { item in
                         FeedItemRow(
                             snapshot: FeedItemSnapshot(
                                 item: item,
@@ -170,12 +161,11 @@ private struct FeedListView: View {
         case .all:
             base = items
         }
-        return base.sorted { a, b in
-            if a.status.isPending != b.status.isPending {
-                return a.status.isPending
-            }
-            return a.createdAt > b.createdAt
-        }
+        // Newest first. Status isn't a sort key — resolved items stay
+        // in the chronological slot where they arrived so the user's
+        // mental map of "this was the second request I got" doesn't
+        // get shuffled when they answer it.
+        return base.sorted { $0.createdAt > $1.createdAt }
     }
 
     private var emptyState: some View {
@@ -422,34 +412,50 @@ struct FeedItemRow: View {
                     bg: sourceChipBackground
                 )
                 chip(
+                    text: "cmux",
+                    fg: .secondary,
+                    bg: Color.primary.opacity(0.10)
+                )
+                chip(
                     text: relativeTimeChip(snapshot.createdAt),
                     fg: .secondary,
                     bg: Color.primary.opacity(0.10),
                     mono: true
                 )
+                jumpChip
             }
         }
     }
 
     private var headerTitle: String {
+        // Prefer the user prompt as the card title — it's the most
+        // useful context ("fun · make a plan and ask me for permissions")
+        // rather than the raw tool name ("~/fun · AskUserQuestion").
+        let promptLine = snapshot.userPromptEcho?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !promptLine.isEmpty {
+            if let cwd = snapshot.cwd, !cwd.isEmpty {
+                return "\(cwdBasename(cwd)) · \(promptLine)"
+            }
+            return promptLine
+        }
         if let title = snapshot.title, !title.isEmpty {
             if let cwd = snapshot.cwd, !cwd.isEmpty {
-                return "\(cwdShort(cwd)) · \(title)"
+                return "\(cwdBasename(cwd)) · \(title)"
             }
             return title
         }
         if let cwd = snapshot.cwd, !cwd.isEmpty {
-            return "\(cwdShort(cwd)) · \(kindLabel.capitalized)"
+            return "\(cwdBasename(cwd)) · \(kindLabel.capitalized)"
         }
         return kindLabel.capitalized
     }
 
-    private func cwdShort(_ path: String) -> String {
-        let home = NSHomeDirectory()
-        if path.hasPrefix(home) {
-            return "~" + String(path.dropFirst(home.count))
-        }
-        return path
+    /// Last path component only — `fun` instead of `~/fun` or the full
+    /// absolute path. Matches the Vibe-Island mockup's compact header.
+    private func cwdBasename(_ path: String) -> String {
+        let trimmed = path.hasSuffix("/") ? String(path.dropLast()) : path
+        let name = (trimmed as NSString).lastPathComponent
+        return name.isEmpty ? path : name
     }
 
     private var canJump: Bool {
@@ -586,16 +592,17 @@ struct FeedItemRow: View {
     }
 
     private func resolvedBadgeLabel(_ decision: WorkstreamDecision) -> String {
+        let submitted = String(localized: "feed.badge.submitted", defaultValue: "Submitted")
         switch decision {
         case .permission(let m):
-            return "\(String(localized: "feed.badge.allowed", defaultValue: "Allowed")) · \(m.rawValue)"
+            return "\(submitted) · \(m.rawValue)"
         case .exitPlan(let m, let feedback):
             if let feedback, !feedback.isEmpty {
-                return String(localized: "feed.badge.refined", defaultValue: "Refined")
+                return "\(submitted) · " + String(localized: "feed.badge.refined", defaultValue: "refined")
             }
-            return String(localized: "feed.badge.plan", defaultValue: "Plan") + " · \(m.rawValue)"
+            return "\(submitted) · \(m.rawValue)"
         case .question:
-            return String(localized: "feed.badge.answered", defaultValue: "Answered")
+            return submitted
         }
     }
 
