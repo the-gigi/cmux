@@ -101,7 +101,15 @@ actor VMClient {
         else {
             throw VMClientError.malformedResponse("missing id/provider/image on POST /api/vm response")
         }
-        return VMSummary(id: id, provider: providerValue, image: imageValue, createdAt: Int64(Date().timeIntervalSince1970 * 1000))
+        // Prefer the server-supplied createdAt. Using the local wall clock caused two
+        // visible bugs: (1) creation time was wrong under clock skew, (2) idempotent
+        // retries that short-circuited to an existing VM on the server still stamped
+        // "now" on the mac side, so the client saw a fresh timestamp for a replayed
+        // create (Codex P2). Fall back to the local clock only if the server omits it.
+        let serverCreatedAt = (obj["createdAt"] as? Int64)
+            ?? Int64((obj["createdAt"] as? Double) ?? 0)
+        let createdAt = serverCreatedAt > 0 ? serverCreatedAt : Int64(Date().timeIntervalSince1970 * 1000)
+        return VMSummary(id: id, provider: providerValue, image: imageValue, createdAt: createdAt)
     }
 
     func destroy(id: String) async throws {

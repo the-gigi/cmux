@@ -111,9 +111,16 @@ export const vmActor = actor({
         // Surface provider destroy failures. Previously this path swallowed them, returned
         // success, and then the coordinator forget() dropped the last tracking reference —
         // the result was a ghost billable VM the user could no longer manage via cmux.
-        // Rethrow so the REST layer returns 500, the coordinator forget doesn't run, and
-        // the caller can retry. Codex P1.
-        await getProvider(c.state.provider).destroy(c.state.providerVmId);
+        // Rethrow so the REST layer returns 500 and the caller can retry. Codex P1.
+        try {
+          await getProvider(c.state.provider).destroy(c.state.providerVmId);
+        } catch (err) {
+          // Exception: if the provider says the VM is already gone (dashboard-deleted,
+          // evicted for inactivity, etc.), treat that as success. Otherwise the user gets
+          // stuck with a stale entry they can never remove via cmux because every retry
+          // hits the same "not found". Codex P2.
+          if (!isProviderNotFoundError(err)) throw err;
+        }
       }
       c.state.status = "destroyed";
       c.destroy();
@@ -127,4 +134,39 @@ async function revokeAllIdentities(state: VMState): Promise<void> {
   await Promise.all(
     state.sshIdentityHandles.map((handle) => provider.revokeSSHIdentity(handle)),
   );
+}
+
+/**
+ * Best-effort detection of "VM already gone on the provider side" for destroy retries.
+ * Freestyle and E2B both surface it as a 404/NotFound status on their REST client errors
+ * or as a human-readable message; match broadly so a user who deleted the sandbox from
+ * the provider dashboard can still clean up the cmux-side tracking.
+ */
+function isProviderNotFoundError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const candidate = err as {
+    status?: number;
+    statusCode?: number;
+    response?: { status?: number };
+    message?: string;
+    cause?: unknown;
+  };
+  const status =
+    candidate.status ??
+    candidate.statusCode ??
+    candidate.response?.status ??
+    undefined;
+  if (status === 404) return true;
+  const message = (candidate.message ?? "").toLowerCase();
+  if (
+    message.includes("not found") ||
+    message.includes("does not exist") ||
+    message.includes("no such") ||
+    message.includes("already deleted") ||
+    message.includes("404")
+  ) {
+    return true;
+  }
+  if (candidate.cause) return isProviderNotFoundError(candidate.cause);
+  return false;
 }
