@@ -131,7 +131,10 @@ private struct ModeBarButton: View {
 
     private var helpText: String {
         if badgeCount > 0 {
-            return "\(mode.label) · \(badgeCount) pending"
+            return String(
+                localized: "rightSidebar.mode.pendingHelp",
+                defaultValue: "\(mode.label) · \(badgeCount) pending"
+            )
         }
         return mode.label
     }

@@ -85,6 +85,46 @@ struct WorkstreamStoreTests {
         #expect(store.pending.isEmpty)
         #expect(store.items[0].kind == .toolUse)
     }
+
+    @Test("Telemetry payloads preserve prompt, stop, and todo content")
+    func telemetryContent() {
+        let store = WorkstreamStore(ringCapacity: 10)
+        store.ingest(WorkstreamEvent(
+            sessionId: "s1",
+            hookEventName: .userPromptSubmit,
+            source: "claude",
+            toolInputJSON: #"{"prompt":"ship it"}"#
+        ))
+        store.ingest(WorkstreamEvent(
+            sessionId: "s1",
+            hookEventName: .stop,
+            source: "claude",
+            toolInputJSON: #"{"reason":"done"}"#
+        ))
+        store.ingest(WorkstreamEvent(
+            sessionId: "s1",
+            hookEventName: .todoWrite,
+            source: "claude",
+            toolInputJSON: #"{"todos":[{"id":"t1","content":"test","status":"in_progress"}]}"#
+        ))
+
+        if case .userPrompt(let text) = store.items[0].payload {
+            #expect(text == "ship it")
+        } else {
+            Issue.record("expected user prompt payload")
+        }
+        if case .stop(let reason) = store.items[1].payload {
+            #expect(reason == "done")
+        } else {
+            Issue.record("expected stop payload")
+        }
+        if case .todos(let todos) = store.items[2].payload {
+            #expect(todos.first?.content == "test")
+            #expect(todos.first?.state == .inProgress)
+        } else {
+            Issue.record("expected todos payload")
+        }
+    }
 }
 
 /// Mutable clock wrapper safe to capture by a `@Sendable` closure in tests.

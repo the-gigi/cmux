@@ -83,16 +83,26 @@ final class FeedCoordinator: @unchecked Sendable {
         event: WorkstreamEvent,
         waitTimeout: TimeInterval
     ) -> IngestBlockingResult {
+        guard let requestId = event.requestId, waitTimeout > 0 else {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    FeedCoordinator.shared.store.ingest(event)
+                    if let ppid = event.ppid, ppid > 0 {
+                        FeedCoordinator.shared.armPidWatcher(ppid: ppid)
+                    }
+                }
+            }
+            return .acknowledged(itemId: nil)
+        }
+
         let semaphore = DispatchSemaphore(value: 0)
         let waiter = PendingWaiter(semaphore: semaphore)
 
         // Register the waiter before the store sees the event so a very
         // fast reply can't slip through.
-        if let requestId = event.requestId, waitTimeout > 0 {
-            waiterLock.lock()
-            waiters[requestId] = waiter
-            waiterLock.unlock()
-        }
+        waiterLock.lock()
+        waiters[requestId] = waiter
+        waiterLock.unlock()
 
         // Hop to main to actually insert the item + install the
         // kqueue watcher for the agent's PID. The watcher handler
@@ -112,13 +122,7 @@ final class FeedCoordinator: @unchecked Sendable {
         // If this is a blocking actionable event and the app window isn't
         // focused, post a native notification banner with inline action
         // buttons so the user can respond without switching windows.
-        if waitTimeout > 0, let requestId = event.requestId {
-            postFeedNotification(event: event, requestId: requestId)
-        }
-
-        guard let requestId = event.requestId, waitTimeout > 0 else {
-            return .acknowledged(itemId: itemIdSlot.value)
-        }
+        postFeedNotification(event: event, requestId: requestId)
 
         let deadline: DispatchTime = .now() + waitTimeout
         let waitResult = semaphore.wait(timeout: deadline)
@@ -380,16 +384,39 @@ private func postFeedNotification(event: WorkstreamEvent, requestId: String) {
         switch event.hookEventName {
         case .permissionRequest:
             categoryId = "CMUXFeedPermission"
-            title = "\(event.source.capitalized) permission"
-            body = event.toolName.map { "\($0) · \(event.cwd ?? "")" } ?? "Decision needed"
+            title = String(
+                localized: "feed.notification.permission.title",
+                defaultValue: "\(event.source.capitalized) permission"
+            )
+            body = event.toolName.map {
+                String(
+                    localized: "feed.notification.permission.body",
+                    defaultValue: "\($0) needs approval"
+                )
+            } ?? String(
+                localized: "feed.notification.decisionNeeded",
+                defaultValue: "Decision needed"
+            )
         case .exitPlanMode:
             categoryId = "CMUXFeedExitPlan"
-            title = "\(event.source.capitalized) plan ready"
-            body = event.toolInputJSON ?? "Review and approve the plan"
+            title = String(
+                localized: "feed.notification.exitPlan.title",
+                defaultValue: "\(event.source.capitalized) plan ready"
+            )
+            body = String(
+                localized: "feed.notification.exitPlan.body",
+                defaultValue: "Review and approve the plan"
+            )
         case .askUserQuestion:
             categoryId = "CMUXFeedQuestion"
-            title = "\(event.source.capitalized) question"
-            body = event.toolName ?? "Agent is asking a question"
+            title = String(
+                localized: "feed.notification.question.title",
+                defaultValue: "\(event.source.capitalized) question"
+            )
+            body = String(
+                localized: "feed.notification.question.body",
+                defaultValue: "Agent is asking a question"
+            )
         default:
             return
         }

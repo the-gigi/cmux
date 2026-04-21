@@ -151,7 +151,13 @@ final class FeedSidebarUITests: XCTestCase {
 
     private func sendLine(_ line: String) throws -> String {
         let sockFd = socket(AF_UNIX, SOCK_STREAM, 0)
-        XCTAssertNotEqual(sockFd, -1, "socket() failed")
+        guard sockFd != -1 else {
+            throw NSError(
+                domain: "FeedSidebarUITests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "socket() failed errno=\(errno)"]
+            )
+        }
         defer { close(sockFd) }
 
         var addr = sockaddr_un()
@@ -167,7 +173,13 @@ final class FeedSidebarUITests: XCTestCase {
                 connect(sockFd, base, size)
             }
         }
-        XCTAssertEqual(result, 0, "connect() failed errno=\(errno)")
+        guard result == 0 else {
+            throw NSError(
+                domain: "FeedSidebarUITests",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "connect() failed errno=\(errno)"]
+            )
+        }
 
         let data = line.data(using: .utf8)!
         _ = data.withUnsafeBytes { bytes in

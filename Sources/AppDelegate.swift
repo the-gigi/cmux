@@ -12717,10 +12717,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let permissionCategory = UNNotificationCategory(
             identifier: "CMUXFeedPermission",
             actions: [
-                UNNotificationAction(identifier: "feed.permission.once", title: "Allow Once"),
-                UNNotificationAction(identifier: "feed.permission.always", title: "Always"),
                 UNNotificationAction(
-                    identifier: "feed.permission.deny", title: "Deny",
+                    identifier: "feed.permission.once",
+                    title: String(localized: "feed.notification.permission.allowOnce", defaultValue: "Allow Once")
+                ),
+                UNNotificationAction(
+                    identifier: "feed.permission.always",
+                    title: String(localized: "feed.notification.permission.always", defaultValue: "Always")
+                ),
+                UNNotificationAction(
+                    identifier: "feed.permission.deny",
+                    title: String(localized: "feed.notification.permission.deny", defaultValue: "Deny"),
                     options: [.destructive]
                 ),
             ],
@@ -12730,9 +12737,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let exitPlanCategory = UNNotificationCategory(
             identifier: "CMUXFeedExitPlan",
             actions: [
-                UNNotificationAction(identifier: "feed.exit_plan.bypassPermissions", title: "Bypass"),
-                UNNotificationAction(identifier: "feed.exit_plan.autoAccept", title: "Auto-accept"),
-                UNNotificationAction(identifier: "feed.exit_plan.manual", title: "Manual"),
+                UNNotificationAction(
+                    identifier: "feed.exit_plan.bypassPermissions",
+                    title: String(localized: "feed.notification.exitPlan.bypass", defaultValue: "Bypass")
+                ),
+                UNNotificationAction(
+                    identifier: "feed.exit_plan.autoAccept",
+                    title: String(localized: "feed.notification.exitPlan.autoAccept", defaultValue: "Auto-accept")
+                ),
+                UNNotificationAction(
+                    identifier: "feed.exit_plan.manual",
+                    title: String(localized: "feed.notification.exitPlan.manual", defaultValue: "Manual")
+                ),
             ],
             intentIdentifiers: [],
             options: []
@@ -12741,7 +12757,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             identifier: "CMUXFeedQuestion",
             actions: [
                 UNNotificationAction(
-                    identifier: "feed.question.open", title: "Reply",
+                    identifier: "feed.question.open",
+                    title: String(localized: "feed.notification.question.reply", defaultValue: "Reply"),
                     options: [.foreground]
                 ),
             ],

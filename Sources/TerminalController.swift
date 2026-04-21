@@ -2538,6 +2538,12 @@ class TerminalController {
             "settings.open",
             "feedback.open",
             "feedback.submit",
+            "feed.push",
+            "feed.permission.reply",
+            "feed.question.reply",
+            "feed.exit_plan.reply",
+            "feed.jump",
+            "feed.list",
             "surface.list",
             "surface.current",
             "surface.focus",
@@ -7121,7 +7127,36 @@ class TerminalController {
     // MARK: - V2 Feed (workstream) handlers
 
     private func v2FeedPush(params: [String: Any]) -> V2CallResult {
-        let waitTimeout = (params["wait_timeout_seconds"] as? Double) ?? 0
+        let waitTimeout: TimeInterval
+        if let rawTimeout = params["wait_timeout_seconds"] {
+            let seconds: Double?
+            if let number = rawTimeout as? NSNumber {
+                seconds = number.doubleValue
+            } else if let value = rawTimeout as? Double {
+                seconds = value
+            } else if let value = rawTimeout as? Int {
+                seconds = Double(value)
+            } else {
+                seconds = nil
+            }
+            guard let seconds else {
+                return .err(
+                    code: "invalid_params",
+                    message: "feed.push wait_timeout_seconds must be numeric",
+                    data: nil
+                )
+            }
+            guard seconds.isFinite, seconds >= 0, seconds <= 120 else {
+                return .err(
+                    code: "invalid_params",
+                    message: "feed.push wait_timeout_seconds must be between 0 and 120",
+                    data: nil
+                )
+            }
+            waitTimeout = seconds
+        } else {
+            waitTimeout = 0
+        }
         let eventDict: [String: Any]
         if let nested = params["event"] as? [String: Any] {
             eventDict = nested

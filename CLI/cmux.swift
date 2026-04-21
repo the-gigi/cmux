@@ -919,7 +919,7 @@ final class SocketClient {
         }
     }
 
-    func send(command: String) throws -> String {
+    func send(command: String, responseTimeout: TimeInterval? = nil) throws -> String {
         if relayEndpoint != nil, socketFD < 0 {
             try connect()
         }
@@ -943,7 +943,9 @@ final class SocketClient {
 
         while true {
             try configureReceiveTimeout(
-                sawNewline ? Self.multilineResponseIdleTimeoutSeconds : Self.responseTimeoutSeconds
+                sawNewline
+                    ? Self.multilineResponseIdleTimeoutSeconds
+                    : (responseTimeout ?? Self.responseTimeoutSeconds)
             )
 
             var buffer = [UInt8](repeating: 0, count: 8192)
@@ -1883,6 +1885,13 @@ struct CMUXCLI {
         // Generic agent hook handlers: gracefully no-op outside cmux
         if ["copilot-hook", "codebuddy-hook", "factory-hook", "qoder-hook"].contains(command) {
             guard ProcessInfo.processInfo.environment["CMUX_SURFACE_ID"] != nil else {
+                print("{}")
+                return
+            }
+        }
+
+        if command == "feed-hook" {
+            guard ProcessInfo.processInfo.environment["CMUX_SURFACE_ID"]?.isEmpty == false else {
                 print("{}")
                 return
             }
@@ -6975,6 +6984,18 @@ struct CMUXCLI {
             Coding agents:
               Double check with the end user before sending anything. Review the message and attachments for secrets,
               private code, credentials, tokens, and other sensitive information first.
+            """
+        case "feed":
+            return """
+            Usage: cmux feed clear [--yes|-y]
+
+            Manage persisted Feed workstream history.
+            """
+        case "opencode":
+            return """
+            Usage: cmux opencode <install-hooks|uninstall-hooks> [--project] [--yes|-y]
+
+            Manage the cmux OpenCode Feed plugin.
             """
         case "themes":
             return """
@@ -13788,8 +13809,8 @@ struct CMUXCLI {
     /// inside the shell is applied via the agent's `timeout` field in the
     /// nested hook config (see `buildHooksDict`); the shell command
     /// itself just dispatches.
-    private func feedHookCommand(for def: AgentHookDef) -> String {
-        "[ -n \"$CMUX_SURFACE_ID\" ] && [ \"$\(def.disableEnvVar)\" != \"1\" ] && command -v cmux >/dev/null 2>&1 && cmux feed-hook --source \(def.name) || echo '{}'"
+    private func feedHookCommand(for def: AgentHookDef, agentEvent: String) -> String {
+        "[ -n \"$CMUX_SURFACE_ID\" ] && [ \"$\(def.disableEnvVar)\" != \"1\" ] && command -v cmux >/dev/null 2>&1 && cmux feed-hook --source \(def.name) --event \(agentEvent) || echo '{}'"
     }
 
     /// Marker substring we look for when removing / upgrading our own
@@ -13816,9 +13837,9 @@ struct CMUXCLI {
         // Layer in feed-hook entries with a long (120000 ms = 120s)
         // timeout so blocking user decisions don't trip the agent's
         // default per-event timeout.
-        let feedCmd = feedHookCommand(for: def)
         let feedTimeoutMs = 120_000
         for agentEvent in def.feedHookEvents {
+            let feedCmd = feedHookCommand(for: def, agentEvent: agentEvent)
             switch def.format {
             case .flat:
                 var entries = result[agentEvent] as? [[String: Any]] ?? []
@@ -14277,12 +14298,30 @@ struct CMUXCLI {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = Pipe()
+        var output = Data()
+        let outputLock = NSLock()
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            outputLock.lock()
+            output.append(data)
+            outputLock.unlock()
+        }
         do {
             try process.run()
         } catch { return nil }
         process.waitUntilExit()
+        pipe.fileHandleForReading.readabilityHandler = nil
+        let remaining = pipe.fileHandleForReading.readDataToEndOfFile()
+        if !remaining.isEmpty {
+            outputLock.lock()
+            output.append(remaining)
+            outputLock.unlock()
+        }
         // diff exits with 1 on differences; that's fine.
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        outputLock.lock()
+        let data = output
+        outputLock.unlock()
         return String(data: data, encoding: .utf8)
     }
 
@@ -14596,6 +14635,7 @@ struct CMUXCLI {
         // uses `hook_event_name`; Codex uses `event` or `hook_event_name`.
         let rawEvent = (stdinObj["hook_event_name"] as? String)
             ?? (stdinObj["event"] as? String)
+            ?? optionValue(commandArgs, name: "--event")
             ?? ""
         let toolName = (stdinObj["tool_name"] as? String) ?? ""
         let sessionId = (stdinObj["session_id"] as? String) ?? UUID().uuidString
@@ -14672,7 +14712,10 @@ struct CMUXCLI {
 
         let response: String
         do {
-            response = try client.send(command: line)
+            response = try client.send(
+                command: line,
+                responseTimeout: waitTimeout > 0 ? waitTimeout + 5 : nil
+            )
         } catch {
             print("{}")
             return
@@ -14710,7 +14753,7 @@ struct CMUXCLI {
         toolName: String
     ) -> (String, Bool) {
         switch event {
-        case "PreToolUse":
+        case "PreToolUse", "beforeShellExecution":
             switch toolName {
             case "ExitPlanMode":
                 return ("ExitPlanMode", true)
@@ -15003,12 +15046,20 @@ struct CMUXCLI {
         // the agentDefs loop.
         if agentFilter == nil || agentFilter?.lowercased() == "opencode" {
             if isUninstall {
-                do { try uninstallOpenCodePlugin() } catch {
-                    print("  opencode: \(error.localizedDescription)")
+                do {
+                    try uninstallOpenCodePlugin()
+                    count += 1
+                } catch {
+                    print("  opencode: \(String(describing: error))")
+                    skipped += 1
                 }
             } else if Self.isBinaryOnPath("opencode") {
-                do { try installOpenCodePlugin(projectLocal: false) } catch {
-                    print("  opencode: \(error.localizedDescription)")
+                do {
+                    try installOpenCodePlugin(projectLocal: false)
+                    count += 1
+                } catch {
+                    print("  opencode: \(String(describing: error))")
+                    skipped += 1
                 }
             } else {
                 print("  opencode: skipped (binary not found on PATH)")

@@ -70,7 +70,8 @@ public struct WorkstreamItem: Identifiable, Codable, Sendable, Equatable {
         self.updatedAt = updatedAt ?? createdAt
         self.cwd = cwd
         self.title = title
-        self.status = status ?? (kind.isActionable ? .pending : .telemetry)
+        let resolvedStatus = status ?? (kind.isActionable ? .pending : .telemetry)
+        self.status = kind.isActionable ? resolvedStatus : .telemetry
         self.payload = payload
         self.ppid = ppid
     }

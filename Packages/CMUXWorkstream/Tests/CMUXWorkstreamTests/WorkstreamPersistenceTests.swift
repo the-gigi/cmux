@@ -61,6 +61,19 @@ struct WorkstreamPersistenceTests {
         #expect(loaded.isEmpty)
     }
 
+    @Test("Non-positive limit returns empty")
+    func nonPositiveLimitEmpty() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-workstream-limit-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let persistence = WorkstreamPersistence(fileURL: tmp)
+        try await persistence.append(WorkstreamItem(
+            workstreamId: "s", source: .claude, kind: .sessionStart, payload: .sessionStart
+        ))
+        let loaded = try await persistence.loadRecent(limit: 0)
+        #expect(loaded.isEmpty)
+    }
+
     @Test("clear removes the backing file")
     func clearRemovesFile() async throws {
         let tmp = FileManager.default.temporaryDirectory

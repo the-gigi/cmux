@@ -15,6 +15,20 @@ export const CMUXFeed = async (ctx) => {
   let buffered = "";
   const pending = new Map();
 
+  const resolvePending = (requestId, value) => {
+    if (!requestId || !pending.has(requestId)) return;
+    const resolver = pending.get(requestId);
+    pending.delete(requestId);
+    resolver(value);
+  };
+
+  const failPending = () => {
+    for (const requestId of pending.keys()) {
+      resolvePending(requestId, { status: "timed_out" });
+    }
+    buffered = "";
+  };
+
   const connect = () => {
     try {
       const conn = net.createConnection(SOCKET_PATH);
@@ -31,31 +45,42 @@ export const CMUXFeed = async (ctx) => {
             // The socket sends either V2 responses (id/ok/result/error)
             // or push frames keyed by request_id. We only care about
             // results whose result.decision matches a waiter.
-            const requestId = msg?.result?.request_id || msg?.request_id;
-            if (requestId && pending.has(requestId)) {
-              const resolver = pending.get(requestId);
-              pending.delete(requestId);
-              resolver(msg.result || msg);
-            }
+            const responseId =
+              typeof msg?.id === "string" && msg.id.startsWith("opencode-")
+                ? msg.id.slice("opencode-".length)
+                : null;
+            const requestId = msg?.result?.request_id || msg?.request_id || responseId;
+            resolvePending(requestId, msg.result || msg);
           } catch (e) {
             // swallow — malformed line, keep the connection alive.
           }
         }
       });
-      conn.on("close", () => { client = null; });
-      conn.on("error", () => { client = null; });
+      conn.on("close", () => {
+        client = null;
+        failPending();
+      });
+      conn.on("error", () => {
+        client = null;
+        failPending();
+      });
       return conn;
     } catch (e) {
+      failPending();
       return null;
     }
   };
 
   const write = (frame) => {
     if (!client) client = connect();
-    if (!client) return;
+    if (!client) return false;
     try {
       client.write(JSON.stringify(frame) + "\n");
-    } catch (e) { /* ignore */ }
+      return true;
+    } catch (e) {
+      failPending();
+      return false;
+    }
   };
 
   const base = (sessionId, extra) => ({
@@ -76,11 +101,14 @@ export const CMUXFeed = async (ctx) => {
         }
       }, REPLY_TIMEOUT_MS);
     });
-    write({
+    const wrote = write({
       id: `opencode-${requestId}`,
       method: "feed.push",
       params: { event, wait_timeout_seconds: REPLY_TIMEOUT_MS / 1000 },
     });
+    if (!wrote) {
+      resolvePending(requestId, { status: "timed_out" });
+    }
     return reply;
   };
 

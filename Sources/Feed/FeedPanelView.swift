@@ -2,6 +2,38 @@ import AppKit
 import CMUXWorkstream
 import SwiftUI
 
+private extension WorkstreamPermissionMode {
+    var displayLabel: String {
+        switch self {
+        case .once:
+            return String(localized: "feed.permission.mode.once", defaultValue: "once")
+        case .always:
+            return String(localized: "feed.permission.mode.always", defaultValue: "always")
+        case .all:
+            return String(localized: "feed.permission.mode.all", defaultValue: "all tools")
+        case .bypass:
+            return String(localized: "feed.permission.mode.bypass", defaultValue: "bypass")
+        case .deny:
+            return String(localized: "feed.permission.mode.deny", defaultValue: "denied")
+        }
+    }
+}
+
+private extension WorkstreamExitPlanMode {
+    var displayLabel: String {
+        switch self {
+        case .bypassPermissions:
+            return String(localized: "feed.exitplan.mode.bypass", defaultValue: "bypass")
+        case .autoAccept:
+            return String(localized: "feed.exitplan.mode.autoAccept", defaultValue: "auto-accept")
+        case .manual:
+            return String(localized: "feed.exitplan.mode.manual", defaultValue: "manual")
+        case .deny:
+            return String(localized: "feed.exitplan.mode.deny", defaultValue: "denied")
+        }
+    }
+}
+
 /// Right-sidebar Feed view. Matches the Sessions page visual language:
 /// compact rows with SF Symbol + 13pt title + secondary metadata,
 /// rounded-rect hover backgrounds with 6px inset, and control-bar
@@ -241,10 +273,6 @@ struct FeedItemSnapshot: Equatable {
     }
 }
 
-private func snapshotWorkstreamId(_ s: FeedItemSnapshot) -> String {
-    s.workstreamId
-}
-
 /// Closure bundle; binds to `FeedCoordinator` by default.
 struct FeedRowActions {
     let approvePermission: (UUID, WorkstreamPermissionMode) -> Void
@@ -342,7 +370,7 @@ struct FeedItemRow: View {
         // surface, not on this card — so the user's eye is pulled
         // to the terminal contents they're jumping to.
         .onTapGesture {
-            actions.jump(workstreamIdForJump)
+            actions.jump(snapshot.workstreamId)
         }
     }
 
@@ -355,10 +383,13 @@ struct FeedItemRow: View {
         if let echo = snapshot.userPromptEcho,
            !echo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
-            return "You: \(echo)"
+            return String(localized: "feed.promptEcho", defaultValue: "You: \(echo)")
         }
         if case .permissionRequest(_, let toolName, _, _) = snapshot.payload {
-            return "You: \(toolName) request from \(snapshot.source.rawValue.capitalized)"
+            return String(
+                localized: "feed.promptEcho.permission",
+                defaultValue: "You: \(toolName) request from \(snapshot.source.rawValue.capitalized)"
+            )
         }
         return nil
     }
@@ -368,18 +399,6 @@ struct FeedItemRow: View {
         case .pending: return false
         case .telemetry: return false
         case .resolved, .expired: return true
-        }
-    }
-
-    private var workstreamIdForJump: String {
-        // Store mirror of the workstream id; snapshot doesn't carry it
-        // directly because payloads do. Fall back to source-only when
-        // the item kind doesn't embed a session linkage.
-        switch snapshot.payload {
-        case .permissionRequest, .exitPlan, .question:
-            return snapshotWorkstreamId(snapshot)
-        default:
-            return snapshotWorkstreamId(snapshot)
         }
     }
 
@@ -509,17 +528,28 @@ struct FeedItemRow: View {
 
     private var kindLabel: String {
         switch snapshot.kind {
-        case .permissionRequest: return "PERMISSION"
-        case .exitPlan: return "PLAN"
-        case .question: return "QUESTION"
-        case .toolUse: return "TOOL USE"
-        case .toolResult: return "TOOL RESULT"
-        case .userPrompt: return "PROMPT"
-        case .assistantMessage: return "MESSAGE"
-        case .sessionStart: return "SESSION START"
-        case .sessionEnd: return "SESSION END"
-        case .stop: return "STOP"
-        case .todos: return "TODOS"
+        case .permissionRequest:
+            return String(localized: "feed.kind.permission", defaultValue: "PERMISSION")
+        case .exitPlan:
+            return String(localized: "feed.kind.plan", defaultValue: "PLAN")
+        case .question:
+            return String(localized: "feed.kind.question.upper", defaultValue: "QUESTION")
+        case .toolUse:
+            return String(localized: "feed.kind.toolUse", defaultValue: "TOOL USE")
+        case .toolResult:
+            return String(localized: "feed.kind.toolResult", defaultValue: "TOOL RESULT")
+        case .userPrompt:
+            return String(localized: "feed.kind.prompt", defaultValue: "PROMPT")
+        case .assistantMessage:
+            return String(localized: "feed.kind.message", defaultValue: "MESSAGE")
+        case .sessionStart:
+            return String(localized: "feed.kind.sessionStart.upper", defaultValue: "SESSION START")
+        case .sessionEnd:
+            return String(localized: "feed.kind.sessionEnd.upper", defaultValue: "SESSION END")
+        case .stop:
+            return String(localized: "feed.kind.stop", defaultValue: "STOP")
+        case .todos:
+            return String(localized: "feed.kind.todos", defaultValue: "TODOS")
         }
     }
 
@@ -575,9 +605,9 @@ struct FeedItemRow: View {
         case .permissionRequest(_, let toolName, _, _):
             return "\(snapshot.source.rawValue.capitalized) · \(toolName)"
         case .exitPlan:
-            return "\(snapshot.source.rawValue.capitalized) · ExitPlanMode"
+            return "\(snapshot.source.rawValue.capitalized) · \(String(localized: "feed.kind.exitPlan", defaultValue: "Exit plan"))"
         case .question:
-            return "\(snapshot.source.rawValue.capitalized) · Question"
+            return "\(snapshot.source.rawValue.capitalized) · \(String(localized: "feed.kind.question", defaultValue: "Question"))"
         default:
             if let title = snapshot.title, !title.isEmpty {
                 return "\(snapshot.source.rawValue.capitalized) · \(title)"
@@ -597,12 +627,12 @@ struct FeedItemRow: View {
         let submitted = String(localized: "feed.badge.submitted", defaultValue: "Submitted")
         switch decision {
         case .permission(let m):
-            return "\(submitted) · \(m.rawValue)"
+            return "\(submitted) · \(m.displayLabel)"
         case .exitPlan(let m, let feedback):
             if let feedback, !feedback.isEmpty {
                 return "\(submitted) · " + String(localized: "feed.badge.refined", defaultValue: "refined")
             }
-            return "\(submitted) · \(m.rawValue)"
+            return "\(submitted) · \(m.displayLabel)"
         case .question:
             return submitted
         }
@@ -690,7 +720,7 @@ private struct PermissionActionArea: View {
         guard case .resolved(let decision, _) = status else { return nil }
         let submitted = String(localized: "feed.badge.submitted", defaultValue: "Submitted")
         if case .permission(let mode) = decision {
-            return "\(submitted) · \(mode.rawValue)"
+            return "\(submitted) · \(mode.displayLabel)"
         }
         return submitted
     }
@@ -1022,7 +1052,7 @@ private struct ExitPlanActionArea: View {
                     localized: "feed.badge.refined", defaultValue: "refined"
                 )
             }
-            return "\(submitted) · \(mode.rawValue)"
+            return "\(submitted) · \(mode.displayLabel)"
         default:
             return submitted
         }
@@ -1219,11 +1249,14 @@ private struct QuestionActionArea: View {
             Image(systemName: "bubble.left.and.bubble.right.fill")
                 .font(.system(size: 10))
                 .foregroundColor(.blue)
-            Text("Claude's Question")
+            Text(String(localized: "feed.question.header", defaultValue: "Claude's Question"))
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.blue)
             if questions.count > 1 {
-                Text("(\(questions.count) questions)")
+                Text(String(
+                    localized: "feed.question.count",
+                    defaultValue: "(\(questions.count) questions)"
+                ))
                     .font(.system(size: 10))
                     .foregroundColor(.blue.opacity(0.7))
             }
@@ -1266,6 +1299,7 @@ private struct QuestionActionArea: View {
         option: WorkstreamQuestionOption
     ) -> some View {
         Button {
+            guard status.isPending else { return }
             // Long-form is always single-select, and selecting submits
             // immediately because there's no separate Submit button.
             // Selections carry human-readable labels (not ids) so the
@@ -1306,6 +1340,7 @@ private struct QuestionActionArea: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(!status.isPending)
     }
 
     private func questionBlock(index: Int, question: WorkstreamQuestionPrompt) -> some View {
@@ -1323,7 +1358,7 @@ private struct QuestionActionArea: View {
                 HStack(spacing: 3) {
                     Image(systemName: "checklist")
                         .font(.system(size: 8, weight: .medium))
-                    Text("Multi-select")
+                    Text(String(localized: "feed.question.multiSelect", defaultValue: "Multi-select"))
                         .font(.system(size: 9, weight: .semibold))
                         .tracking(0.3)
                 }
@@ -1401,8 +1436,10 @@ private struct QuestionActionArea: View {
             label: option.label,
             leadingIcon: leading,
             kind: selected ? selectedKind : .soft,
-            size: .compact
+            size: .compact,
+            dimmed: !status.isPending
         ) {
+            guard status.isPending else { return }
             var current = selections[questionId] ?? []
             if multi {
                 if current.contains(option.id) { current.remove(option.id) }
@@ -1440,9 +1477,13 @@ private struct QuestionActionArea: View {
 
     private var hasAnyAnswer: Bool { !composedAnswers.isEmpty }
 
+    private var canSubmitEmptyAnswer: Bool {
+        !questions.isEmpty && questions.allSatisfy { $0.options.isEmpty }
+    }
+
     private var submitCTA: some View {
         let isPending = status.isPending
-        let enabled = isPending && hasAnyAnswer
+        let enabled = isPending && (hasAnyAnswer || canSubmitEmptyAnswer)
         return FeedButton(
             label: isPending
                 ? String(localized: "feed.question.submitAll",
@@ -1606,12 +1647,20 @@ private struct TelemetryActionArea: View {
         case .toolUse(let name, let json):
             return "\(name) \(json)"
         case .toolResult(let name, let json, let err):
-            return "\(name) \(err ? "error" : "ok") \(json)"
+            let status = err
+                ? String(localized: "feed.telemetry.error", defaultValue: "error")
+                : String(localized: "feed.telemetry.ok", defaultValue: "ok")
+            return "\(name) \(status) \(json)"
         case .userPrompt(let text), .assistantMessage(let text):
             return text
-        case .sessionStart: return "session start"
-        case .sessionEnd: return "session end"
-        case .stop(let reason): return "stop \(reason ?? "")"
+        case .sessionStart:
+            return String(localized: "feed.telemetry.sessionStart", defaultValue: "session start")
+        case .sessionEnd:
+            return String(localized: "feed.telemetry.sessionEnd", defaultValue: "session end")
+        case .stop(let reason):
+            let label = String(localized: "feed.telemetry.stop", defaultValue: "stop")
+            guard let reason, !reason.isEmpty else { return label }
+            return "\(label) \(reason)"
         default:
             return ""
         }
@@ -1634,7 +1683,7 @@ private struct TodoListBody: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 4) {
-                Text("Tasks")
+                Text(String(localized: "feed.todos.title", defaultValue: "Tasks"))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.primary.opacity(0.9))
                 Text(summaryLabel)
@@ -1649,7 +1698,10 @@ private struct TodoListBody: View {
                     Button {
                         expanded.toggle()
                     } label: {
-                        Text("… +\(done.count - visibleDone.count) completed")
+                        Text(String(
+                            localized: "feed.todos.moreCompleted",
+                            defaultValue: "... +\(done.count - visibleDone.count) completed"
+                        ))
                             .font(.system(size: 11))
                             .foregroundColor(.secondary.opacity(0.8))
                             .padding(.leading, 22)
@@ -1658,7 +1710,7 @@ private struct TodoListBody: View {
                 }
                 if expanded && done.count > 2 {
                     Button { expanded = false } label: {
-                        Text("Collapse")
+                        Text(String(localized: "feed.todos.collapse", defaultValue: "Collapse"))
                             .font(.system(size: 11))
                             .foregroundColor(.secondary.opacity(0.8))
                             .padding(.leading, 22)
@@ -1672,9 +1724,15 @@ private struct TodoListBody: View {
     private var summaryLabel: String {
         let d = done.count, ip = inProgress.count, p = pending.count
         var parts: [String] = []
-        if d > 0 { parts.append("\(d) done") }
-        if ip > 0 { parts.append("\(ip) in progress") }
-        if p > 0 { parts.append("\(p) open") }
+        if d > 0 {
+            parts.append(String(localized: "feed.todos.summary.done", defaultValue: "\(d) done"))
+        }
+        if ip > 0 {
+            parts.append(String(localized: "feed.todos.summary.inProgress", defaultValue: "\(ip) in progress"))
+        }
+        if p > 0 {
+            parts.append(String(localized: "feed.todos.summary.open", defaultValue: "\(p) open"))
+        }
         return "(" + parts.joined(separator: ", ") + ")"
     }
 

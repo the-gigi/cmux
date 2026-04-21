@@ -10,7 +10,7 @@ Anything else the agent does — tool uses, assistant messages, session starts/s
 
 ## How it works
 
-```
+```text
 ┌─────────────────────┐  hook/stdin  ┌──────────────────────────┐
 │ Agent CLI           ├─────────────▶│ cmux feed-hook           │
 │ (Claude / Codex /…) │              │  forwards to cmux socket │
@@ -45,7 +45,7 @@ Agents pipe their hook events into `cmux feed-hook --source <agent>`. The bridge
 
 When you click Allow / Deny / Submit (either in Feed or in the notification's inline action buttons), `feed.permission.reply` / `feed.question.reply` / `feed.exit_plan.reply` delivers the decision back through `FeedCoordinator`, which wakes the hook. The hook emits the agent's expected decision JSON on stdout and the agent proceeds.
 
-All events (actionable and telemetry) are appended to `~/.cmuxterm/workstream.jsonl` for audit. Memory holds the most recent 2000 items in a ring; older items only surface if you scroll back.
+All events (actionable and telemetry) are appended to `~/.cmuxterm/workstream.jsonl` for audit. Memory holds the most recent 2000 items in a ring; older items remain available in the JSONL audit log.
 
 ## Installing hooks
 
@@ -135,6 +135,6 @@ Double-click a Feed row and cmux focuses the cmux workspace + surface where the 
 
 **Agent hangs on a permission request.** Feed never blocks the agent longer than 120 seconds; if you see a longer hang, the hook failed to reach the socket. Verify `$CMUX_SOCKET_PATH` matches the running app (default is `~/.config/cmux/cmux.sock`).
 
-**Notifications aren't showing inline buttons.** The three Feed categories (`CMUXFeedPermission`, `CMUXFeedExitPlan`, `CMUXFeedQuestion`) are registered at app launch. On first Feed use, macOS may prompt for notification authorization; without it the banner still posts but without action buttons.
+**Notifications aren't showing inline buttons.** The three Feed categories (`CMUXFeedPermission`, `CMUXFeedExitPlan`, `CMUXFeedQuestion`) are registered at app launch. On first Feed use, macOS may prompt for notification authorization; if authorization is denied, Feed rows still appear in the sidebar but no native banner is delivered.
 
 **OpenCode plugin doesn't fire.** Plugin is only installed if `opencode` is on `PATH` at `cmux setup-hooks` time. Check `~/.config/opencode/plugins/cmux-feed.js` contains `// cmux-feed-plugin-marker v1`. If you added project-local plugins (`.opencode/plugins/…`), re-run `cmux opencode install-hooks --project`.

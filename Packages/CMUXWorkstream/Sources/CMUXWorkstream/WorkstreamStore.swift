@@ -286,15 +286,15 @@ public final class WorkstreamStore {
                 .toolResult(toolName: event.toolName ?? "", resultJSON: toolInput, isError: false)
             )
         case .userPromptSubmit:
-            return (.userPrompt, .userPrompt(text: ""))
+            return (.userPrompt, .userPrompt(text: Self.promptText(from: event.toolInputJSON)))
         case .sessionStart:
             return (.sessionStart, .sessionStart)
         case .sessionEnd:
             return (.sessionEnd, .sessionEnd)
         case .stop, .subagentStop:
-            return (.stop, .stop(reason: nil))
+            return (.stop, .stop(reason: Self.stopReason(from: event.toolInputJSON)))
         case .todoWrite:
-            return (.todos, .todos([]))
+            return (.todos, .todos(Self.todos(from: event.toolInputJSON)))
         case .notification:
             return (.toolResult, .toolResult(toolName: "notification", resultJSON: toolInput, isError: false))
         }
@@ -356,5 +356,63 @@ public final class WorkstreamStore {
             multiSelect: multi,
             options: options
         )
+    }
+
+    private static func jsonObject(from json: String?) -> Any? {
+        guard let json, let data = json.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+    }
+
+    private static func promptText(from json: String?) -> String {
+        if let dict = jsonObject(from: json) as? [String: Any] {
+            return (dict["prompt"] as? String)
+                ?? (dict["text"] as? String)
+                ?? (dict["message"] as? String)
+                ?? ""
+        }
+        return json ?? ""
+    }
+
+    private static func stopReason(from json: String?) -> String? {
+        if let dict = jsonObject(from: json) as? [String: Any] {
+            return (dict["reason"] as? String)
+                ?? (dict["message"] as? String)
+                ?? (dict["cause"] as? String)
+        }
+        return nil
+    }
+
+    private static func todos(from json: String?) -> [WorkstreamTaskTodo] {
+        let rawTodos: [Any]
+        if let dict = jsonObject(from: json) as? [String: Any] {
+            rawTodos = dict["todos"] as? [Any] ?? []
+        } else {
+            rawTodos = jsonObject(from: json) as? [Any] ?? []
+        }
+        return rawTodos.enumerated().compactMap { idx, raw in
+            guard let dict = raw as? [String: Any] else { return nil }
+            let content = (dict["content"] as? String)
+                ?? (dict["text"] as? String)
+                ?? (dict["title"] as? String)
+                ?? ""
+            guard !content.isEmpty else { return nil }
+            let rawState = (dict["state"] as? String)
+                ?? (dict["status"] as? String)
+                ?? "pending"
+            let state: WorkstreamTaskTodo.State
+            switch rawState {
+            case "completed", "done":
+                state = .completed
+            case "inProgress", "in_progress", "active":
+                state = .inProgress
+            default:
+                state = .pending
+            }
+            return WorkstreamTaskTodo(
+                id: (dict["id"] as? String) ?? "todo\(idx)",
+                content: content,
+                state: state
+            )
+        }
     }
 }

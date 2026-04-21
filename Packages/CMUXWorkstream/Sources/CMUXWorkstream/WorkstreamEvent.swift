@@ -6,8 +6,7 @@ import Foundation
 /// Field names mirror Vibe Island's hook payload format exactly so existing
 /// agent payloads pass through untouched: `session_id`, `hook_event_name`,
 /// `cwd`, `tool_name`, `tool_input`, `_source`, `_ppid`,
-/// `_opencode_request_id`. Unknown fields are preserved verbatim in
-/// `extraFieldsJSON` for forward compatibility.
+/// `_opencode_request_id`.
 public struct WorkstreamEvent: Codable, Sendable, Equatable {
     public let sessionId: String
     public let hookEventName: HookEventName
@@ -102,9 +101,8 @@ public struct WorkstreamEvent: Codable, Sendable, Equatable {
         try c.encodeIfPresent(requestId, forKey: .requestId)
         try c.encodeIfPresent(ppid, forKey: .ppid)
         try c.encode(receivedAt, forKey: .receivedAt)
-        if let toolInputJSON,
-           let raw = AnyJSON(jsonString: toolInputJSON)
-        {
+        if let toolInputJSON {
+            let raw = AnyJSON(jsonString: toolInputJSON) ?? .string(toolInputJSON)
             try c.encode(raw, forKey: .toolInputJSON)
         }
     }
@@ -160,7 +158,7 @@ private indirect enum AnyJSON: Codable, Sendable, Equatable {
             if CFNumberIsFloatType(n) {
                 return .double(n.doubleValue)
             }
-            return .int(n.intValue)
+            return .int(Int(n.int64Value))
         }
         if let s = value as? String { return .string(s) }
         if let arr = value as? [Any] { return .array(arr.map(fromAny)) }

@@ -71,4 +71,19 @@ struct WorkstreamEventTests {
         #expect(event.requestId == nil)
         #expect(event.ppid == nil)
     }
+
+    @Test("Non-JSON tool input re-encodes as a string")
+    func encodesRawToolInputString() throws {
+        let event = WorkstreamEvent(
+            sessionId: "s",
+            hookEventName: .userPromptSubmit,
+            source: "claude",
+            toolInputJSON: "plain text"
+        )
+        let data = try JSONEncoder().encode(event)
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        #expect(object["tool_input"] as? String == "plain text")
+    }
 }

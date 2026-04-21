@@ -46,12 +46,33 @@ public actor WorkstreamPersistence {
     /// Loads the last `limit` items from the file. Order in the returned
     /// array is oldest-first. Missing file returns empty.
     public func loadRecent(limit: Int) throws -> [WorkstreamItem] {
+        guard limit > 0 else { return [] }
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return []
         }
-        let data = try Data(contentsOf: fileURL)
-        guard !data.isEmpty else { return [] }
-        let lines = data
+        let fh = try FileHandle(forReadingFrom: fileURL)
+        defer { try? fh.close() }
+        let fileSize = try fh.seekToEnd()
+        guard fileSize > 0 else { return [] }
+
+        let chunkSize = 64 * 1024
+        var offset = fileSize
+        var tail = Data()
+        while offset > 0 {
+            let readSize = min(chunkSize, Int(offset))
+            offset -= UInt64(readSize)
+            try fh.seek(toOffset: offset)
+            guard let chunk = try fh.read(upToCount: readSize), !chunk.isEmpty else {
+                break
+            }
+            tail.insert(contentsOf: chunk, at: 0)
+            let newlineCount = tail.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
+            if newlineCount > limit {
+                break
+            }
+        }
+
+        let lines = tail
             .split(separator: 0x0A, omittingEmptySubsequences: true)
             .suffix(limit)
         var out: [WorkstreamItem] = []
@@ -69,11 +90,20 @@ public actor WorkstreamPersistence {
 
     /// Truncates the JSONL file. Used by `cmux feed clear`.
     public func clear() throws {
-        try? FileManager.default.removeItem(at: fileURL)
         if let fh = handle {
-            try? fh.close()
+            try fh.close()
         }
         handle = nil
+        do {
+            try FileManager.default.removeItem(at: fileURL)
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == NSCocoaErrorDomain,
+               nsError.code == NSFileNoSuchFileError {
+                return
+            }
+            throw error
+        }
     }
 
     private func handleForWriting() throws -> FileHandle {
