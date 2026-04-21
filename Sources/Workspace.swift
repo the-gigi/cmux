@@ -6654,6 +6654,11 @@ final class Workspace: Identifiable, ObservableObject {
     private var remoteDetectedSurfaceIds: Set<UUID> = []
     private var activeRemoteTerminalSurfaceIds: Set<UUID> = []
     private var pendingRemoteTerminalChildExitSurfaceIds: Set<UUID> = []
+    /// Display target of the remote workspace that just disconnected. Set right before
+    /// `createReplacementTerminalPanel()` so the replacement shell can print a banner
+    /// explaining that ssh ended (instead of the user seeing an unexplained local prompt
+    /// that looks identical to a healthy workspace).
+    private var pendingReplacementBannerRemoteTarget: String?
 
     private static let remoteErrorStatusKey = "remote.error"
     private static let remotePortConflictStatusKey = "remote.port_conflicts"
@@ -6958,11 +6963,24 @@ final class Workspace: Identifiable, ObservableObject {
         // Remove the default "Welcome" tab that bonsplit creates
         let welcomeTabIds = bonsplitController.allTabIds
 
+        // When the workspace boots with an explicit initial command (`cmux ssh` /
+        // `cmux vm new` both funnel their ssh startup script through this path),
+        // hold the PTY open after that command exits. Without this Ghostty
+        // silently respawns a local login shell and the user can't tell a dead
+        // VM apart from a healthy local prompt.
+        var resolvedConfigTemplate = configTemplate
+        if let trimmedCommand = initialTerminalCommand?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmedCommand.isEmpty {
+            var template = resolvedConfigTemplate ?? CmuxSurfaceConfigTemplate()
+            template.waitAfterCommand = true
+            resolvedConfigTemplate = template
+        }
+
         // Create initial terminal panel
         let terminalPanel = TerminalPanel(
             workspaceId: id,
             context: GHOSTTY_SURFACE_CONTEXT_TAB,
-            configTemplate: configTemplate,
+            configTemplate: resolvedConfigTemplate,
             workingDirectory: hasWorkingDirectory ? trimmedWorkingDirectory : nil,
             portOrdinal: portOrdinal,
             initialCommand: initialTerminalCommand,
@@ -8443,6 +8461,13 @@ final class Workspace: Identifiable, ObservableObject {
               remoteConfiguration?.relayPort == relayPort else {
             return
         }
+        // Arm the replacement-banner before ownership of `remoteConfiguration` drains
+        // away through `untrackRemoteTerminalSurface` → `disconnectRemoteConnection`.
+        // The banner only matters if we end up demoting this workspace to local, so
+        // `createReplacementTerminalPanel` consumes and clears the value.
+        if let displayTarget = remoteConfiguration?.displayTarget {
+            pendingReplacementBannerRemoteTarget = displayTarget
+        }
         pendingRemoteTerminalChildExitSurfaceIds.insert(surfaceId)
         untrackRemoteTerminalSurface(surfaceId)
     }
@@ -8881,8 +8906,18 @@ final class Workspace: Identifiable, ObservableObject {
         }
 
         guard let paneId = sourcePaneId else { return nil }
-        let inheritedConfig = inheritedTerminalConfig(preferredPanelId: panelId, inPane: paneId)
+        var inheritedConfig = inheritedTerminalConfig(preferredPanelId: panelId, inPane: paneId)
         let remoteTerminalStartupCommand = remoteTerminalStartupCommand()
+        // Hold the pane open after the remote session ends so the user can read the
+        // "ssh exited …" message the startup script prints. Otherwise Ghostty silently
+        // respawns a local login shell when the command exits (the PTY falls through
+        // to $SHELL), and a dead VM looks identical to a healthy workspace with a
+        // local prompt — which is what we saw during dogfood.
+        if remoteTerminalStartupCommand != nil {
+            var template = inheritedConfig ?? CmuxSurfaceConfigTemplate()
+            template.waitAfterCommand = true
+            inheritedConfig = template
+        }
 
         // Inherit working directory: prefer the source panel's reported cwd,
         // then its requested startup cwd if shell integration has not reported
@@ -9000,8 +9035,16 @@ final class Workspace: Identifiable, ObservableObject {
         let previousFocusedPanelId = focusedPanelId
         let previousHostedView = focusedTerminalPanel?.hostedView
 
-        let inheritedConfig = inheritedTerminalConfig(inPane: paneId)
+        var inheritedConfig = inheritedTerminalConfig(inPane: paneId)
         let remoteTerminalStartupCommand = remoteTerminalStartupCommand()
+        // See the comment at the other call site: hold the PTY open after the remote
+        // command exits so the user sees the error rather than a silently-respawned
+        // local login shell.
+        if remoteTerminalStartupCommand != nil {
+            var template = inheritedConfig ?? CmuxSurfaceConfigTemplate()
+            template.waitAfterCommand = true
+            inheritedConfig = template
+        }
 
         // Create new terminal panel
         let newPanel = TerminalPanel(
@@ -10369,6 +10412,37 @@ final class Workspace: Identifiable, ObservableObject {
 
     // MARK: - Utility
 
+    /// Writes a small shell wrapper that prints a banner ("remote ssh ended — target X"),
+    /// then execs the user's `$SHELL`. Returned path goes to `initialCommand`, which Ghostty
+    /// runs as the PTY command. The banner survives as text in scrollback so the user can
+    /// see it after the replacement local shell starts.
+    private static func replacementShellScriptWithBanner(target: String) -> String {
+        let tempDir = FileManager.default.temporaryDirectory
+        let scriptURL = tempDir.appendingPathComponent(
+            "cmux-remote-disconnect-banner-\(UUID().uuidString.lowercased()).sh"
+        )
+        let quotedTarget = target
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let body = """
+        #!/bin/sh
+        printf '\\033[1;33m[cmux] remote ssh session ended: %s\\033[0m\\n' "\(quotedTarget)" >&2
+        printf '\\033[2m[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>\\033[0m\\n' >&2
+        printf '\\n'
+        # Remove ourselves so /tmp doesn't accumulate these wrappers across sessions.
+        rm -f -- "$0" 2>/dev/null || true
+        exec "${SHELL:-/bin/sh}" -l
+
+        """
+        do {
+            try body.write(to: scriptURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
+            return scriptURL.path
+        } catch {
+            return "/bin/sh"
+        }
+    }
+
     /// Create a new terminal panel (used when replacing the last panel)
     @discardableResult
     func createReplacementTerminalPanel() -> TerminalPanel {
@@ -10376,11 +10450,20 @@ final class Workspace: Identifiable, ObservableObject {
             preferredPanelId: focusedPanelId,
             inPane: bonsplitController.focusedPaneId
         )
+        // If the previous surface was a remote ssh terminal that just exited, spawn a
+        // local shell that first prints a clearly-coloured banner explaining what happened.
+        // Without this banner a dead VM surfaces as an ordinary local `lawrence@mac ~ %`
+        // prompt, which looks identical to "I never connected" and was mis-read during
+        // dogfood as "cmux disconnected silently".
+        let bannerTarget = pendingReplacementBannerRemoteTarget
+        pendingReplacementBannerRemoteTarget = nil
+        let replacementInitialCommand: String? = bannerTarget.map { Self.replacementShellScriptWithBanner(target: $0) }
         let newPanel = TerminalPanel(
             workspaceId: id,
             context: GHOSTTY_SURFACE_CONTEXT_TAB,
             configTemplate: inheritedConfig,
-            portOrdinal: portOrdinal
+            portOrdinal: portOrdinal,
+            initialCommand: replacementInitialCommand
         )
         configureTerminalPanel(newPanel)
         panels[newPanel.id] = newPanel
@@ -11983,6 +12066,9 @@ extension Workspace: BonsplitDelegate {
                 return
             }
 
+            #if DEBUG
+            dlog("replacement.banner.fire target=\(pendingReplacementBannerRemoteTarget ?? "nil")")
+            #endif
             let replacement = createReplacementTerminalPanel()
             if let replacementTabId = surfaceIdFromPanelId(replacement.id),
                let replacementPane = bonsplitController.allPaneIds.first {
