@@ -14623,18 +14623,18 @@ struct CMUXCLI {
             ?? "\(source)-\(sessionId)-\(rawEvent)-\(Int(Date().timeIntervalSince1970 * 1000))"
         eventDict["_opencode_request_id"] = requestId
 
-        // Sync hook with a short wait. If the user clicks a decision
-        // in the cmux Feed sidebar within the window, the hook
-        // returns a proper hookSpecificOutput and Claude skips its
-        // native TUI entirely. Otherwise the hook emits {} and
-        // Claude falls back to the TUI — no user-visible hang in
-        // either case (short wait, then TUI appears).
-        //
-        // Non-actionable events (Stop, telemetry) don't wait at all.
-        let waitTimeout: Double = isActionable ? 2 : 0
+        // Non-blocking. Claude's wrapper wires the PreToolUse
+        // feed-hook as async:true, so Claude shows its native TUI
+        // prompt instantly (hook output is discarded). We fire
+        // feed.push so the Feed sidebar card renders in parallel,
+        // then return immediately. The Feed's click handlers type
+        // the matching keystrokes into the terminal to answer
+        // Claude's TUI — that's the actual unblock path.
+        _ = isActionable
+        _ = hookEventName
         let params: [String: Any] = [
             "event": eventDict,
-            "wait_timeout_seconds": waitTimeout,
+            "wait_timeout_seconds": 0,
         ]
 
         let payload = try JSONSerialization.data(withJSONObject: [
@@ -14644,33 +14644,7 @@ struct CMUXCLI {
         ])
         let line = String(data: payload, encoding: .utf8) ?? "{}"
 
-        let response: String
-        do {
-            response = try client.send(command: line)
-        } catch {
-            print("{}")
-            return
-        }
-
-        guard let respData = response.data(using: .utf8),
-              let respObj = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
-              let ok = respObj["ok"] as? Bool, ok,
-              let result = respObj["result"] as? [String: Any]
-        else {
-            print("{}")
-            return
-        }
-
-        let status = result["status"] as? String ?? "acknowledged"
-        if status == "resolved", let decision = result["decision"] as? [String: Any] {
-            let out = Self.renderAgentDecision(
-                source: source,
-                hookEventName: hookEventName,
-                decision: decision
-            )
-            print(out)
-            return
-        }
+        _ = try? client.send(command: line)
         print("{}")
     }
 
