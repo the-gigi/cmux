@@ -835,13 +835,13 @@ struct FeedButton: View {
         .buttonStyle(.plain)
         .onHover { hovering in
             isHovered = hovering
-            // Push the appropriate macOS cursor: "operation not
-            // allowed" when disabled, "pointing hand" when clickable.
-            // Pop on mouseout so the cursor doesn't stay stuck when
-            // the pointer leaves.
-            if hovering {
-                (dimmed ? NSCursor.operationNotAllowed : NSCursor.pointingHand).push()
-            } else {
+            // Only swap the cursor when the button is disabled —
+            // enabled buttons keep the default arrow so the Feed
+            // feels like the rest of the app. Pop on mouseout so a
+            // stale "not allowed" cursor doesn't stick.
+            if dimmed, hovering {
+                NSCursor.operationNotAllowed.push()
+            } else if dimmed, !hovering {
                 NSCursor.pop()
             }
         }
@@ -1247,9 +1247,6 @@ private struct QuestionActionArea: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-        }
     }
 
     private func questionBlock(index: Int, question: WorkstreamQuestionPrompt) -> some View {
