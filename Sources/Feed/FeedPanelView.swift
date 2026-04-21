@@ -33,13 +33,17 @@ struct FeedPanelView: View {
     @State private var filter: Filter = .actionable
 
     var body: some View {
-        VStack(spacing: 0) {
+        // Reading `store?.items` here at the view that owns the filter
+        // state guarantees SwiftUI registers the @Observable dependency
+        // when the view first mounts — not only when we toggle the
+        // filter. Without this the first render captures a stale empty
+        // snapshot and only refreshes after some other state change
+        // (e.g. flipping the filter) triggers a body recomputation.
+        let items = FeedCoordinator.shared.store?.items ?? []
+        return VStack(spacing: 0) {
             controlBar
             Divider()
-            FeedListView(
-                filter: filter,
-                store: FeedCoordinator.shared.store
-            )
+            FeedListView(filter: filter, items: items)
         }
     }
 
@@ -63,53 +67,51 @@ struct FeedPanelView: View {
 }
 
 /// Inner list view. Isolated so the outer panel's `@State` changes don't
-/// invalidate rows unnecessarily.
+/// invalidate rows unnecessarily. Receives items as a plain value so
+/// its body never touches the live store — the parent owns the
+/// observation.
 private struct FeedListView: View {
     let filter: FeedPanelView.Filter
-    let store: WorkstreamStore?
+    let items: [WorkstreamItem]
 
     var body: some View {
-        if let store {
-            let items = snapshot(from: store)
-            if items.isEmpty {
-                emptyState
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        let pending = items.filter { $0.status.isPending }
-                        let rest = items.filter { !$0.status.isPending }
-                        ForEach(pending, id: \.id) { item in
-                            FeedItemRow(
-                                snapshot: FeedItemSnapshot(item: item),
-                                actions: FeedRowActions.bound()
-                            )
-                        }
-                        if !pending.isEmpty && !rest.isEmpty {
-                            ResolvedDivider()
-                        }
-                        ForEach(rest, id: \.id) { item in
-                            FeedItemRow(
-                                snapshot: FeedItemSnapshot(item: item),
-                                actions: FeedRowActions.bound()
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 8)
-                }
-            }
-        } else {
+        let visible = filtered(items)
+        if visible.isEmpty {
             emptyState
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    let pending = visible.filter { $0.status.isPending }
+                    let rest = visible.filter { !$0.status.isPending }
+                    ForEach(pending, id: \.id) { item in
+                        FeedItemRow(
+                            snapshot: FeedItemSnapshot(item: item),
+                            actions: FeedRowActions.bound()
+                        )
+                    }
+                    if !pending.isEmpty && !rest.isEmpty {
+                        ResolvedDivider()
+                    }
+                    ForEach(rest, id: \.id) { item in
+                        FeedItemRow(
+                            snapshot: FeedItemSnapshot(item: item),
+                            actions: FeedRowActions.bound()
+                        )
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+            }
         }
     }
 
-    private func snapshot(from store: WorkstreamStore) -> [WorkstreamItem] {
+    private func filtered(_ items: [WorkstreamItem]) -> [WorkstreamItem] {
         let base: [WorkstreamItem]
         switch filter {
         case .actionable:
-            base = store.actionable
+            base = items.filter { $0.kind.isActionable }
         case .all:
-            base = store.items
+            base = items
         }
         return base.sorted { a, b in
             if a.status.isPending != b.status.isPending {

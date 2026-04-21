@@ -107,16 +107,13 @@ private struct ModeBarButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: mode.symbolName)
-                        .font(.system(size: 11, weight: .medium))
-                    if badgeCount > 0 {
-                        pendingBadge
-                            .offset(x: 6, y: -5)
-                    }
-                }
+                Image(systemName: mode.symbolName)
+                    .font(.system(size: 11, weight: .medium))
                 Text(mode.label)
                     .font(.system(size: 11, weight: .medium))
+                if badgeCount > 0 {
+                    pendingChip
+                }
             }
             .foregroundColor(isSelected ? .primary : .secondary)
             .padding(.horizontal, 8)
@@ -149,15 +146,20 @@ private struct ModeBarButton: View {
         return Color.clear
     }
 
-    private var pendingBadge: some View {
+    /// Subtle inline count chip that sits after the label instead of
+    /// floating a red capsule over the icon. Tinted orange (the "needs
+    /// attention" color used elsewhere in the Feed) and sized to match
+    /// the label's typography.
+    private var pendingChip: some View {
         let countText = badgeCount > 9 ? "9+" : String(badgeCount)
         return Text(countText)
-            .font(.system(size: 9, weight: .bold).monospacedDigit())
-            .foregroundColor(.white)
-            .padding(.horizontal, 3)
-            .frame(minWidth: 12, minHeight: 12)
+            .font(.system(size: 10, weight: .bold).monospacedDigit())
+            .foregroundColor(.orange)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
             .background(
-                Capsule().fill(Color.red)
+                Capsule(style: .continuous)
+                    .fill(Color.orange.opacity(0.20))
             )
     }
 }
