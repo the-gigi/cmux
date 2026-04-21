@@ -374,11 +374,17 @@ struct FeedItemRow: View {
                     bg: sourceChipBackground
                 )
                 chip(
+                    text: "cmux",
+                    fg: .secondary,
+                    bg: Color.primary.opacity(0.10)
+                )
+                chip(
                     text: relativeTimeChip(snapshot.createdAt),
                     fg: .secondary,
                     bg: Color.primary.opacity(0.10),
                     mono: true
                 )
+                jumpChip
             }
         }
     }
@@ -410,7 +416,7 @@ struct FeedItemRow: View {
 
     private var jumpChip: some View {
         HStack(spacing: 2) {
-            Text("⌘G")
+            Text("^G")
                 .font(.system(size: 10, weight: .semibold).monospaced())
             Image(systemName: "arrow.up.forward")
                 .font(.system(size: 8, weight: .semibold))
@@ -609,7 +615,6 @@ private struct PermissionActionArea: View {
                     ) { onApprove(.once) }
                     PermissionCTAButton(
                         label: String(localized: "feed.permission.always", defaultValue: "Always Allow"),
-                        shortcut: "⌃A",
                         role: .blue
                     ) { onApprove(.always) }
                     PermissionCTAButton(
@@ -637,17 +642,17 @@ private struct PermissionActionArea: View {
             toolName: toolName,
             toolInputJSON: toolInputJSON
         )
-        return VStack(alignment: .leading, spacing: 4) {
+        return VStack(alignment: .leading, spacing: 6) {
             if let primary = preview.primary {
-                HStack(alignment: .top, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     if let sigil = preview.sigil {
                         Text(sigil)
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
                             .foregroundColor(.orange)
                     }
                     Text(primary)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.primary.opacity(0.9))
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundColor(.primary.opacity(0.95))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -655,12 +660,12 @@ private struct PermissionActionArea: View {
             if let secondary = preview.secondary, !secondary.isEmpty {
                 Text(secondary)
                     .font(.system(size: 11))
-                    .foregroundColor(.secondary.opacity(0.9))
+                    .foregroundColor(.secondary.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
+        .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(Color.primary.opacity(0.05))
