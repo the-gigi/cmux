@@ -121,7 +121,10 @@ private struct FeedPreviewCardHost: View {
 
     var body: some View {
         FeedItemRow(
-            snapshot: FeedItemSnapshot(item: item),
+            snapshot: FeedItemSnapshot(
+                item: item,
+                userPromptEcho: "make a plan and ask me for permissions requests…"
+            ),
             actions: FeedPreviewActions.make()
         )
     }

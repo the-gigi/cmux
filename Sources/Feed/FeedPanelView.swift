@@ -110,6 +110,7 @@ private struct FeedListView: View {
 
     var body: some View {
         let visible = filtered(items)
+        let lastPromptByWorkstream = Self.lastPromptByWorkstream(items)
         if visible.isEmpty {
             emptyState
         } else {
@@ -119,7 +120,10 @@ private struct FeedListView: View {
                     let rest = visible.filter { !$0.status.isPending }
                     ForEach(pending, id: \.id) { item in
                         FeedItemRow(
-                            snapshot: FeedItemSnapshot(item: item),
+                            snapshot: FeedItemSnapshot(
+                                item: item,
+                                userPromptEcho: lastPromptByWorkstream[item.workstreamId]
+                            ),
                             actions: FeedRowActions.bound()
                         )
                     }
@@ -128,7 +132,10 @@ private struct FeedListView: View {
                     }
                     ForEach(rest, id: \.id) { item in
                         FeedItemRow(
-                            snapshot: FeedItemSnapshot(item: item),
+                            snapshot: FeedItemSnapshot(
+                                item: item,
+                                userPromptEcho: lastPromptByWorkstream[item.workstreamId]
+                            ),
                             actions: FeedRowActions.bound()
                         )
                     }
@@ -137,6 +144,21 @@ private struct FeedListView: View {
                 .padding(.vertical, 8)
             }
         }
+    }
+
+    /// Walks the full items list (not just the filtered visible set),
+    /// ordered by createdAt, and records the most recent user-prompt
+    /// text per workstreamId. Rows consult this dict to show a
+    /// "You: …" echo line at the top of their card.
+    private static func lastPromptByWorkstream(_ items: [WorkstreamItem]) -> [String: String] {
+        var out: [String: String] = [:]
+        let sorted = items.sorted { $0.createdAt < $1.createdAt }
+        for item in sorted {
+            if case .userPrompt(let text) = item.payload, !text.isEmpty {
+                out[item.workstreamId] = text
+            }
+        }
+        return out
     }
 
     private func filtered(_ items: [WorkstreamItem]) -> [WorkstreamItem] {
@@ -192,8 +214,12 @@ struct FeedItemSnapshot: Equatable {
     let createdAt: Date
     let status: WorkstreamStatus
     let payload: WorkstreamPayload
+    /// Most recent user-prompt text in the same workstream, attached
+    /// by the list view so every card can show a "You: …" echo for
+    /// context, even when the agent payload doesn't carry it directly.
+    let userPromptEcho: String?
 
-    init(item: WorkstreamItem) {
+    init(item: WorkstreamItem, userPromptEcho: String? = nil) {
         self.id = item.id
         self.workstreamId = item.workstreamId
         self.source = item.source
@@ -203,6 +229,7 @@ struct FeedItemSnapshot: Equatable {
         self.createdAt = item.createdAt
         self.status = item.status
         self.payload = item.payload
+        self.userPromptEcho = userPromptEcho
     }
 }
 
@@ -304,16 +331,20 @@ struct FeedItemRow: View {
     }
 
     private var promptEcho: String? {
-        switch snapshot.payload {
-        case .permissionRequest(_, let toolName, _, _):
-            return "You: \(toolName) request from \(snapshot.source.rawValue.capitalized)"
-        case .exitPlan:
-            return nil
-        case .question:
-            return nil
-        default:
-            return nil
+        // Prefer the real user prompt attached by the list view (walks
+        // the same workstream for the most recent .userPrompt
+        // telemetry). Falls back to the older synthesized text for
+        // permission cards only, so new sessions without a prompt echo
+        // still say something useful in that specific case.
+        if let echo = snapshot.userPromptEcho,
+           !echo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return "You: \(echo)"
         }
+        if case .permissionRequest(_, let toolName, _, _) = snapshot.payload {
+            return "You: \(toolName) request from \(snapshot.source.rawValue.capitalized)"
+        }
+        return nil
     }
 
     private var isResolvedOrExpired: Bool {
@@ -356,11 +387,11 @@ struct FeedItemRow: View {
     private var chipHeader: some View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: snapshot.kind.symbolName)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundColor(kindTint)
                 .frame(width: 14, height: 14)
             Text(headerTitle)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.primary.opacity(0.92))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -409,9 +440,9 @@ struct FeedItemRow: View {
     private var jumpChip: some View {
         HStack(spacing: 2) {
             Text("^G")
-                .font(.system(size: 10, weight: .semibold).monospaced())
+                .font(.system(size: 10, weight: .medium).monospaced())
             Image(systemName: "arrow.up.forward")
-                .font(.system(size: 8, weight: .semibold))
+                .font(.system(size: 8, weight: .medium))
         }
         .foregroundColor(.blue)
         .padding(.horizontal, 5)
@@ -425,8 +456,8 @@ struct FeedItemRow: View {
     private func chip(text: String, fg: Color, bg: Color, mono: Bool = false) -> some View {
         Text(text)
             .font(mono
-                  ? .system(size: 10, weight: .semibold).monospacedDigit()
-                  : .system(size: 10, weight: .semibold))
+                  ? .system(size: 10, weight: .medium).monospacedDigit()
+                  : .system(size: 10, weight: .medium))
             .foregroundColor(fg)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
@@ -621,10 +652,10 @@ private struct PermissionActionArea: View {
     private var toolLabel: some View {
         HStack(spacing: 5) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundColor(.orange)
             Text(toolName)
-                .font(.system(size: 11, weight: .bold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.orange)
         }
     }
@@ -639,7 +670,7 @@ private struct PermissionActionArea: View {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if let sigil = preview.sigil {
                         Text(sigil)
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundColor(.orange)
                     }
                     Text(primary)
@@ -756,13 +787,13 @@ struct FeedButton: View {
             HStack(spacing: iconSpacing) {
                 if let leadingIcon {
                     Image(systemName: leadingIcon)
-                        .font(.system(size: iconSize, weight: .semibold))
+                        .font(.system(size: iconSize, weight: .medium))
                 }
                 Text(label)
-                    .font(.system(size: labelSize, weight: .semibold))
+                    .font(.system(size: labelSize, weight: .medium))
                 if let trailingIcon {
                     Image(systemName: trailingIcon)
-                        .font(.system(size: iconSize, weight: .semibold))
+                        .font(.system(size: iconSize, weight: .medium))
                 }
             }
             .foregroundColor(foreground)
@@ -923,7 +954,7 @@ private struct PlanBodyView: View {
                 switch block {
                 case .heading(let text):
                     Text(text)
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.primary.opacity(0.95))
                         .padding(.top, 2)
                 case .paragraph(let text):
@@ -936,7 +967,7 @@ private struct PlanBodyView: View {
                         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                             HStack(alignment: .top, spacing: 5) {
                                 Text("\(item.index).")
-                                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                                    .font(.system(size: 11, weight: .medium).monospacedDigit())
                                     .foregroundColor(.secondary)
                                 Text(item.text)
                                     .font(.system(size: 11))
@@ -950,7 +981,7 @@ private struct PlanBodyView: View {
                         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                             HStack(alignment: .top, spacing: 5) {
                                 Text("·")
-                                    .font(.system(size: 11, weight: .semibold))
+                                    .font(.system(size: 11, weight: .medium))
                                     .foregroundColor(Color.blue.opacity(0.8))
                                 Text(item)
                                     .font(.system(size: 11))
@@ -1086,7 +1117,7 @@ private struct QuestionActionArea: View {
                 .font(.system(size: 10))
                 .foregroundColor(.blue)
             Text("Question")
-                .font(.system(size: 11, weight: .bold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.blue)
             Text("(\(questions.count) \(questions.count == 1 ? "question" : "questions"))")
                 .font(.system(size: 10))
@@ -1098,19 +1129,19 @@ private struct QuestionActionArea: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .top, spacing: 5) {
                 Text("\(index).")
-                    .font(.system(size: 11, weight: .bold).monospacedDigit())
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
                     .foregroundColor(.blue)
                 Text(question.prompt)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.primary.opacity(0.95))
                     .fixedSize(horizontal: false, vertical: true)
             }
             if question.multiSelect {
                 HStack(spacing: 3) {
                     Image(systemName: "checklist")
-                        .font(.system(size: 8, weight: .semibold))
+                        .font(.system(size: 8, weight: .medium))
                     Text("Multi-select")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: 9, weight: .semibold))
                         .tracking(0.3)
                 }
                 .foregroundColor(.orange)
@@ -1321,7 +1352,7 @@ private struct TodoListBody: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 4) {
                 Text("Tasks")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.primary.opacity(0.9))
                 Text(summaryLabel)
                     .font(.system(size: 10))
@@ -1368,7 +1399,7 @@ private struct TodoListBody: View {
     private func row(_ todo: WorkstreamTaskTodo) -> some View {
         HStack(alignment: .top, spacing: 6) {
             Image(systemName: symbol(for: todo.state))
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundColor(color(for: todo.state))
                 .frame(width: 14, height: 14)
             Text(todo.content)
@@ -1405,7 +1436,7 @@ private struct ResolvedDivider: View {
         HStack(spacing: 8) {
             line
             Text(String(localized: "feed.divider.resolved", defaultValue: "Resolved"))
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: 10, weight: .medium))
                 .tracking(0.5)
                 .foregroundColor(.secondary.opacity(0.7))
             line
