@@ -134,8 +134,8 @@ private struct FeedListView: View {
                         if idx < visible.count - 1 {
                             Rectangle()
                                 .fill(Color.primary.opacity(0.08))
+                                .frame(maxWidth: .infinity)
                                 .frame(height: 1)
-                                .padding(.horizontal, 8)
                         }
                     }
                 }
