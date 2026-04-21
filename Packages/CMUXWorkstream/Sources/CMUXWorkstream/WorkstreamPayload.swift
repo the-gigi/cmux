@@ -22,10 +22,15 @@ public enum WorkstreamExitPlanMode: String, Codable, Sendable, Equatable, CaseIt
 public struct WorkstreamQuestionOption: Codable, Sendable, Equatable {
     public let id: String
     public let label: String
+    /// Optional longer description for each option. When present,
+    /// the Feed renders the option in long-form card style with the
+    /// description as secondary text.
+    public let description: String?
 
-    public init(id: String, label: String) {
+    public init(id: String, label: String, description: String? = nil) {
         self.id = id
         self.label = label
+        self.description = description
     }
 }
 
@@ -34,17 +39,22 @@ public struct WorkstreamQuestionOption: Codable, Sendable, Equatable {
 /// call, so a payload carries an array of these.
 public struct WorkstreamQuestionPrompt: Codable, Sendable, Equatable, Identifiable {
     public let id: String
+    /// Optional short header / category (e.g. Claude's "[Demo task]").
+    /// Rendered above the prompt when present.
+    public let header: String?
     public let prompt: String
     public let multiSelect: Bool
     public let options: [WorkstreamQuestionOption]
 
     public init(
         id: String,
+        header: String? = nil,
         prompt: String,
         multiSelect: Bool,
         options: [WorkstreamQuestionOption]
     ) {
         self.id = id
+        self.header = header
         self.prompt = prompt
         self.multiSelect = multiSelect
         self.options = options

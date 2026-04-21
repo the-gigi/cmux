@@ -1,3 +1,4 @@
+import AppKit
 import CMUXWorkstream
 import SwiftUI
 
@@ -299,6 +300,7 @@ struct FeedItemRow: View {
     let actions: FeedRowActions
 
     @State private var isHovered: Bool = false
+    @State private var jumpFlash: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -319,15 +321,32 @@ struct FeedItemRow: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(cardBackground)
         )
+        .overlay(
+            // Blue ring flash on tap → jump. Animated in/out via the
+            // jumpFlash @State; the stroke is transparent otherwise.
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(
+                    Color(red: 0.28, green: 0.55, blue: 0.95)
+                        .opacity(jumpFlash ? 0.85 : 0),
+                    lineWidth: 2
+                )
+                .animation(.easeOut(duration: 0.5), value: jumpFlash)
+        )
         .opacity(isResolvedOrExpired ? 0.6 : 1.0)
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onHover { isHovered = $0 }
         .help(helpText)
-        // Note: no card-wide tap gesture — the `⌘G ↗` chip in the
-        // header is the explicit jump affordance. A card-wide
-        // onTapGesture(count: 2) would add ~500ms latency to every
-        // button press inside the card while AppKit waits to see if a
-        // second tap arrives.
+        // Single-tap on the card background jumps to the agent's
+        // cmux terminal. SwiftUI routes the tap to child Buttons
+        // first (action pills, option chips), so this only fires
+        // when clicking outside a button — no latency cost.
+        .onTapGesture {
+            actions.jump(workstreamIdForJump)
+            jumpFlash = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+                jumpFlash = false
+            }
+        }
     }
 
     private var promptEcho: String? {
@@ -783,7 +802,13 @@ struct FeedButton: View {
     @State private var isHovered: Bool = false
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            // `dimmed` doubles as the disabled signal — swallow the
+            // click at the primitive so upstream action closures don't
+            // have to re-check.
+            guard !dimmed else { return }
+            action()
+        } label: {
             HStack(spacing: iconSpacing) {
                 if let leadingIcon {
                     Image(systemName: leadingIcon)
@@ -808,7 +833,18 @@ struct FeedButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
+        .onHover { hovering in
+            isHovered = hovering
+            // Push the appropriate macOS cursor: "operation not
+            // allowed" when disabled, "pointing hand" when clickable.
+            // Pop on mouseout so the cursor doesn't stay stuck when
+            // the pointer leaves.
+            if hovering {
+                (dimmed ? NSCursor.operationNotAllowed : NSCursor.pointingHand).push()
+            } else {
+                NSCursor.pop()
+            }
+        }
         .help(label)
     }
 
@@ -1102,13 +1138,26 @@ private struct QuestionActionArea: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             headerLine
-            ForEach(Array(questions.enumerated()), id: \.offset) { idx, q in
-                questionBlock(index: idx + 1, question: q)
+            if shouldRenderLongForm, let q = questions.first {
+                longFormBlock(question: q)
+            } else {
+                ForEach(Array(questions.enumerated()), id: \.offset) { idx, q in
+                    questionBlock(index: idx + 1, question: q)
+                }
             }
-            if status.isPending {
+            if status.isPending, !shouldRenderLongForm {
                 submitCTA
             }
         }
+    }
+
+    private var shouldRenderLongForm: Bool {
+        // Long-form: single question whose options carry descriptions
+        // (e.g. Claude's AskUserQuestion with `header` + per-option
+        // detail). Multi-option list with a bigger rich-text card per
+        // option, click-to-select.
+        guard questions.count == 1, let q = questions.first else { return false }
+        return q.options.contains { $0.description?.isEmpty == false }
     }
 
     private var headerLine: some View {
@@ -1116,12 +1165,90 @@ private struct QuestionActionArea: View {
             Image(systemName: "bubble.left.and.bubble.right.fill")
                 .font(.system(size: 10))
                 .foregroundColor(.blue)
-            Text("Question")
+            Text("Claude's Question")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.blue)
-            Text("(\(questions.count) \(questions.count == 1 ? "question" : "questions"))")
-                .font(.system(size: 10))
-                .foregroundColor(.blue.opacity(0.7))
+            if questions.count > 1 {
+                Text("(\(questions.count) questions)")
+                    .font(.system(size: 10))
+                    .foregroundColor(.blue.opacity(0.7))
+            }
+        }
+    }
+
+    /// Long-form rendering: single question with rich options. Each
+    /// option becomes a tappable card with numbered index, title, and
+    /// description. Selecting immediately submits (no separate Submit
+    /// button required).
+    @ViewBuilder
+    private func longFormBlock(question: WorkstreamQuestionPrompt) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let header = question.header, !header.isEmpty {
+                Text("[\(header)] ")
+                    .foregroundColor(.blue)
+                + Text(question.prompt)
+                    .foregroundColor(.primary.opacity(0.95))
+            } else if !question.prompt.isEmpty {
+                Text(question.prompt)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.primary.opacity(0.95))
+            }
+            ForEach(Array(question.options.enumerated()), id: \.offset) { idx, option in
+                longFormOptionCard(
+                    questionId: question.id,
+                    index: idx + 1,
+                    option: option
+                )
+            }
+        }
+    }
+
+    private func longFormOptionCard(
+        questionId: String,
+        index: Int,
+        option: WorkstreamQuestionOption
+    ) -> some View {
+        Button {
+            // Long-form is always single-select, and selecting submits
+            // immediately because there's no separate Submit button.
+            onReply(["\(questionId):\(option.id)"])
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Text("\(index)")
+                    .font(.system(size: 11, weight: .bold).monospacedDigit())
+                    .foregroundColor(.white)
+                    .frame(width: 20, height: 20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(Color(red: 0.24, green: 0.48, blue: 0.88))
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(option.label)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.primary)
+                    if let description = option.description, !description.isEmpty {
+                        Text(description)
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary.opacity(0.6))
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(0.05))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
         }
     }
 
@@ -1207,38 +1334,26 @@ private struct QuestionActionArea: View {
     }
 
     private var submitCTA: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            FeedButton(
-                label: String(localized: "feed.question.submitAll", defaultValue: "Submit All Answers"),
-                leadingIcon: "checkmark.circle.fill",
-                kind: allAnswered ? .primary : .soft,
-                size: .medium,
-                fullWidth: true,
-                dimmed: !allAnswered
-            ) {
-                // Flatten every question's selections into a single
-                // array, prefixed with the question id so the agent
-                // receives `["q0:minimal", "q1:reload_tagged"]`.
-                guard allAnswered else { return }
-                var out: [String] = []
-                for q in questions {
-                    if let set = selections[q.id] {
-                        for id in set { out.append("\(q.id):\(id)") }
-                    }
+        FeedButton(
+            label: String(localized: "feed.question.submitAll", defaultValue: "Submit All Answers"),
+            leadingIcon: "checkmark.circle.fill",
+            kind: allAnswered ? .primary : .soft,
+            size: .medium,
+            fullWidth: true,
+            dimmed: !allAnswered
+        ) {
+            // Flatten every question's selections into a single array,
+            // prefixed with the question id so the agent receives
+            // `["q0:minimal", "q1:reload_tagged"]`. `dimmed` blocks
+            // clicks at the FeedButton layer, so we don't need a
+            // guard here.
+            var out: [String] = []
+            for q in questions {
+                if let set = selections[q.id] {
+                    for id in set { out.append("\(q.id):\(id)") }
                 }
-                onReply(out)
             }
-
-            if !allAnswered {
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9))
-                    Text(String(localized: "feed.question.answerAll",
-                                defaultValue: "Please answer all questions"))
-                        .font(.system(size: 10, weight: .medium))
-                }
-                .foregroundColor(.orange)
-            }
+            onReply(out)
         }
     }
 }

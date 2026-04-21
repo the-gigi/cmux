@@ -274,6 +274,8 @@ public final class WorkstreamStore {
     }
 
     private static func makeQuestion(from dict: [String: Any], fallbackId: String) -> WorkstreamQuestionPrompt {
+        let header = (dict["header"] as? String)
+            ?? (dict["title"] as? String)
         let prompt = (dict["question"] as? String)
             ?? (dict["prompt"] as? String)
             ?? ""
@@ -288,11 +290,15 @@ public final class WorkstreamStore {
             } else if let d = raw as? [String: Any] {
                 let id = (d["id"] as? String) ?? "opt\(i)"
                 let label = (d["label"] as? String) ?? (d["title"] as? String) ?? id
-                options.append(WorkstreamQuestionOption(id: id, label: label))
+                let description = (d["description"] as? String) ?? (d["detail"] as? String)
+                options.append(WorkstreamQuestionOption(
+                    id: id, label: label, description: description
+                ))
             }
         }
         return WorkstreamQuestionPrompt(
             id: (dict["id"] as? String) ?? fallbackId,
+            header: header,
             prompt: prompt,
             multiSelect: multi,
             options: options

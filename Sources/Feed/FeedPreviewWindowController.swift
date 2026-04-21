@@ -275,12 +275,25 @@ enum FeedPreviewFixtures {
                 questions: [
                     WorkstreamQuestionPrompt(
                         id: "q0",
-                        prompt: "Which demo flavor should this plan emphasize?",
+                        header: "Demo task",
+                        prompt: "What flavor of demo plan should I write so we can show off the permission-prompt UX?",
                         multiSelect: false,
                         options: [
-                            .init(id: "minimal", label: "Minimal (Recommended)"),
-                            .init(id: "rich", label: "Rich preview"),
-                            .init(id: "kitchen", label: "Kitchen sink"),
+                            .init(
+                                id: "shell",
+                                label: "Tiny shell script",
+                                description: "A throwaway bash script in /Users/lawrence/fun that prints a greeting — minimal, quick to approve."
+                            ),
+                            .init(
+                                id: "node",
+                                label: "Node CLI tool",
+                                description: "A small Node.js CLI that fetches a URL — exercises install + network permissions."
+                            ),
+                            .init(
+                                id: "python",
+                                label: "Python data script",
+                                description: "A Python script that reads a CSV and prints stats — exercises pip + file read permissions."
+                            ),
                         ]
                     ),
                     WorkstreamQuestionPrompt(
