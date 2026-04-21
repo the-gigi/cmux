@@ -5,6 +5,44 @@ import type { Registry } from "./registry";
 export type StackBearer = { accessToken: string; refreshToken: string };
 
 /**
+ * Gate for `/api/rivet/*`. Our REST routes already authenticate and do ownership checks;
+ * Rivet's catch-all then proxies into the actor system. Without a shared secret, any
+ * authenticated user could point a raw RivetKit client at `/api/rivet/*` and call
+ * `userVmsActor.getOrCreate([otherUserId]).list()` — the key is client-chosen, so auth
+ * alone is not enough. With this header, the catch-all drops unauthenticated (i.e. non-
+ * REST-originated) traffic before it reaches any actor. The REST layer supplies the value;
+ * external clients cannot forge it.
+ */
+export const RIVET_INTERNAL_HEADER = "x-cmux-rivet-internal";
+
+/**
+ * Read the internal secret lazily so tests can override via process.env before the module
+ * is loaded. In production we require the caller to set it explicitly so we don't degrade
+ * into "any authenticated request is trusted".
+ */
+function rivetInternalSecret(): string {
+  const value = process.env.CMUX_RIVET_INTERNAL_SECRET?.trim();
+  if (value) return value;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "CMUX_RIVET_INTERNAL_SECRET must be set in production (used to gate /api/rivet/*).",
+    );
+  }
+  // Dev fallback: a deterministic-but-long token so local testing works without secret
+  // wrangling. Never trust this on a deployed environment.
+  return "cmux-dev-rivet-internal-secret-rotate-in-production";
+}
+
+export function assertRivetInternal(request: Request): boolean {
+  const header = request.headers.get(RIVET_INTERNAL_HEADER);
+  if (!header) return false;
+  const expected = rivetInternalSecret();
+  // Constant-time string compare wouldn't help much here (length is fixed, leak surface is
+  // bounded by the handful of dev/prod values), but we keep it simple and direct.
+  return header === expected;
+}
+
+/**
  * Authoritative base URL for the Rivet gateway. On Vercel we trust VERCEL_URL (deployment
  * only, set by the platform). Local dev reads `CMUX_VM_API_BASE_URL` or falls back to
  * `http://localhost:3000`. Deriving this from `request.url.origin` is unsafe — a misconfigured
@@ -35,6 +73,7 @@ export function rivetClient(bearer: StackBearer): Client<Registry> {
     headers: {
       authorization: `Bearer ${bearer.accessToken}`,
       "x-stack-refresh-token": bearer.refreshToken,
+      [RIVET_INTERNAL_HEADER]: rivetInternalSecret(),
     },
   });
 }
