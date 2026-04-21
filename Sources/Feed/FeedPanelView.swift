@@ -374,17 +374,11 @@ struct FeedItemRow: View {
                     bg: sourceChipBackground
                 )
                 chip(
-                    text: "cmux",
-                    fg: .secondary,
-                    bg: Color.primary.opacity(0.10)
-                )
-                chip(
                     text: relativeTimeChip(snapshot.createdAt),
                     fg: .secondary,
                     bg: Color.primary.opacity(0.10),
                     mono: true
                 )
-                jumpChip
             }
         }
     }
