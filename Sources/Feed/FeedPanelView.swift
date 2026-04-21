@@ -594,45 +594,215 @@ private struct PermissionActionArea: View {
     let onApprove: (WorkstreamPermissionMode) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if !toolInputJSON.isEmpty && toolInputJSON != "{}" {
-                Text(toolInputJSON)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.secondary.opacity(0.9))
-                    .lineLimit(3)
-                    .truncationMode(.tail)
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            toolLabel
+            codeBlock
             if status.isPending {
                 HStack(spacing: 6) {
-                    FeedPillButton(
-                        label: String(localized: "feed.permission.once", defaultValue: "Once"),
-                        symbolName: "checkmark.circle",
-                        style: .action
-                    ) { onApprove(.once) }
-                    FeedPillButton(
-                        label: String(localized: "feed.permission.always", defaultValue: "Always"),
-                        symbolName: "infinity",
-                        style: .action
-                    ) { onApprove(.always) }
-                    FeedPillButton(
-                        label: String(localized: "feed.permission.all", defaultValue: "All tools"),
-                        symbolName: "checkmark.seal",
-                        style: .action
-                    ) { onApprove(.all) }
-                    FeedPillButton(
-                        label: String(localized: "feed.permission.bypass", defaultValue: "Bypass"),
-                        symbolName: "bolt",
-                        style: .action
-                    ) { onApprove(.bypass) }
-                    Spacer(minLength: 4)
-                    FeedPillButton(
+                    PermissionCTAButton(
                         label: String(localized: "feed.permission.deny", defaultValue: "Deny"),
-                        symbolName: "xmark.circle",
-                        tint: .red,
-                        style: .action
+                        role: .dark
                     ) { onApprove(.deny) }
+                    PermissionCTAButton(
+                        label: String(localized: "feed.permission.once", defaultValue: "Allow Once"),
+                        role: .light
+                    ) { onApprove(.once) }
+                    PermissionCTAButton(
+                        label: String(localized: "feed.permission.always", defaultValue: "Always Allow"),
+                        shortcut: "⌃A",
+                        role: .blue
+                    ) { onApprove(.always) }
+                    PermissionCTAButton(
+                        label: String(localized: "feed.permission.bypass", defaultValue: "Bypass"),
+                        role: .red
+                    ) { onApprove(.bypass) }
                 }
             }
+        }
+    }
+
+    private var toolLabel: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.orange)
+            Text(toolName)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(.orange)
+        }
+    }
+
+    private var codeBlock: some View {
+        let preview = PermissionInputPreview(
+            toolName: toolName,
+            toolInputJSON: toolInputJSON
+        )
+        return VStack(alignment: .leading, spacing: 4) {
+            if let primary = preview.primary {
+                HStack(alignment: .top, spacing: 6) {
+                    if let sigil = preview.sigil {
+                        Text(sigil)
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.orange)
+                    }
+                    Text(primary)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.primary.opacity(0.9))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if let secondary = preview.secondary, !secondary.isEmpty {
+                Text(secondary)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.primary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+        )
+    }
+}
+
+/// Pulls a human-readable command + description out of an agent's
+/// tool_input JSON. Handles Bash (`command` + `description`), Write /
+/// Edit / Read (`file_path`), and falls back to the raw JSON.
+private struct PermissionInputPreview {
+    let sigil: String?
+    let primary: String?
+    let secondary: String?
+
+    init(toolName: String, toolInputJSON: String) {
+        let dict = (try? JSONSerialization.jsonObject(
+            with: Data(toolInputJSON.utf8)
+        )) as? [String: Any] ?? [:]
+
+        switch toolName.lowercased() {
+        case "bash":
+            self.sigil = "$"
+            self.primary = (dict["command"] as? String) ?? toolInputJSON
+            self.secondary = (dict["description"] as? String)
+        case "write", "edit", "multiedit":
+            self.sigil = nil
+            self.primary = (dict["file_path"] as? String) ?? toolInputJSON
+            if toolName.lowercased() == "write" {
+                let content = (dict["content"] as? String) ?? ""
+                let preview = content.split(separator: "\n").first.map(String.init) ?? ""
+                self.secondary = preview.isEmpty ? nil : preview
+            } else {
+                self.secondary = nil
+            }
+        case "read":
+            self.sigil = nil
+            self.primary = (dict["file_path"] as? String) ?? toolInputJSON
+            self.secondary = nil
+        default:
+            self.sigil = nil
+            self.primary = toolInputJSON == "{}" ? nil : toolInputJSON
+            self.secondary = nil
+        }
+    }
+}
+
+/// Four-role full-width button matching the Vibe-Island permission
+/// card: dark (Deny), light (Allow Once), blue (Always Allow), red
+/// (Bypass). Supports an optional monospace shortcut hint on the
+/// trailing side.
+private struct PermissionCTAButton: View {
+    enum Role { case dark, light, blue, red }
+    let label: String
+    var shortcut: String? = nil
+    let role: Role
+    let action: () -> Void
+
+    @State private var isHovered: Bool = false
+
+    init(
+        label: String,
+        shortcut: String? = nil,
+        role: Role,
+        action: @escaping () -> Void
+    ) {
+        self.label = label
+        self.shortcut = shortcut
+        self.role = role
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Text(label)
+                    .font(.system(size: 12, weight: .semibold))
+                if let shortcut {
+                    Text(shortcut)
+                        .font(.system(size: 10, weight: .semibold).monospaced())
+                        .foregroundColor(foreground.opacity(0.75))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(Color.black.opacity(0.20))
+                        )
+                }
+            }
+            .foregroundColor(foreground)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(fill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(border, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+
+    private var foreground: Color {
+        switch role {
+        case .dark: return .white
+        case .light: return .black
+        case .blue: return .white
+        case .red: return .white
+        }
+    }
+
+    private var fill: Color {
+        switch role {
+        case .dark:
+            return isHovered ? Color.black.opacity(0.85) : Color.black.opacity(0.75)
+        case .light:
+            return isHovered ? Color.white.opacity(0.95) : Color.white.opacity(0.88)
+        case .blue:
+            return isHovered
+                ? Color(red: 0.28, green: 0.55, blue: 0.95)
+                : Color(red: 0.24, green: 0.48, blue: 0.88)
+        case .red:
+            return isHovered
+                ? Color(red: 0.85, green: 0.28, blue: 0.28)
+                : Color(red: 0.75, green: 0.22, blue: 0.22)
+        }
+    }
+
+    private var border: Color {
+        switch role {
+        case .dark: return Color.white.opacity(0.10)
+        case .light: return Color.black.opacity(0.14)
+        case .blue: return Color.black.opacity(0.16)
+        case .red: return Color.black.opacity(0.20)
         }
     }
 }

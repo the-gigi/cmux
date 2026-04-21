@@ -240,8 +240,10 @@ enum FeedPreviewFixtures {
         case .permission:
             return (.permissionRequest, .permissionRequest(
                 requestId: "preview-perm",
-                toolName: "Write",
-                toolInputJSON: "{\"file_path\":\"/etc/passwd\",\"content\":\"…\"}",
+                toolName: "Bash",
+                toolInputJSON: """
+                {"command":"rm -rf /tmp/some-nonexistent-test-dir-xyz","description":"Attempt rm -rf to trigger permission prompt"}
+                """,
                 pattern: nil
             ))
         case .exitPlan:
