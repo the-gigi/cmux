@@ -113,16 +113,18 @@ actor VMClient {
     }
 
     func destroy(id: String) async throws {
-        let (data, http) = try await request("DELETE", path: "/api/vm/\(id)")
+        let encodedID = try pathSegment(id, fieldName: "vm id")
+        let (data, http) = try await request("DELETE", path: "/api/vm/\(encodedID)")
         try ensureOK(http, data: data)
     }
 
     func openSSH(id: String) async throws -> VMSSHEndpoint {
-        let (data, http) = try await request("POST", path: "/api/vm/\(id)/ssh-endpoint", jsonBody: [:])
+        let encodedID = try pathSegment(id, fieldName: "vm id")
+        let (data, http) = try await request("POST", path: "/api/vm/\(encodedID)/ssh-endpoint", jsonBody: [:])
         try ensureOK(http, data: data)
         let obj = try decodeJSONObject(data)
+        let port = try decodePort(obj["port"])
         guard let host = obj["host"] as? String,
-              let port = (obj["port"] as? Int) ?? (obj["port"] as? Double).map(Int.init),
               let username = obj["username"] as? String,
               let credDict = obj["credential"] as? [String: Any],
               let kind = credDict["kind"] as? String
@@ -155,9 +157,10 @@ actor VMClient {
 
     func exec(id: String, command: String, timeoutMs: Int = 30_000) async throws -> VMExecResult {
         let body: [String: Any] = ["command": command, "timeoutMs": timeoutMs]
+        let encodedID = try pathSegment(id, fieldName: "vm id")
         let (data, http) = try await request(
             "POST",
-            path: "/api/vm/\(id)/exec",
+            path: "/api/vm/\(encodedID)/exec",
             jsonBody: body
         )
         try ensureOK(http, data: data)
@@ -237,5 +240,30 @@ actor VMClient {
             throw VMClientError.malformedResponse("expected JSON object, got \(type(of: parsed))")
         }
         return obj
+    }
+
+    private func pathSegment(_ value: String, fieldName: String) throws -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/?#")
+        guard let encoded = value.addingPercentEncoding(withAllowedCharacters: allowed),
+              !encoded.isEmpty else {
+            throw VMClientError.malformedResponse("invalid \(fieldName)")
+        }
+        return encoded
+    }
+
+    private func decodePort(_ raw: Any?) throws -> Int {
+        let port: Int?
+        if let int = raw as? Int {
+            port = int
+        } else if let double = raw as? Double {
+            port = Int(exactly: double)
+        } else {
+            port = nil
+        }
+        guard let port, (1...65_535).contains(port) else {
+            throw VMClientError.malformedResponse("ssh-endpoint invalid port: \(String(describing: raw))")
+        }
+        return port
     }
 }
