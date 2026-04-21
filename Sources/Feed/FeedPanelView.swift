@@ -540,7 +540,13 @@ struct FeedItemRow: View {
                 toolName: toolName,
                 toolInputJSON: toolInputJSON,
                 status: snapshot.status,
-                onApprove: { mode in actions.approvePermission(snapshot.id, mode) }
+                onApprove: { mode in
+                    actions.approvePermission(snapshot.id, mode)
+                    let keys = FeedTUIKeys.permission(mode: mode)
+                    if !keys.isEmpty {
+                        actions.sendText(snapshot.workstreamId, keys)
+                    }
+                }
             )
         case .exitPlan(_, let plan, _):
             ExitPlanActionArea(
@@ -548,13 +554,25 @@ struct FeedItemRow: View {
                 status: snapshot.status,
                 onApprove: { mode, feedback in
                     actions.approveExitPlan(snapshot.id, mode, feedback)
+                    let keys = FeedTUIKeys.exitPlan(mode: mode, feedback: feedback)
+                    if !keys.isEmpty {
+                        actions.sendText(snapshot.workstreamId, keys)
+                    }
                 }
             )
         case .question(_, let questions):
             QuestionActionArea(
                 questions: questions,
                 status: snapshot.status,
-                onReply: { selections in actions.replyQuestion(snapshot.id, selections) }
+                onReply: { selections in
+                    actions.replyQuestion(snapshot.id, selections)
+                    let keys = FeedTUIKeys.question(
+                        questions: questions, selections: selections
+                    )
+                    if !keys.isEmpty {
+                        actions.sendText(snapshot.workstreamId, keys)
+                    }
+                }
             )
         case .stop:
             StopActionArea(
@@ -1516,6 +1534,80 @@ private struct FlowLayout: Layout {
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)
         }
+    }
+}
+
+/// Keystroke mappings for Claude Code's native interactive prompts.
+/// When the user picks an option in the Feed, we type these into the
+/// agent's terminal via `surface.send_text` to answer Claude's TUI.
+///
+/// The PreToolUse feed-hook is wired `async: true` in the Claude
+/// wrapper so Claude's native prompt appears instantly alongside the
+/// Feed card; the feed-hook's stdout is discarded. Without these
+/// keystrokes the user would have to answer twice (Feed + TUI).
+///
+/// Claude's prompts are all number-indexed menus (1 = default, N =
+/// deny/cancel). Indices here match Claude Code 2.1 behavior — if
+/// upstream re-orders options these mappings need updating.
+private enum FeedTUIKeys {
+    /// Bash / Edit / Write permission TUI:
+    ///   1. Yes, proceed once
+    ///   2. Yes, and don't ask again for this pattern
+    ///   3. No, and tell Claude what to do differently
+    /// Bypass maps to "Always" (closest equivalent; no native bypass).
+    static func permission(mode: WorkstreamPermissionMode) -> String {
+        switch mode {
+        case .once: return "1\r"
+        case .always, .all, .bypass: return "2\r"
+        case .deny: return "3\r"
+        }
+    }
+
+    /// ExitPlanMode TUI:
+    ///   1. Yes, and auto-accept edits
+    ///   2. Yes, and manually approve edits
+    ///   3. No, keep planning
+    /// Bypass maps to auto-accept; feedback sends Esc + free-text.
+    static func exitPlan(
+        mode: WorkstreamExitPlanMode, feedback: String?
+    ) -> String {
+        if let feedback, !feedback.isEmpty {
+            // Dismiss the plan-mode prompt (Esc), then submit the
+            // feedback as a new user input line.
+            return "\u{1B}\(feedback)\r"
+        }
+        switch mode {
+        case .autoAccept, .bypassPermissions: return "1\r"
+        case .manual: return "2\r"
+        case .deny: return "3\r"
+        }
+    }
+
+    /// AskUserQuestion TUI is a numbered list of the question's
+    /// options followed by "Type something" (free-form). For each
+    /// answered question, emit either the preset-option index or
+    /// "Type something" + typed text. Multiple answers are
+    /// concatenated; Claude's TUI buffers input and consumes one
+    /// question at a time.
+    static func question(
+        questions: [WorkstreamQuestionPrompt],
+        selections: [String]
+    ) -> String {
+        var out = ""
+        for (idx, answer) in selections.enumerated() {
+            guard idx < questions.count else { break }
+            let q = questions[idx]
+            if let match = q.options.firstIndex(where: { $0.label == answer }) {
+                out += "\(match + 1)\r"
+            } else {
+                // Free-text. "Type something" sits directly after the
+                // preset options in Claude's TUI, so its index is
+                // options.count + 1.
+                let freeFormIndex = q.options.count + 1
+                out += "\(freeFormIndex)\r\(answer)\r"
+            }
+        }
+        return out
     }
 }
 

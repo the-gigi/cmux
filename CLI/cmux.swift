@@ -14623,10 +14623,19 @@ struct CMUXCLI {
             ?? "\(source)-\(sessionId)-\(rawEvent)-\(Int(Date().timeIntervalSince1970 * 1000))"
         eventDict["_opencode_request_id"] = requestId
 
-        let waitTimeout: Double = isActionable ? 120 : 0
+        // Always non-blocking. The PreToolUse feed-hook is wired as
+        // `async: true` in the Claude wrapper (and equivalents) so
+        // Claude's native TUI prompt appears instantly — it doesn't
+        // wait for hook output. Feed-side user actions later type
+        // the chosen answer into the agent's terminal via
+        // `surface.send_text`, which dismisses the TUI prompt.
+        //
+        // We still fire a feed.push with `wait_timeout_seconds: 0`
+        // so the sidebar card appears alongside Claude's prompt.
+        _ = isActionable
         let params: [String: Any] = [
             "event": eventDict,
-            "wait_timeout_seconds": waitTimeout,
+            "wait_timeout_seconds": 0,
         ]
 
         let payload = try JSONSerialization.data(withJSONObject: [
@@ -14636,38 +14645,12 @@ struct CMUXCLI {
         ])
         let line = String(data: payload, encoding: .utf8) ?? "{}"
 
-        let response: String
-        do {
-            response = try client.send(command: line)
-        } catch {
-            // Socket unavailable → gracefully degrade: emit {} so the
-            // agent's default behavior takes over.
-            print("{}")
-            return
-        }
+        _ = try? client.send(command: line)
 
-        guard let respData = response.data(using: .utf8),
-              let respObj = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
-              let ok = respObj["ok"] as? Bool, ok,
-              let result = respObj["result"] as? [String: Any]
-        else {
-            print("{}")
-            return
-        }
-
-        let status = result["status"] as? String ?? "acknowledged"
-        if status == "resolved", let decision = result["decision"] as? [String: Any] {
-            // Translate decision into the agent's expected stdout format.
-            let out = Self.renderAgentDecision(
-                source: source,
-                hookEventName: hookEventName,
-                decision: decision
-            )
-            print(out)
-            return
-        }
-
-        // timed_out / acknowledged → fall through to agent default.
+        // Async hook; Claude discards this output. Still emit `{}`
+        // in case the wrapper is misconfigured as sync — keeps the
+        // agent from seeing garbage on stdout.
+        _ = hookEventName
         print("{}")
     }
 
