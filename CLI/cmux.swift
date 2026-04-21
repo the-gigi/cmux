@@ -14673,7 +14673,9 @@ struct CMUXCLI {
 
     /// Classifies a raw agent hook event into our wire `hook_event_name`
     /// plus an `isActionable` flag that drives whether `feed-hook`
-    /// blocks waiting for a user decision.
+    /// blocks waiting for a user decision. Mirrors Vibe Island's
+    /// behavior of surfacing every side-effecting tool as a
+    /// permission request, not just explicit Permission events.
     private static func classifyFeedEvent(
         event: String,
         toolName: String
@@ -14686,11 +14688,14 @@ struct CMUXCLI {
             case "AskUserQuestion":
                 return ("AskUserQuestion", true)
             default:
-                // Permission-bearing tools can surface here too, but
-                // Claude's native permission flow already prompts via the
-                // TUI and doesn't need an additional Feed round-trip. We
-                // only surface explicit permission requests when the
-                // agent emits `PermissionRequest` directly.
+                // Any tool that can mutate the environment surfaces as
+                // a permission request so the user can approve/deny
+                // from the Feed sidebar. Read-only tools stay as
+                // non-actionable telemetry so we don't flood the
+                // Actionable view with every file read.
+                if Self.sideEffectingTools.contains(toolName) {
+                    return ("PermissionRequest", true)
+                }
                 return ("PreToolUse", false)
             }
         case "PermissionRequest":
@@ -14711,6 +14716,21 @@ struct CMUXCLI {
             return ("PreToolUse", false)
         }
     }
+
+    /// Tools that mutate state and deserve a user-visible approve/
+    /// deny prompt in Feed. Keyed on the canonical tool names Claude,
+    /// Codex, and similar agents emit. Read-only tools (Read, Grep,
+    /// Glob, Task, WebFetch, WebSearch, LS, TodoWrite, …) are
+    /// intentionally excluded.
+    private static let sideEffectingTools: Set<String> = [
+        "Bash",
+        "Write",
+        "Edit",
+        "MultiEdit",
+        "NotebookEdit",
+        "apply_patch",   // Codex
+        "shell",         // Codex / other agents
+    ]
 
     /// Encodes the user's decision in the agent's expected hook stdout
     /// shape so the agent honors it.
