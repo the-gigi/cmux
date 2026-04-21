@@ -14647,18 +14647,20 @@ struct CMUXCLI {
             ?? "\(source)-\(sessionId)-\(rawEvent)-\(Int(Date().timeIntervalSince1970 * 1000))"
         eventDict["_opencode_request_id"] = requestId
 
-        // Non-blocking. Claude's wrapper wires the PreToolUse
-        // feed-hook as async:true, so Claude shows its native TUI
-        // prompt instantly (hook output is discarded). We fire
-        // feed.push so the Feed sidebar card renders in parallel,
-        // then return immediately. The Feed's click handlers type
-        // the matching keystrokes into the terminal to answer
-        // Claude's TUI — that's the actual unblock path.
-        _ = isActionable
-        _ = hookEventName
+        // Sync. For actionable events we block up to 120s waiting
+        // for the user's Feed click; the hook's stdout is then a
+        // proper hookSpecificOutput that Claude honors directly
+        // (no keystroke injection, no guessing the TUI layout).
+        // If the user doesn't click in time the hook emits {}
+        // and Claude falls back to its native TUI prompt.
+        //
+        // Wait is capped at 120s and the wrapper's hook timeout
+        // is 125s so the socket always returns before Claude
+        // would kill the hook subprocess itself.
+        let waitTimeout: Double = isActionable ? 120 : 0
         let params: [String: Any] = [
             "event": eventDict,
-            "wait_timeout_seconds": 0,
+            "wait_timeout_seconds": waitTimeout,
         ]
 
         let payload = try JSONSerialization.data(withJSONObject: [
@@ -14668,7 +14670,33 @@ struct CMUXCLI {
         ])
         let line = String(data: payload, encoding: .utf8) ?? "{}"
 
-        _ = try? client.send(command: line)
+        let response: String
+        do {
+            response = try client.send(command: line)
+        } catch {
+            print("{}")
+            return
+        }
+
+        guard let respData = response.data(using: .utf8),
+              let respObj = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
+              let ok = respObj["ok"] as? Bool, ok,
+              let result = respObj["result"] as? [String: Any]
+        else {
+            print("{}")
+            return
+        }
+
+        let status = result["status"] as? String ?? "acknowledged"
+        if status == "resolved", let decision = result["decision"] as? [String: Any] {
+            let out = Self.renderAgentDecision(
+                source: source,
+                hookEventName: hookEventName,
+                decision: decision
+            )
+            print(out)
+            return
+        }
         print("{}")
     }
 
