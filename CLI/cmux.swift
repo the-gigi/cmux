@@ -5290,10 +5290,20 @@ struct CMUXCLI {
             }
             // Freestyle gateway has a fresh host key per session and we re-mint per attach,
             // so skip the StrictHostKeyChecking y/n prompt and known_hosts caching.
+            //
+            // IdentitiesOnly=yes + IdentityFile=/dev/null is load-bearing: the gateway
+            // authenticates via the SSH "none" method (token embedded in the username). If
+            // OpenSSH offers any of the user's local pubkeys first, the gateway accepts the
+            // offer but rejects the signed challenge and closes the connection before "none"
+            // can be tried. With no identities offered, ssh falls through to "none" and
+            // succeeds.
             let sshOptionStrings = [
                 "StrictHostKeyChecking=no",
                 "UserKnownHostsFile=/dev/null",
                 "LogLevel=ERROR",
+                "IdentitiesOnly=yes",
+                "IdentityFile=/dev/null",
+                "PreferredAuthentications=none,password",
             ]
             let localSocketPath = client.socketPath
             let remoteRelayPort = generateRemoteRelayPort()
