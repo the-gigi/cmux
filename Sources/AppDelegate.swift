@@ -7592,8 +7592,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             else { return }
             _ = controller.handleSocketLine(line)
         }
-        invoke("workspace.select", ["workspace": workspaceId])
-        invoke("surface.focus", ["surface": surfaceId])
+        invoke("workspace.select", ["workspace_id": workspaceId])
+        invoke("surface.focus", ["surface_id": surfaceId])
+        // Flash the terminal's own focus ring (same visual as
+        // cmd+shift+H / Flash Focused Panel) so the user's eye is
+        // pulled to the terminal content the Feed jumped to.
+        invoke("surface.trigger_flash", ["surface_id": surfaceId])
     }
 
     @objc private func handleReactGrabDidCopySelection(_ notification: Notification) {

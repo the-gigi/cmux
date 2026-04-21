@@ -91262,6 +91262,23 @@
         }
       }
     },
+    "feed.question.typeSomething": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Type something…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自由記入…"
+          }
+        }
+      }
+    },
     "feed.question.answerAll": {
       "extractionState": "manual",
       "localizations": {

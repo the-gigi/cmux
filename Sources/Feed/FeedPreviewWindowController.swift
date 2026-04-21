@@ -336,7 +336,7 @@ enum FeedPreviewFixtures {
         switch kind {
         case .permission: return .permission(.once)
         case .exitPlan: return .exitPlan(.autoAccept)
-        case .question: return .question(selections: ["q0:minimal"])
+        case .question: return .question(selections: ["Tiny shell script"])
         default: return .permission(.once)
         }
     }

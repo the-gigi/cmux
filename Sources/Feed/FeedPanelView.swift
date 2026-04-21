@@ -296,9 +296,6 @@ struct FeedItemRow: View {
     let snapshot: FeedItemSnapshot
     let actions: FeedRowActions
 
-    @State private var isHovered: Bool = false
-    @State private var jumpFlash: Bool = false
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             chipHeader
@@ -314,35 +311,16 @@ struct FeedItemRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(cardBackground)
-        )
-        .overlay(
-            // Blue ring flash on tap → jump. Animated in/out via the
-            // jumpFlash @State; the stroke is transparent otherwise.
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(
-                    Color(red: 0.28, green: 0.55, blue: 0.95)
-                        .opacity(jumpFlash ? 0.85 : 0),
-                    lineWidth: 2
-                )
-                .animation(.easeOut(duration: 0.5), value: jumpFlash)
-        )
         .opacity(isResolvedOrExpired ? 0.6 : 1.0)
-        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .onHover { isHovered = $0 }
+        .contentShape(Rectangle())
         .help(helpText)
-        // Single-tap on the card background jumps to the agent's
-        // cmux terminal. SwiftUI routes the tap to child Buttons
-        // first (action pills, option chips), so this only fires
-        // when clicking outside a button — no latency cost.
+        // Single-tap on the card background focuses the agent's
+        // cmux terminal and flashes the terminal's own ring (same
+        // visual as cmd+shift+H). The flash happens on the terminal
+        // surface, not on this card — so the user's eye is pulled
+        // to the terminal contents they're jumping to.
         .onTapGesture {
             actions.jump(workstreamIdForJump)
-            jumpFlash = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-                jumpFlash = false
-            }
         }
     }
 
@@ -368,20 +346,6 @@ struct FeedItemRow: View {
         case .pending: return false
         case .telemetry: return false
         case .resolved, .expired: return true
-        }
-    }
-
-    private var cardBackground: Color {
-        if snapshot.status.isPending {
-            return Color.primary.opacity(isHovered ? 0.06 : 0.04)
-        }
-        return Color.primary.opacity(isHovered ? 0.03 : 0.02)
-    }
-
-    private var cardBorder: Color {
-        switch snapshot.status {
-        case .pending: return Color.primary.opacity(0.14)
-        default: return Color.primary.opacity(0.08)
         }
     }
 
@@ -1148,6 +1112,10 @@ private struct QuestionActionArea: View {
 
     // Per-question selections keyed by question id.
     @State private var selections: [String: Set<String>] = [:]
+    // Per-question "Type something…" free-form answers. When
+    // non-empty, wins over preset option selections for that
+    // question — mirrors Claude's TUI fallback.
+    @State private var freeTexts: [String: String] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1159,7 +1127,7 @@ private struct QuestionActionArea: View {
                     questionBlock(index: idx + 1, question: q)
                 }
             }
-            if status.isPending, !shouldRenderLongForm {
+            if status.isPending {
                 submitCTA
             }
         }
@@ -1214,6 +1182,9 @@ private struct QuestionActionArea: View {
                     option: option
                 )
             }
+            if status.isPending {
+                freeFormField(questionId: question.id)
+            }
         }
     }
 
@@ -1225,7 +1196,9 @@ private struct QuestionActionArea: View {
         Button {
             // Long-form is always single-select, and selecting submits
             // immediately because there's no separate Submit button.
-            onReply(["\(questionId):\(option.id)"])
+            // Selections carry human-readable labels (not ids) so the
+            // hook can paste them straight into the agent's reply.
+            onReply([option.label])
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Text("\(index)")
@@ -1302,11 +1275,43 @@ private struct QuestionActionArea: View {
                     }
                 }
             }
+            if status.isPending {
+                freeFormField(questionId: question.id)
+            }
         }
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(Color.primary.opacity(0.04))
+        )
+    }
+
+    /// "Type something…" free-form text field — mirrors Claude's TUI
+    /// option 4 (custom answer). When non-empty it wins over the
+    /// preset option selection for that question on submit.
+    private func freeFormField(questionId: String) -> some View {
+        let binding = Binding<String>(
+            get: { freeTexts[questionId] ?? "" },
+            set: { freeTexts[questionId] = $0 }
+        )
+        return TextField(
+            String(localized: "feed.question.typeSomething",
+                   defaultValue: "Type something…"),
+            text: binding,
+            axis: .vertical
+        )
+        .textFieldStyle(.plain)
+        .font(.system(size: 11))
+        .lineLimit(1...4)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(Color.primary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
         )
     }
 
@@ -1337,34 +1342,45 @@ private struct QuestionActionArea: View {
         }
     }
 
-    private var allAnswered: Bool {
-        for q in questions where (selections[q.id]?.isEmpty ?? true) {
-            return false
+    /// One answer string per question: the user's free-form text if
+    /// they typed any, otherwise the labels of the selected options
+    /// joined by ", ". Questions with no answer are omitted entirely
+    /// so the agent doesn't see "question 2: <empty>".
+    private var composedAnswers: [String] {
+        var out: [String] = []
+        for q in questions {
+            let freeText = (freeTexts[q.id] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !freeText.isEmpty {
+                out.append(freeText)
+                continue
+            }
+            guard let ids = selections[q.id], !ids.isEmpty else { continue }
+            let labels = q.options
+                .filter { ids.contains($0.id) }
+                .map(\.label)
+            if !labels.isEmpty {
+                out.append(labels.joined(separator: ", "))
+            }
         }
-        return true
+        return out
     }
+
+    private var hasAnyAnswer: Bool { !composedAnswers.isEmpty }
 
     private var submitCTA: some View {
         FeedButton(
             label: String(localized: "feed.question.submitAll", defaultValue: "Submit All Answers"),
             leadingIcon: "checkmark.circle.fill",
-            kind: allAnswered ? .primary : .soft,
+            kind: hasAnyAnswer ? .primary : .soft,
             size: .medium,
             fullWidth: true,
-            dimmed: !allAnswered
+            dimmed: !hasAnyAnswer
         ) {
-            // Flatten every question's selections into a single array,
-            // prefixed with the question id so the agent receives
-            // `["q0:minimal", "q1:reload_tagged"]`. `dimmed` blocks
-            // clicks at the FeedButton layer, so we don't need a
-            // guard here.
-            var out: [String] = []
-            for q in questions {
-                if let set = selections[q.id] {
-                    for id in set { out.append("\(q.id):\(id)") }
-                }
-            }
-            onReply(out)
+            // Selections carry human-readable answer strings (one per
+            // answered question) so the hook can feed them straight
+            // back to the agent as the user's reply.
+            onReply(composedAnswers)
         }
     }
 }

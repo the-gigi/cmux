@@ -14803,10 +14803,28 @@ struct CMUXCLI {
             return encode(out)
 
         case "question":
+            // Claude Code's hook protocol doesn't have a public
+            // "return a tool result" path for AskUserQuestion. The
+            // pragmatic fix is to `block` the tool (so Claude's TUI
+            // doesn't also ask the same question) and put the user's
+            // answer in `reason` — Claude reads the reason as context
+            // and proceeds as if the question had been answered.
             let selections = decision["selections"] as? [String] ?? []
+            let reason: String
+            if selections.isEmpty {
+                reason = "User submitted an empty answer in the cmux Feed sidebar."
+            } else if selections.count == 1 {
+                reason = "User answered in the cmux Feed sidebar: \(selections[0])"
+            } else {
+                let lines = selections
+                    .enumerated()
+                    .map { idx, s in "\(idx + 1). \(s)" }
+                    .joined(separator: "\n")
+                reason = "User answered in the cmux Feed sidebar:\n\(lines)"
+            }
             return encode([
-                "decision": "approve",
-                "toolResult": ["selections": selections]
+                "decision": "block",
+                "reason": reason
             ])
 
         default:
