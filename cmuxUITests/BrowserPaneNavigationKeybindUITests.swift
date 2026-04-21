@@ -1025,6 +1025,62 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         )
     }
 
+    func testRepeatedEscapeAfterBrowserFindCmdOptionPaneRoundTripRestoresPageInputFocus() {
+        let app = XCUIApplication()
+        app.launchEnvironment["CMUX_SOCKET_PATH"] = socketPath
+        app.launchEnvironment["CMUX_UI_TEST_GOTO_SPLIT_SETUP"] = "1"
+        app.launchEnvironment["CMUX_UI_TEST_GOTO_SPLIT_PATH"] = dataPath
+        app.launchEnvironment["CMUX_UI_TEST_GOTO_SPLIT_INPUT_SETUP"] = "1"
+        app.launchEnvironment["CMUX_UI_TEST_GOTO_SPLIT_BROWSER_URL"] = focusedInputRoundTripPageURL
+        launchAndEnsureForeground(app)
+
+        XCTAssertTrue(
+            waitForData(
+                keys: [
+                    "browserPanelId",
+                    "terminalPaneId",
+                    "webViewFocused",
+                    "webInputFocusSeeded",
+                    "webInputFocusElementId"
+                ],
+                timeout: 12.0
+            ),
+            "Expected setup data including focused page input to be written. path=\(dataPath) data=\(loadData() ?? [:])"
+        )
+
+        guard let setup = loadData() else {
+            XCTFail("Missing goto_split setup data")
+            return
+        }
+
+        XCTAssertEqual(setup["webViewFocused"], "true", "Expected WKWebView to be first responder for this test")
+        XCTAssertEqual(setup["webInputFocusSeeded"], "true", "Expected test page input to be focused before Cmd+F")
+
+        guard let expectedTerminalPaneId = setup["terminalPaneId"] else {
+            XCTFail("Missing terminalPaneId in setup data")
+            return
+        }
+
+        assertBrowserFindPaneRoundTripRestoresPageInput(
+            app,
+            expectedTerminalPaneId: expectedTerminalPaneId,
+            route: .cmdOptionArrows,
+            findNeedle: "seed1",
+            typedTextAfterEscape: "z",
+            expectedInputValueAfterTyping: "cmux-ui-focus-primaryz",
+            iteration: 1
+        )
+        assertBrowserFindPaneRoundTripRestoresPageInput(
+            app,
+            expectedTerminalPaneId: expectedTerminalPaneId,
+            route: .cmdOptionArrows,
+            findNeedle: "seed2",
+            typedTextAfterEscape: "y",
+            expectedInputValueAfterTyping: "cmux-ui-focus-primaryzy",
+            iteration: 2
+        )
+    }
+
     func testWorkspaceRoundTripPreservesFocusedTerminalFindWhenBrowserFindIsAlsoOpen() {
         runSplitFindWorkspaceRoundTripScenario(restoredOwner: .terminal)
     }
@@ -1321,6 +1377,66 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         case .cmdCtrlLetters:
             app.typeKey("l", modifierFlags: [.command, .control])
         }
+    }
+
+    private func assertBrowserFindPaneRoundTripRestoresPageInput(
+        _ app: XCUIApplication,
+        expectedTerminalPaneId: String,
+        route: FindFocusRoute,
+        findNeedle: String,
+        typedTextAfterEscape: String,
+        expectedInputValueAfterTyping: String,
+        iteration: Int
+    ) {
+        app.typeKey("f", modifierFlags: [.command])
+        let findField = app.textFields["BrowserFindSearchTextField"].firstMatch
+        XCTAssertTrue(findField.waitForExistence(timeout: 6.0), "Expected browser find field after Cmd+F. iteration=\(iteration)")
+
+        app.typeKey("a", modifierFlags: [.command])
+        app.typeKey(XCUIKeyboardKey.delete.rawValue, modifierFlags: [])
+        app.typeText(findNeedle)
+        XCTAssertTrue(
+            waitForCondition(timeout: 4.0) {
+                ((findField.value as? String) ?? "") == findNeedle
+            },
+            "Expected browser find field to capture typing. iteration=\(iteration) value=\(String(describing: findField.value))"
+        )
+
+        focusLeftPaneForFindScenario(app, route: route)
+        XCTAssertTrue(
+            waitForDataMatch(timeout: 6.0) { data in
+                data["focusedPaneId"] == expectedTerminalPaneId &&
+                    data["focusedPanelKind"] == "terminal" &&
+                    data["browserFindNeedle"] == findNeedle
+            },
+            "Expected focus-left shortcut to focus the terminal pane while browser find stays open. iteration=\(iteration) data=\(loadData() ?? [:])"
+        )
+
+        focusRightPaneForFindScenario(app, route: route)
+        XCTAssertTrue(
+            waitForDataMatch(timeout: 6.0) { data in
+                data["focusedPanelKind"] == "browser" &&
+                    data["browserFindNeedle"] == findNeedle
+            },
+            "Expected focus-right shortcut to return to the browser pane with browser find still active. iteration=\(iteration) data=\(loadData() ?? [:])"
+        )
+
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(waitForNonExistence(findField, timeout: 5.0), "Expected Escape to close browser find. iteration=\(iteration)")
+        XCTAssertTrue(
+            waitForDataMatch(timeout: 5.0) { data in
+                data["browserFindVisible"] == "false"
+            },
+            "Expected browser find state to be cleared after Escape. iteration=\(iteration) data=\(loadData() ?? [:])"
+        )
+
+        app.typeText(typedTextAfterEscape)
+        XCTAssertTrue(
+            waitForDataMatch(timeout: 6.0) { data in
+                data["browserPageTitle"] == "cmux-ui-focus-primary:\(expectedInputValueAfterTyping)"
+            },
+            "Expected typing after Escape to return to the page input. iteration=\(iteration) data=\(loadData() ?? [:])"
+        )
     }
 
     private func waitForOmnibarToContainExampleDomain(_ omnibar: XCUIElement, timeout: TimeInterval) -> Bool {
