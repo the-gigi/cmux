@@ -44,9 +44,11 @@ struct FeedPanelView: View {
     private var controlBar: some View {
         HStack(spacing: 6) {
             ForEach(Filter.allCases) { f in
-                FeedPillButton(
+                FeedButton(
                     label: f.label,
-                    symbolName: f.symbolName,
+                    leadingIcon: f.symbolName,
+                    kind: .ghost,
+                    size: .compact,
                     isSelected: filter == f
                 ) {
                     filter = f
@@ -276,7 +278,7 @@ struct FeedItemRow: View {
             chipHeader
             if let echo = promptEcho, !echo.isEmpty {
                 Text(echo)
-                    .font(.system(size: 12))
+                    .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .lineLimit(2)
                     .truncationMode(.tail)
@@ -289,10 +291,6 @@ struct FeedItemRow: View {
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(cardBackground)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(cardBorder, lineWidth: 1)
         )
         .opacity(isResolvedOrExpired ? 0.6 : 1.0)
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -358,11 +356,11 @@ struct FeedItemRow: View {
     private var chipHeader: some View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: snapshot.kind.symbolName)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(kindTint)
-                .frame(width: 16, height: 16)
+                .frame(width: 14, height: 14)
             Text(headerTitle)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(.primary.opacity(0.92))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -599,21 +597,21 @@ private struct PermissionActionArea: View {
             codeBlock
             if status.isPending {
                 HStack(spacing: 6) {
-                    PermissionCTAButton(
+                    FeedButton(
                         label: String(localized: "feed.permission.deny", defaultValue: "Deny"),
-                        role: .dark
+                        kind: .dark, size: .medium, fullWidth: true
                     ) { onApprove(.deny) }
-                    PermissionCTAButton(
+                    FeedButton(
                         label: String(localized: "feed.permission.once", defaultValue: "Allow Once"),
-                        role: .light
+                        kind: .light, size: .medium, fullWidth: true
                     ) { onApprove(.once) }
-                    PermissionCTAButton(
+                    FeedButton(
                         label: String(localized: "feed.permission.always", defaultValue: "Always Allow"),
-                        role: .blue
+                        kind: .primary, size: .medium, fullWidth: true
                     ) { onApprove(.always) }
-                    PermissionCTAButton(
+                    FeedButton(
                         label: String(localized: "feed.permission.bypass", defaultValue: "Bypass"),
-                        role: .red
+                        kind: .destructive, size: .medium, fullWidth: true
                     ) { onApprove(.bypass) }
                 }
             }
@@ -621,12 +619,12 @@ private struct PermissionActionArea: View {
     }
 
     private var toolLabel: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(.orange)
             Text(toolName)
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: 11, weight: .bold))
                 .foregroundColor(.orange)
         }
     }
@@ -638,14 +636,14 @@ private struct PermissionActionArea: View {
         )
         return VStack(alignment: .leading, spacing: 6) {
             if let primary = preview.primary {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if let sigil = preview.sigil {
                         Text(sigil)
-                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
                             .foregroundColor(.orange)
                     }
                     Text(primary)
-                        .font(.system(size: 13, design: .monospaced))
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(.primary.opacity(0.95))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -653,13 +651,13 @@ private struct PermissionActionArea: View {
             }
             if let secondary = preview.secondary, !secondary.isEmpty {
                 Text(secondary)
-                    .font(.system(size: 11))
+                    .font(.system(size: 10))
                     .foregroundColor(.secondary.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(Color.primary.opacity(0.05))
@@ -711,97 +709,129 @@ private struct PermissionInputPreview {
     }
 }
 
-/// Four-role full-width button matching the Vibe-Island permission
-/// card: dark (Deny), light (Allow Once), blue (Always Allow), red
-/// (Bypass). Supports an optional monospace shortcut hint on the
-/// trailing side.
-private struct PermissionCTAButton: View {
-    enum Role { case dark, light, blue, red }
+/// Single DRY button primitive used across every actionable card
+/// (permission / plan / question / filter pills / option pills).
+/// Replaces the old PermissionCTAButton / PlanCTAButton /
+/// FeedPillButton trio so styling is defined in exactly one place.
+struct FeedButton: View {
+    enum Kind {
+        /// Transparent pill that lights up on hover/selection. Used
+        /// for filter bar pills and single-select option pills.
+        case ghost
+        /// Soft neutral fill (e.g. "Manually Approve", disabled Submit).
+        case soft
+        /// Dark background with white text (Deny).
+        case dark
+        /// Light background with black text (Allow Once).
+        case light
+        /// Solid blue (Always Allow, Send feedback, active Submit).
+        case primary
+        /// Solid green (checked multi-select option, confirmations).
+        case success
+        /// Solid orange (Auto-accept Edits).
+        case warning
+        /// Solid red (Bypass, destructive deny).
+        case destructive
+    }
+
+    enum Size {
+        case compact  // filter bar / option pills
+        case medium   // full-width CTAs
+    }
+
     let label: String
-    var shortcut: String? = nil
-    let role: Role
+    var leadingIcon: String? = nil
+    var trailingIcon: String? = nil
+    var kind: Kind = .ghost
+    var size: Size = .compact
+    var fullWidth: Bool = false
+    var isSelected: Bool = false
+    var dimmed: Bool = false
     let action: () -> Void
 
     @State private var isHovered: Bool = false
 
-    init(
-        label: String,
-        shortcut: String? = nil,
-        role: Role,
-        action: @escaping () -> Void
-    ) {
-        self.label = label
-        self.shortcut = shortcut
-        self.role = role
-        self.action = action
-    }
-
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
+            HStack(spacing: iconSpacing) {
+                if let leadingIcon {
+                    Image(systemName: leadingIcon)
+                        .font(.system(size: iconSize, weight: .semibold))
+                }
                 Text(label)
-                    .font(.system(size: 12, weight: .semibold))
-                if let shortcut {
-                    Text(shortcut)
-                        .font(.system(size: 10, weight: .semibold).monospaced())
-                        .foregroundColor(foreground.opacity(0.75))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(
-                            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(Color.black.opacity(0.20))
-                        )
+                    .font(.system(size: labelSize, weight: .semibold))
+                if let trailingIcon {
+                    Image(systemName: trailingIcon)
+                        .font(.system(size: iconSize, weight: .semibold))
                 }
             }
             .foregroundColor(foreground)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 9)
+            .frame(maxWidth: fullWidth ? .infinity : nil)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(fill)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(backgroundFill)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(border, lineWidth: 1)
-            )
+            .opacity(dimmed ? 0.55 : 1.0)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+        .help(label)
     }
 
+    // MARK: - Style resolution
+
+    private var labelSize: CGFloat { size == .compact ? 10.5 : 11 }
+    private var iconSize: CGFloat { size == .compact ? 9 : 10 }
+    private var iconSpacing: CGFloat { size == .compact ? 3 : 5 }
+    private var cornerRadius: CGFloat { size == .compact ? 5 : 6 }
+    private var horizontalPadding: CGFloat { size == .compact ? 8 : 12 }
+    private var verticalPadding: CGFloat { size == .compact ? 4 : 5 }
+
     private var foreground: Color {
-        switch role {
+        switch kind {
+        case .ghost:
+            return isSelected ? .primary : .primary.opacity(0.85)
+        case .soft: return .primary
         case .dark: return .white
         case .light: return .black
-        case .blue: return .white
-        case .red: return .white
+        case .primary: return .white
+        case .success: return .white
+        case .warning: return .white
+        case .destructive: return .white
         }
     }
 
-    private var fill: Color {
-        switch role {
+    private var backgroundFill: Color {
+        switch kind {
+        case .ghost:
+            if isSelected { return Color.primary.opacity(0.12) }
+            if isHovered { return Color.primary.opacity(0.06) }
+            return Color.clear
+        case .soft:
+            return isHovered ? Color.primary.opacity(0.16) : Color.primary.opacity(0.10)
         case .dark:
             return isHovered ? Color.black.opacity(0.85) : Color.black.opacity(0.75)
         case .light:
-            return isHovered ? Color.white.opacity(0.95) : Color.white.opacity(0.88)
-        case .blue:
+            return isHovered ? Color.white.opacity(0.96) : Color.white.opacity(0.88)
+        case .primary:
             return isHovered
                 ? Color(red: 0.28, green: 0.55, blue: 0.95)
                 : Color(red: 0.24, green: 0.48, blue: 0.88)
-        case .red:
+        case .success:
+            return isHovered
+                ? Color(red: 0.22, green: 0.72, blue: 0.42)
+                : Color(red: 0.18, green: 0.62, blue: 0.35)
+        case .warning:
+            return isHovered
+                ? Color(red: 0.95, green: 0.55, blue: 0.18)
+                : Color(red: 0.92, green: 0.54, blue: 0.29)
+        case .destructive:
             return isHovered
                 ? Color(red: 0.85, green: 0.28, blue: 0.28)
                 : Color(red: 0.75, green: 0.22, blue: 0.22)
-        }
-    }
-
-    private var border: Color {
-        switch role {
-        case .dark: return Color.white.opacity(0.10)
-        case .light: return Color.black.opacity(0.14)
-        case .blue: return Color.black.opacity(0.16)
-        case .red: return Color.black.opacity(0.20)
         }
     }
 }
@@ -843,32 +873,33 @@ private struct ExitPlanActionArea: View {
                         .stroke(Color.primary.opacity(hasFeedback ? 0.25 : 0.10), lineWidth: 1)
                 )
                 HStack(spacing: 6) {
-                    PlanCTAButton(
+                    FeedButton(
                         label: hasFeedback
                             ? String(localized: "feed.exitplan.refine",
                                      defaultValue: "Send feedback")
                             : String(localized: "feed.exitplan.manual",
                                      defaultValue: "Manually Approve"),
-                        role: hasFeedback ? .refine : .neutral
+                        kind: hasFeedback ? .primary : .soft,
+                        size: .medium, fullWidth: true
                     ) {
-                        // When there's feedback, hand it back with .manual
-                        // as a placeholder mode; the hook translates
-                        // "feedback non-empty" into block+reason regardless
-                        // of mode.
+                        // Feedback always wins over mode; hook translates
+                        // non-empty feedback into block+reason.
                         onApprove(.manual, hasFeedback ? trimmedFeedback : nil)
                     }
-                    PlanCTAButton(
+                    FeedButton(
                         label: String(localized: "feed.exitplan.autoaccept",
                                       defaultValue: "Auto-accept Edits"),
-                        role: .orange,
+                        kind: .warning,
+                        size: .medium, fullWidth: true,
                         dimmed: hasFeedback
                     ) {
                         onApprove(.autoAccept, hasFeedback ? trimmedFeedback : nil)
                     }
-                    PlanCTAButton(
+                    FeedButton(
                         label: String(localized: "feed.exitplan.bypass",
                                       defaultValue: "Bypass Permissions"),
-                        role: .red,
+                        kind: .destructive,
+                        size: .medium, fullWidth: true,
                         dimmed: hasFeedback
                     ) {
                         onApprove(.bypassPermissions, hasFeedback ? trimmedFeedback : nil)
@@ -892,23 +923,23 @@ private struct PlanBodyView: View {
                 switch block {
                 case .heading(let text):
                     Text(text)
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 11, weight: .bold))
                         .foregroundColor(.primary.opacity(0.95))
                         .padding(.top, 2)
                 case .paragraph(let text):
                     Text(text)
-                        .font(.system(size: 12))
+                        .font(.system(size: 11))
                         .foregroundColor(.primary.opacity(0.85))
                         .fixedSize(horizontal: false, vertical: true)
                 case .numbered(let items):
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                            HStack(alignment: .top, spacing: 6) {
+                            HStack(alignment: .top, spacing: 5) {
                                 Text("\(item.index).")
-                                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
                                     .foregroundColor(.secondary)
                                 Text(item.text)
-                                    .font(.system(size: 12))
+                                    .font(.system(size: 11))
                                     .foregroundColor(.primary.opacity(0.85))
                                     .fixedSize(horizontal: false, vertical: true)
                             }
@@ -917,12 +948,12 @@ private struct PlanBodyView: View {
                 case .bulleted(let items):
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                            HStack(alignment: .top, spacing: 6) {
+                            HStack(alignment: .top, spacing: 5) {
                                 Text("·")
-                                    .font(.system(size: 12, weight: .semibold))
+                                    .font(.system(size: 11, weight: .semibold))
                                     .foregroundColor(Color.blue.opacity(0.8))
                                 Text(item)
-                                    .font(.system(size: 12))
+                                    .font(.system(size: 11))
                                     .foregroundColor(.primary.opacity(0.85))
                                     .fixedSize(horizontal: false, vertical: true)
                             }
@@ -1029,76 +1060,6 @@ private struct PlanBodyView: View {
     }
 }
 
-/// Full-width color-coded CTA for plan-mode decisions.
-private struct PlanCTAButton: View {
-    enum Role { case neutral, orange, red, refine }
-    let label: String
-    let role: Role
-    var dimmed: Bool = false
-    let action: () -> Void
-
-    @State private var isHovered: Bool = false
-
-    var body: some View {
-        Button(action: action) {
-            Text(label)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(foreground)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(fill)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(border, lineWidth: 1)
-                )
-                .opacity(dimmed ? 0.55 : 1.0)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
-    }
-
-    private var foreground: Color {
-        switch role {
-        case .neutral: return .primary
-        case .refine: return .white
-        case .orange: return .white
-        case .red: return .white
-        }
-    }
-
-    private var fill: Color {
-        switch role {
-        case .neutral:
-            return isHovered ? Color.primary.opacity(0.16) : Color.primary.opacity(0.10)
-        case .refine:
-            return isHovered
-                ? Color(red: 0.28, green: 0.55, blue: 0.95)
-                : Color(red: 0.24, green: 0.48, blue: 0.88)
-        case .orange:
-            return isHovered
-                ? Color(red: 0.95, green: 0.55, blue: 0.18)
-                : Color(red: 0.92, green: 0.54, blue: 0.29)
-        case .red:
-            return isHovered
-                ? Color(red: 0.85, green: 0.28, blue: 0.28)
-                : Color(red: 0.75, green: 0.22, blue: 0.22)
-        }
-    }
-
-    private var border: Color {
-        switch role {
-        case .neutral: return Color.primary.opacity(0.18)
-        case .refine: return Color.black.opacity(0.18)
-        case .orange: return Color.black.opacity(0.15)
-        case .red: return Color.black.opacity(0.20)
-        }
-    }
-}
-
 private struct QuestionActionArea: View {
     let questions: [WorkstreamQuestionPrompt]
     let status: WorkstreamStatus
@@ -1120,41 +1081,41 @@ private struct QuestionActionArea: View {
     }
 
     private var headerLine: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             Image(systemName: "bubble.left.and.bubble.right.fill")
-                .font(.system(size: 12))
+                .font(.system(size: 10))
                 .foregroundColor(.blue)
-            Text("\(questions.first.map { _ in "Question" } ?? "Question")")
-                .font(.system(size: 12, weight: .bold))
+            Text("Question")
+                .font(.system(size: 11, weight: .bold))
                 .foregroundColor(.blue)
             Text("(\(questions.count) \(questions.count == 1 ? "question" : "questions"))")
-                .font(.system(size: 11))
+                .font(.system(size: 10))
                 .foregroundColor(.blue.opacity(0.7))
         }
     }
 
     private func questionBlock(index: Int, question: WorkstreamQuestionPrompt) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .top, spacing: 5) {
                 Text("\(index).")
-                    .font(.system(size: 12, weight: .bold).monospacedDigit())
+                    .font(.system(size: 11, weight: .bold).monospacedDigit())
                     .foregroundColor(.blue)
                 Text(question.prompt)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.primary.opacity(0.95))
                     .fixedSize(horizontal: false, vertical: true)
             }
             if question.multiSelect {
-                HStack(spacing: 4) {
+                HStack(spacing: 3) {
                     Image(systemName: "checklist")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.system(size: 8, weight: .semibold))
                     Text("Multi-select")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 9, weight: .bold))
                         .tracking(0.3)
                 }
                 .foregroundColor(.orange)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
                 .background(
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(Color.orange.opacity(0.18))
@@ -1163,7 +1124,7 @@ private struct QuestionActionArea: View {
             if question.options.isEmpty {
                 Text(String(localized: "feed.question.noOptions",
                             defaultValue: "Agent provided no options."))
-                    .font(.system(size: 11))
+                    .font(.system(size: 10))
                     .foregroundColor(.secondary)
             } else {
                 WrapHStack(spacing: 6) {
@@ -1186,7 +1147,16 @@ private struct QuestionActionArea: View {
         multi: Bool
     ) -> some View {
         let selected = selections[questionId]?.contains(option.id) == true
-        return Button {
+        let leading: String? = multi
+            ? (selected ? "checkmark.square.fill" : "square")
+            : nil
+        let selectedKind: FeedButton.Kind = multi ? .success : .primary
+        return FeedButton(
+            label: option.label,
+            leadingIcon: leading,
+            kind: selected ? selectedKind : .soft,
+            size: .compact
+        ) {
             var current = selections[questionId] ?? []
             if multi {
                 if current.contains(option.id) { current.remove(option.id) }
@@ -1195,26 +1165,7 @@ private struct QuestionActionArea: View {
                 current = [option.id]
             }
             selections[questionId] = current
-        } label: {
-            Text(option.label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(selected ? .primary : .primary.opacity(0.85))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(selected ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.10))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(selected
-                                ? Color.accentColor.opacity(0.55)
-                                : Color.primary.opacity(0.10),
-                                lineWidth: 1)
-                )
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
     }
 
     private var allAnswered: Bool {
@@ -1226,10 +1177,18 @@ private struct QuestionActionArea: View {
 
     private var submitCTA: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Button {
+            FeedButton(
+                label: String(localized: "feed.question.submitAll", defaultValue: "Submit All Answers"),
+                leadingIcon: "checkmark.circle.fill",
+                kind: allAnswered ? .primary : .soft,
+                size: .medium,
+                fullWidth: true,
+                dimmed: !allAnswered
+            ) {
                 // Flatten every question's selections into a single
                 // array, prefixed with the question id so the agent
                 // receives `["q0:minimal", "q1:reload_tagged"]`.
+                guard allAnswered else { return }
                 var out: [String] = []
                 for q in questions {
                     if let set = selections[q.id] {
@@ -1237,35 +1196,15 @@ private struct QuestionActionArea: View {
                     }
                 }
                 onReply(out)
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 13))
-                    Text(String(localized: "feed.question.submitAll", defaultValue: "Submit All Answers"))
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                .foregroundColor(allAnswered ? .primary : .secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(allAnswered ? Color.primary.opacity(0.14) : Color.primary.opacity(0.06))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(Color.primary.opacity(allAnswered ? 0.22 : 0.12), lineWidth: 1)
-                )
             }
-            .buttonStyle(.plain)
-            .disabled(!allAnswered)
 
             if !allAnswered {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 10))
+                        .font(.system(size: 9))
                     Text(String(localized: "feed.question.answerAll",
                                 defaultValue: "Please answer all questions"))
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 10, weight: .medium))
                 }
                 .foregroundColor(.orange)
             }
@@ -1379,13 +1318,13 @@ private struct TodoListBody: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 4) {
                 Text("Tasks")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: 11, weight: .bold))
                     .foregroundColor(.primary.opacity(0.9))
                 Text(summaryLabel)
-                    .font(.system(size: 11))
+                    .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
             VStack(alignment: .leading, spacing: 3) {
@@ -1446,7 +1385,7 @@ private struct TodoListBody: View {
     private func symbol(for state: WorkstreamTaskTodo.State) -> String {
         switch state {
         case .completed: return "checkmark.square.fill"
-        case .inProgress: return "circle.inset.filled"
+        case .inProgress: return "circle.fill"
         case .pending: return "square"
         }
     }
@@ -1457,100 +1396,6 @@ private struct TodoListBody: View {
         case .inProgress: return .blue
         case .pending: return .secondary
         }
-    }
-}
-
-// MARK: - Pill button (matches `GroupingButton` in SessionIndexView)
-
-private struct FeedPillButton: View {
-    let label: String
-    let symbolName: String?
-    var isSelected: Bool = false
-    var tint: Color = .primary
-    let action: () -> Void
-
-    @State private var isHovered: Bool = false
-
-    init(
-        label: String,
-        symbolName: String? = nil,
-        isSelected: Bool = false,
-        tint: Color = .primary,
-        style: Style = .filter,
-        action: @escaping () -> Void
-    ) {
-        self.label = label
-        self.symbolName = symbolName
-        self.isSelected = isSelected
-        self.tint = tint
-        self.style = style
-        self.action = action
-    }
-
-    /// Distinguishes the two button contexts: filter bar (toggleable,
-    /// flat until selected/hovered) versus action buttons inside a feed
-    /// card (CTA-style with a resting fill + bold label).
-    enum Style { case filter, action }
-    var style: Style = .filter
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                if let symbolName {
-                    Image(systemName: symbolName)
-                        .font(.system(size: style == .action ? 11 : 10, weight: .semibold))
-                }
-                Text(label)
-                    .font(.system(size: style == .action ? 12 : 11, weight: style == .action ? .semibold : .medium))
-            }
-            .foregroundColor(foregroundColor)
-            .padding(.horizontal, style == .action ? 10 : 6)
-            .padding(.vertical, style == .action ? 5 : 3)
-            .background(
-                RoundedRectangle(cornerRadius: style == .action ? 6 : 4, style: .continuous)
-                    .fill(backgroundFill)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: style == .action ? 6 : 4, style: .continuous)
-                    .stroke(borderColor, lineWidth: style == .action ? 1 : 0)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
-        .help(label)
-    }
-
-    private var foregroundColor: Color {
-        if tint == .red { return .red }
-        if tint == .accentColor { return .accentColor }
-        if tint == .secondary { return .secondary }
-        if tint != .primary { return tint }
-        return isSelected ? .primary : .secondary
-    }
-
-    private var backgroundFill: Color {
-        if isSelected { return Color.primary.opacity(0.12) }
-        if style == .action {
-            if tint == .red {
-                return isHovered ? Color.red.opacity(0.16) : Color.red.opacity(0.08)
-            }
-            return isHovered ? Color.primary.opacity(0.10) : Color.primary.opacity(0.06)
-        }
-        if isHovered {
-            return tint == .red
-                ? Color.red.opacity(0.10)
-                : Color.primary.opacity(0.05)
-        }
-        return Color.clear
-    }
-
-    private var borderColor: Color {
-        guard style == .action else { return .clear }
-        if tint == .red {
-            return Color.red.opacity(isHovered ? 0.35 : 0.18)
-        }
-        return Color.primary.opacity(isHovered ? 0.18 : 0.10)
     }
 }
 
