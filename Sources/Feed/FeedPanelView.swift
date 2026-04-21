@@ -1419,7 +1419,7 @@ private extension WorkstreamKind {
         case .assistantMessage: return "sparkles"
         case .sessionStart, .sessionEnd: return "play.circle"
         case .stop: return "stop.circle"
-        case .todos: return "checkmark.circle"
+        case .todos: return "checklist"
         }
     }
 }

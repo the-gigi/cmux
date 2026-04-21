@@ -35,17 +35,14 @@ final class FeedPreviewWindowController: NSWindowController, NSWindowDelegate {
 }
 
 private struct FeedPreviewRootView: View {
-    @State private var selectedKind: FeedPreviewFixtures.Kind = .permission
-    @State private var selectedState: FeedPreviewFixtures.StateChoice = .pending
-
     var body: some View {
         VStack(spacing: 0) {
-            controls
+            toolbar
             Divider()
             ScrollView {
-                VStack(spacing: 12) {
-                    ForEach(items, id: \.id) { item in
-                        FeedPreviewCardHost(item: item)
+                VStack(alignment: .leading, spacing: 20) {
+                    ForEach(FeedPreviewFixtures.Kind.allCases) { kind in
+                        section(for: kind)
                     }
                 }
                 .padding(12)
@@ -54,44 +51,63 @@ private struct FeedPreviewRootView: View {
         }
     }
 
-    private var controls: some View {
+    private var toolbar: some View {
         HStack(spacing: 12) {
-            Picker("Kind", selection: $selectedKind) {
-                ForEach(FeedPreviewFixtures.Kind.allCases) { kind in
-                    Text(kind.label).tag(kind)
-                }
-            }
-            .frame(width: 260)
-
-            Picker("State", selection: $selectedState) {
-                ForEach(FeedPreviewFixtures.StateChoice.allCases) { s in
-                    Text(s.label).tag(s)
-                }
-            }
-            .frame(width: 220)
-
+            Text("Feed Preview · all kinds + states")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.secondary)
             Spacer()
-
-            Button("Inject into Feed") {
-                injectIntoLiveStore()
+            Button("Inject all into Feed") {
+                injectAllIntoLiveStore()
             }
         }
         .padding(12)
     }
 
-    private var items: [WorkstreamItem] {
-        if selectedState == .all {
-            return FeedPreviewFixtures.allStates(for: selectedKind)
+    @ViewBuilder
+    private func section(for kind: FeedPreviewFixtures.Kind) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(kind.label.uppercased())
+                    .font(.system(size: 11, weight: .heavy))
+                    .tracking(0.8)
+                    .foregroundColor(.primary.opacity(0.9))
+                Rectangle()
+                    .fill(Color.primary.opacity(0.10))
+                    .frame(height: 1)
+            }
+            ForEach(FeedPreviewFixtures.allStates(for: kind), id: \.id) { item in
+                VStack(alignment: .leading, spacing: 4) {
+                    stateCaption(for: item)
+                    FeedPreviewCardHost(item: item)
+                }
+            }
         }
-        return [FeedPreviewFixtures.item(kind: selectedKind, state: selectedState)]
     }
 
-    private func injectIntoLiveStore() {
+    @ViewBuilder
+    private func stateCaption(for item: WorkstreamItem) -> some View {
+        let (label, color): (String, Color) = {
+            switch item.status {
+            case .pending: return ("Pending", .orange)
+            case .resolved: return ("Resolved", .green)
+            case .expired: return ("Expired", .secondary)
+            case .telemetry: return ("Telemetry", .blue)
+            }
+        }()
+        Text(label.uppercased())
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.6)
+            .foregroundColor(color)
+    }
+
+    private func injectAllIntoLiveStore() {
         Task { @MainActor in
             guard let store = FeedCoordinator.shared.store else { return }
-            for item in items {
-                let event = FeedPreviewFixtures.wireEvent(for: item)
-                store.ingest(event)
+            for kind in FeedPreviewFixtures.Kind.allCases {
+                for item in FeedPreviewFixtures.allStates(for: kind) {
+                    store.ingest(FeedPreviewFixtures.wireEvent(for: item))
+                }
             }
         }
     }
