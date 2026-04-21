@@ -4302,6 +4302,7 @@ struct CMUXCLI {
     }
     struct SSHCommandOptions {
         let destination: String
+        let displayDestination: String
         let port: Int?
         let identityFile: String?
         let workspaceName: String?
@@ -4316,6 +4317,7 @@ struct CMUXCLI {
 
         init(
             destination: String,
+            displayDestination: String? = nil,
             port: Int?,
             identityFile: String?,
             workspaceName: String?,
@@ -4327,6 +4329,7 @@ struct CMUXCLI {
             skipDaemonBootstrap: Bool = false
         ) {
             self.destination = destination
+            self.displayDestination = displayDestination ?? destination
             self.port = port
             self.identityFile = identityFile
             self.workspaceName = workspaceName
@@ -4413,7 +4416,7 @@ struct CMUXCLI {
             let elapsedMs = Int(Date().timeIntervalSince(sshStartedAt) * 1000)
             let suffix = extra.isEmpty ? "" : " \(extra)"
             cliDebugLog(
-                "cli.ssh.timing target=\(sshOptions.destination) relayPort=\(sshOptions.remoteRelayPort) " +
+                "cli.ssh.timing target=\(sshOptions.displayDestination) relayPort=\(sshOptions.remoteRelayPort) " +
                 "stage=\(stage) elapsedMs=\(elapsedMs)\(suffix)"
             )
         }
@@ -4421,7 +4424,7 @@ struct CMUXCLI {
         logSSHTiming("parsed")
         let terminfoSource = localXtermGhosttyTerminfoSource()
         cliDebugLog(
-            "cli.ssh.timing target=\(sshOptions.destination) relayPort=\(sshOptions.remoteRelayPort) " +
+            "cli.ssh.timing target=\(sshOptions.displayDestination) relayPort=\(sshOptions.remoteRelayPort) " +
             "stage=terminfo elapsedMs=0 mode=deferred term=xterm-256color " +
             "source=\(terminfoSource == nil ? 0 : 1)"
         )
@@ -4492,7 +4495,7 @@ struct CMUXCLI {
             )
         }
         cliDebugLog(
-            "cli.ssh.start target=\(sshOptions.destination) port=\(sshOptions.port.map(String.init) ?? "nil") " +
+            "cli.ssh.start target=\(sshOptions.displayDestination) port=\(sshOptions.port.map(String.init) ?? "nil") " +
             "relayPort=\(sshOptions.remoteRelayPort) localSocket=\(sshOptions.localSocketPath) " +
             "controlPath=\(sshOptionValue(named: "ControlPath", in: remoteSSHOptions) ?? "nil") " +
             "workspaceName=\(sshOptions.workspaceName?.replacingOccurrences(of: " ", with: "_") ?? "nil") " +
@@ -4515,7 +4518,7 @@ struct CMUXCLI {
             "window=\(workspaceWindowId.map { String($0.prefix(8)) } ?? "nil")"
         )
         cliDebugLog(
-            "cli.ssh.timing target=\(sshOptions.destination) relayPort=\(sshOptions.remoteRelayPort) " +
+            "cli.ssh.timing target=\(sshOptions.displayDestination) relayPort=\(sshOptions.remoteRelayPort) " +
             "workspace=\(String(workspaceId.prefix(8))) stage=workspace.create elapsedMs=\(Int(Date().timeIntervalSince(workspaceCreateStartedAt) * 1000))"
         )
         let configuredPayload: [String: Any]
@@ -4530,7 +4533,7 @@ struct CMUXCLI {
 
             var configureParams: [String: Any] = [
                 "workspace_id": workspaceId,
-                "destination": sshOptions.destination,
+                "destination": sshOptions.displayDestination,
                 "auto_connect": deferredRemoteReconnectCommand == nil,
             ]
             if let configuredForegroundAuthToken {
@@ -4558,7 +4561,7 @@ struct CMUXCLI {
 
             cliDebugLog(
                 "cli.ssh.remote.configure workspace=\(String(workspaceId.prefix(8))) " +
-                "target=\(sshOptions.destination) relayPort=\(sshOptions.remoteRelayPort) " +
+                "target=\(sshOptions.displayDestination) relayPort=\(sshOptions.remoteRelayPort) " +
                 "controlPath=\(sshOptionValue(named: "ControlPath", in: remoteSSHOptions) ?? "nil") " +
                 "deferredReconnect=\(deferredRemoteReconnectCommand == nil ? 0 : 1) " +
                 "sshOptions=\(remoteSSHOptions.joined(separator: "|"))"
@@ -4580,7 +4583,7 @@ struct CMUXCLI {
                 "cli.ssh.remote.configure.ok workspace=\(String(workspaceId.prefix(8))) state=\(remoteState)"
             )
             cliDebugLog(
-                "cli.ssh.timing target=\(sshOptions.destination) relayPort=\(sshOptions.remoteRelayPort) " +
+                "cli.ssh.timing target=\(sshOptions.displayDestination) relayPort=\(sshOptions.remoteRelayPort) " +
                 "workspace=\(String(workspaceId.prefix(8))) stage=workspace.remote.configure elapsedMs=\(Int(Date().timeIntervalSince(configureStartedAt) * 1000))"
             )
         } catch {
@@ -4613,7 +4616,7 @@ struct CMUXCLI {
             let workspaceHandle = formatHandle(payload, kind: "workspace", idFormat: idFormat) ?? workspaceId
             let remote = payload["remote"] as? [String: Any]
             let state = (remote?["state"] as? String) ?? "unknown"
-            print("OK workspace=\(workspaceHandle) target=\(sshOptions.destination) state=\(state)")
+            print("OK workspace=\(workspaceHandle) target=\(sshOptions.displayDestination) state=\(state)")
         }
     }
 
@@ -5342,7 +5345,8 @@ struct CMUXCLI {
     ///
     /// Freestyle's SSH gateway takes the identity token as a colon-suffix on the SSH username
     /// (`<vmId>+<user>:<token>`). OpenSSH passes the whole username through to the server, so
-    /// no sshpass / password prompt is needed: `destination` = `<user>:<token>@<host>`.
+    /// no sshpass / password prompt is needed. Keep that credential-bearing destination only
+    /// inside the SSH command text; workspace state, logs, and status output use `user@host`.
     private func vmOpenShell(id: String, workspaceName: String?, client: SocketClient, jsonOutput: Bool, idFormat: CLIIDFormat) throws {
         let response = try client.sendV2(method: "vm.ssh_info", params: ["id": id])
         guard let host = response["host"] as? String,
@@ -5381,6 +5385,7 @@ struct CMUXCLI {
             let relayToken = try randomHex(byteCount: 32)
             let options = SSHCommandOptions(
                 destination: "\(username):\(token)@\(host)",
+                displayDestination: "\(username)@\(host)",
                 port: port,
                 identityFile: nil,
                 workspaceName: workspaceName,
