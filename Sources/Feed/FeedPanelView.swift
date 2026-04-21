@@ -13,20 +13,20 @@ import SwiftUI
 struct FeedPanelView: View {
     enum Filter: String, CaseIterable, Identifiable {
         case actionable
-        case all
+        case activity
         var id: String { rawValue }
         var label: String {
             switch self {
             case .actionable:
                 return String(localized: "feed.filter.actionable", defaultValue: "Actionable")
-            case .all:
-                return String(localized: "feed.filter.all", defaultValue: "All")
+            case .activity:
+                return String(localized: "feed.filter.activity", defaultValue: "Activity")
             }
         }
         var symbolName: String {
             switch self {
             case .actionable: return "exclamationmark.circle"
-            case .all: return "list.bullet"
+            case .activity: return "checklist"
             }
         }
     }
@@ -158,8 +158,15 @@ private struct FeedListView: View {
         switch filter {
         case .actionable:
             base = items.filter { $0.kind.isActionable }
-        case .all:
-            base = items
+        case .activity:
+            // Actionable kinds + todos. Tool use, user prompts,
+            // assistant messages, session markers, and raw
+            // notifications are intentionally excluded — they're too
+            // noisy for a sidebar and already visible in the agent's
+            // terminal or the cmux notification system.
+            base = items.filter { item in
+                item.kind.isActionable || item.kind == .todos
+            }
         }
         // Newest first. Status isn't a sort key — resolved items stay
         // in the chronological slot where they arrived so the user's
@@ -173,15 +180,15 @@ private struct FeedListView: View {
             Text(filter == .actionable
                  ? String(localized: "feed.empty.actionable.title",
                           defaultValue: "No pending decisions")
-                 : String(localized: "feed.empty.all.title",
-                          defaultValue: "No feed activity yet"))
+                 : String(localized: "feed.empty.activity.title",
+                          defaultValue: "No activity yet"))
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
             Text(filter == .actionable
                  ? String(localized: "feed.empty.actionable.subtitle",
                           defaultValue: "Permission, plan, and question requests from AI agents will appear here.")
-                 : String(localized: "feed.empty.all.subtitle",
-                          defaultValue: "Tool use, messages, and session events will appear here."))
+                 : String(localized: "feed.empty.activity.subtitle",
+                          defaultValue: "Agent decisions and todo-list updates will appear here."))
                 .font(.system(size: 11))
                 .foregroundColor(.secondary.opacity(0.7))
                 .multilineTextAlignment(.center)
