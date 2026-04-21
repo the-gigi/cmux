@@ -197,10 +197,25 @@ public final class WorkstreamStore {
         )
     }
 
+    /// Marks every pending item with `ppid` as `.expired`. Meant to
+    /// be called from a kqueue/DispatchSource process-exit handler
+    /// so the exact moment an agent dies, its pending cards close.
+    public func expireItems(forPpid ppid: Int) {
+        let now = clock()
+        for idx in items.indices {
+            guard items[idx].status.isPending,
+                  items[idx].ppid == ppid else { continue }
+            items[idx].status = .expired(at: now)
+            items[idx].updatedAt = now
+        }
+    }
+
     /// Marks every pending item whose emitting agent process is no
-    /// longer alive as `.expired`. Called periodically so a killed
-    /// `claude` / `codex` doesn't leave actionable cards waiting
-    /// forever. Falls back silently on systems without `kill()`.
+    /// longer alive as `.expired`. Used once at app startup to
+    /// catch items restored from the JSONL log whose original
+    /// agent never made it to the kqueue-watcher install; steady-
+    /// state abandonment is driven by `expireItems(forPpid:)` from
+    /// the DispatchSource handler instead.
     public func expireAbandonedItems(
         isProcessAlive: (Int) -> Bool = WorkstreamStore.defaultIsProcessAlive
     ) {

@@ -25,7 +25,16 @@ final class FeedCoordinator: @unchecked Sendable {
     private let waiterLock = NSLock()
     private var waiters: [String: PendingWaiter] = [:]
 
-    @MainActor private var abandonedSweepTimer: Timer?
+    /// One kqueue-backed DispatchSource per distinct agent PID we've
+    /// ever seen. The kernel fires `.exit` the instant the process
+    /// dies (or immediately if it's already dead). When that fires
+    /// we mark every pending item for that PID as `.expired` and
+    /// cancel the source. Keyed by PID so the same agent spawning
+    /// multiple prompts only installs one watcher.
+    @MainActor private var pidWatchers: [Int: DispatchSourceProcess] = [:]
+    private let pidWatcherQueue = DispatchQueue(
+        label: "cmux.feed.pidWatcher", qos: .utility
+    )
 
     private init() {}
 
@@ -33,23 +42,38 @@ final class FeedCoordinator: @unchecked Sendable {
     @MainActor
     func install(store: WorkstreamStore) {
         self.store = store
-        startAbandonedItemSweep()
+        // Catch any pending items that were restored from disk whose
+        // agent is already gone. After this, live tracking is
+        // kqueue-driven — no polling.
+        store.expireAbandonedItems()
+        for ppid in store.pending.compactMap(\.ppid) {
+            armPidWatcher(ppid: ppid)
+        }
     }
 
-    /// Polls every 5s and expires any pending item whose emitting
-    /// agent process (`claude`, `codex`, `opencode`, …) has died.
-    /// Uses the agent PID captured on ingest (event.ppid). Runs on
-    /// the main actor; the kill(2) check is cheap.
+    /// Installs a one-shot kqueue watcher for `ppid`. The handler
+    /// fires the moment the kernel observes process exit (or
+    /// immediately if `ppid` is already dead), marks every pending
+    /// item for that PID as `.expired`, and cancels the source.
+    /// Idempotent: subsequent calls with the same PID no-op.
     @MainActor
-    private func startAbandonedItemSweep() {
-        guard abandonedSweepTimer == nil else { return }
-        let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
+    func armPidWatcher(ppid: Int) {
+        guard ppid > 0, pidWatchers[ppid] == nil else { return }
+        let src = DispatchSource.makeProcessSource(
+            identifier: pid_t(ppid),
+            eventMask: .exit,
+            queue: pidWatcherQueue
+        )
+        src.setEventHandler { [weak self] in
             Task { @MainActor in
-                self?.store?.expireAbandonedItems()
+                guard let self else { return }
+                self.store?.expireItems(forPpid: ppid)
+                self.pidWatchers[ppid]?.cancel()
+                self.pidWatchers.removeValue(forKey: ppid)
             }
         }
-        RunLoop.main.add(timer, forMode: .common)
-        abandonedSweepTimer = timer
+        pidWatchers[ppid] = src
+        src.resume()
     }
 
     /// Ingests a wire-frame event and, when `waitTimeout` > 0, blocks the
@@ -70,12 +94,18 @@ final class FeedCoordinator: @unchecked Sendable {
             waiterLock.unlock()
         }
 
-        // Hop to main to actually insert the item.
+        // Hop to main to actually insert the item + install the
+        // kqueue watcher for the agent's PID. The watcher handler
+        // caps the pending lifetime to the agent process lifetime
+        // — no polling, no leaked cards when the agent is killed.
         let itemIdSlot = UnsafeItemIdSlot()
         DispatchQueue.main.sync {
             MainActor.assumeIsolated {
                 FeedCoordinator.shared.store.ingest(event)
                 itemIdSlot.value = FeedCoordinator.shared.store.items.last?.id
+                if let ppid = event.ppid, ppid > 0 {
+                    FeedCoordinator.shared.armPidWatcher(ppid: ppid)
+                }
             }
         }
 
