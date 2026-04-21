@@ -7219,9 +7219,10 @@ class TerminalController {
                 data: nil
             )
         }
+        let feedback = params["feedback"] as? String
         FeedCoordinator.shared.deliverReply(
             requestId: requestId,
-            decision: .exitPlan(mode)
+            decision: .exitPlan(mode, feedback: feedback)
         )
         return .ok(["delivered": true])
     }

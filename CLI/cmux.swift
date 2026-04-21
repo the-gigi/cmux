@@ -14754,6 +14754,17 @@ struct CMUXCLI {
 
         case "exit_plan":
             let mode = decision["mode"] as? String ?? "manual"
+            let feedback = (decision["feedback"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // Feedback always wins: any non-empty "Tell Claude what to
+            // change" text turns the decision into a block+reason so
+            // Claude refines rather than proceeding with the plan.
+            if let feedback, !feedback.isEmpty {
+                return encode([
+                    "decision": "block",
+                    "reason": feedback
+                ])
+            }
             if mode == "deny" {
                 return encode([
                     "decision": "block",

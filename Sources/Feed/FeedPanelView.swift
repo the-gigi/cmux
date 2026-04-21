@@ -178,7 +178,7 @@ private func snapshotWorkstreamId(_ s: FeedItemSnapshot) -> String {
 struct FeedRowActions {
     let approvePermission: (UUID, WorkstreamPermissionMode) -> Void
     let replyQuestion: (UUID, [String]) -> Void
-    let approveExitPlan: (UUID, WorkstreamExitPlanMode) -> Void
+    let approveExitPlan: (UUID, WorkstreamExitPlanMode, String?) -> Void
     let jump: (String) -> Void
 
     static func bound() -> FeedRowActions {
@@ -199,11 +199,11 @@ struct FeedRowActions {
                     )
                 }
             },
-            approveExitPlan: { itemId, mode in
+            approveExitPlan: { itemId, mode, feedback in
                 Task { @MainActor in
                     FeedCoordinator.shared.deliverReply(
                         requestId: Self.requestId(for: itemId) ?? itemId.uuidString,
-                        decision: .exitPlan(mode)
+                        decision: .exitPlan(mode, feedback: feedback)
                     )
                 }
             },
@@ -471,7 +471,9 @@ struct FeedItemRow: View {
             ExitPlanActionArea(
                 plan: plan,
                 status: snapshot.status,
-                onApprove: { mode in actions.approveExitPlan(snapshot.id, mode) }
+                onApprove: { mode, feedback in
+                    actions.approveExitPlan(snapshot.id, mode, feedback)
+                }
             )
         case .question(_, let questions):
             QuestionActionArea(
@@ -511,7 +513,10 @@ struct FeedItemRow: View {
         switch decision {
         case .permission(let m):
             return "\(String(localized: "feed.badge.allowed", defaultValue: "Allowed")) · \(m.rawValue)"
-        case .exitPlan(let m):
+        case .exitPlan(let m, let feedback):
+            if let feedback, !feedback.isEmpty {
+                return String(localized: "feed.badge.refined", defaultValue: "Refined")
+            }
             return String(localized: "feed.badge.plan", defaultValue: "Plan") + " · \(m.rawValue)"
         case .question:
             return String(localized: "feed.badge.answered", defaultValue: "Answered")
@@ -607,25 +612,70 @@ private struct PermissionActionArea: View {
 private struct ExitPlanActionArea: View {
     let plan: String
     let status: WorkstreamStatus
-    let onApprove: (WorkstreamExitPlanMode) -> Void
+    let onApprove: (WorkstreamExitPlanMode, String?) -> Void
+
+    @State private var feedback: String = ""
+
+    private var trimmedFeedback: String {
+        feedback.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var hasFeedback: Bool { !trimmedFeedback.isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             PlanBodyView(plan: plan)
             if status.isPending {
+                TextField(
+                    String(
+                        localized: "feed.exitplan.feedback.placeholder",
+                        defaultValue: "Tell Claude what to change…"
+                    ),
+                    text: $feedback,
+                    axis: .vertical
+                )
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .lineLimit(2...5)
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.primary.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.primary.opacity(hasFeedback ? 0.25 : 0.10), lineWidth: 1)
+                )
                 HStack(spacing: 6) {
                     PlanCTAButton(
-                        label: String(localized: "feed.exitplan.manual", defaultValue: "Manually Approve"),
-                        role: .neutral
-                    ) { onApprove(.manual) }
+                        label: hasFeedback
+                            ? String(localized: "feed.exitplan.refine",
+                                     defaultValue: "Send feedback")
+                            : String(localized: "feed.exitplan.manual",
+                                     defaultValue: "Manually Approve"),
+                        role: hasFeedback ? .refine : .neutral
+                    ) {
+                        // When there's feedback, hand it back with .manual
+                        // as a placeholder mode; the hook translates
+                        // "feedback non-empty" into block+reason regardless
+                        // of mode.
+                        onApprove(.manual, hasFeedback ? trimmedFeedback : nil)
+                    }
                     PlanCTAButton(
-                        label: String(localized: "feed.exitplan.autoaccept", defaultValue: "Auto-accept Edits"),
-                        role: .orange
-                    ) { onApprove(.autoAccept) }
+                        label: String(localized: "feed.exitplan.autoaccept",
+                                      defaultValue: "Auto-accept Edits"),
+                        role: .orange,
+                        dimmed: hasFeedback
+                    ) {
+                        onApprove(.autoAccept, hasFeedback ? trimmedFeedback : nil)
+                    }
                     PlanCTAButton(
-                        label: String(localized: "feed.exitplan.bypass", defaultValue: "Bypass Permissions"),
-                        role: .red
-                    ) { onApprove(.bypassPermissions) }
+                        label: String(localized: "feed.exitplan.bypass",
+                                      defaultValue: "Bypass Permissions"),
+                        role: .red,
+                        dimmed: hasFeedback
+                    ) {
+                        onApprove(.bypassPermissions, hasFeedback ? trimmedFeedback : nil)
+                    }
                 }
             }
         }
@@ -784,9 +834,10 @@ private struct PlanBodyView: View {
 
 /// Full-width color-coded CTA for plan-mode decisions.
 private struct PlanCTAButton: View {
-    enum Role { case neutral, orange, red }
+    enum Role { case neutral, orange, red, refine }
     let label: String
     let role: Role
+    var dimmed: Bool = false
     let action: () -> Void
 
     @State private var isHovered: Bool = false
@@ -806,6 +857,7 @@ private struct PlanCTAButton: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .stroke(border, lineWidth: 1)
                 )
+                .opacity(dimmed ? 0.55 : 1.0)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -815,6 +867,7 @@ private struct PlanCTAButton: View {
     private var foreground: Color {
         switch role {
         case .neutral: return .primary
+        case .refine: return .white
         case .orange: return .white
         case .red: return .white
         }
@@ -824,6 +877,10 @@ private struct PlanCTAButton: View {
         switch role {
         case .neutral:
             return isHovered ? Color.primary.opacity(0.16) : Color.primary.opacity(0.10)
+        case .refine:
+            return isHovered
+                ? Color(red: 0.28, green: 0.55, blue: 0.95)
+                : Color(red: 0.24, green: 0.48, blue: 0.88)
         case .orange:
             return isHovered
                 ? Color(red: 0.95, green: 0.55, blue: 0.18)
@@ -838,6 +895,7 @@ private struct PlanCTAButton: View {
     private var border: Color {
         switch role {
         case .neutral: return Color.primary.opacity(0.18)
+        case .refine: return Color.black.opacity(0.18)
         case .orange: return Color.black.opacity(0.15)
         case .red: return Color.black.opacity(0.20)
         }
@@ -941,27 +999,23 @@ private struct QuestionActionArea: View {
             }
             selections[questionId] = current
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: selected
-                      ? (multi ? "checkmark.square.fill" : "largecircle.fill.circle")
-                      : (multi ? "square" : "circle"))
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(selected ? .accentColor : .secondary)
-                Text(option.label)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.primary.opacity(0.92))
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(selected ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.08))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .stroke(selected ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.12), lineWidth: 1)
-            )
-            .contentShape(Rectangle())
+            Text(option.label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(selected ? .primary : .primary.opacity(0.85))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(selected ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.10))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(selected
+                                ? Color.accentColor.opacity(0.55)
+                                : Color.primary.opacity(0.10),
+                                lineWidth: 1)
+                )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

@@ -5,6 +5,9 @@ import Foundation
 public enum WorkstreamAction: Sendable, Equatable {
     case approvePermission(itemId: UUID, mode: WorkstreamPermissionMode)
     case replyQuestion(itemId: UUID, selections: [String])
-    case approveExitPlan(itemId: UUID, mode: WorkstreamExitPlanMode)
+    /// `feedback` is the user's free-form "Tell Claude what to change"
+    /// text. When non-empty the hook returns a block+reason response
+    /// even if `mode` is an approve variant — feedback always wins.
+    case approveExitPlan(itemId: UUID, mode: WorkstreamExitPlanMode, feedback: String? = nil)
     case jumpToSession(workstreamId: String)
 }

@@ -92,19 +92,21 @@ final class FeedCoordinator: @unchecked Sendable {
     /// Called by the `feed.*.reply` handlers. Marks the corresponding
     /// item resolved on the main-actor store and wakes any waiter.
     func deliverReply(requestId: String, decision: WorkstreamDecision) {
-        // Resolve the store side first.
-        DispatchQueue.main.sync {
+        let resolve: @Sendable () -> Void = { [requestId, decision] in
             MainActor.assumeIsolated {
                 let store = FeedCoordinator.shared.store
                 guard let store else { return }
-                // Find the item matching this request id by scanning the
-                // payload. In practice the store's own request-id index
-                // handles this, but `markResolved` takes an item id so we
-                // re-derive it here.
                 if let itemId = Self.findItemId(for: requestId, in: store.items) {
                     store.markResolved(itemId, decision: decision)
                 }
             }
+        }
+        if Thread.isMainThread {
+            // Avoid DispatchQueue.main.sync → main deadlock when called
+            // from the UI layer.
+            resolve()
+        } else {
+            DispatchQueue.main.sync(execute: resolve)
         }
 
         waiterLock.lock()
@@ -164,14 +166,19 @@ private final class SnapshotSlot: @unchecked Sendable {
 
 extension FeedCoordinator {
     /// Thread-safe snapshot of the store's items; hops to main to read
-    /// the observable state.
+    /// the observable state (only if called off-main).
     func snapshot(pendingOnly: Bool) -> [WorkstreamItem] {
         let slot = SnapshotSlot()
-        DispatchQueue.main.sync {
+        let body: @Sendable () -> Void = { [slot] in
             MainActor.assumeIsolated {
                 guard let store = FeedCoordinator.shared.store else { return }
                 slot.value = pendingOnly ? store.pending : store.items
             }
+        }
+        if Thread.isMainThread {
+            body()
+        } else {
+            DispatchQueue.main.sync(execute: body)
         }
         return slot.value
     }
@@ -358,8 +365,12 @@ enum FeedSocketEncoding {
         switch decision {
         case .permission(let mode):
             return ["kind": "permission", "mode": mode.rawValue]
-        case .exitPlan(let mode):
-            return ["kind": "exit_plan", "mode": mode.rawValue]
+        case .exitPlan(let mode, let feedback):
+            var dict: [String: Any] = ["kind": "exit_plan", "mode": mode.rawValue]
+            if let feedback, !feedback.isEmpty {
+                dict["feedback"] = feedback
+            }
+            return dict
         case .question(let selections):
             return ["kind": "question", "selections": selections]
         }

@@ -149,8 +149,8 @@ public final class WorkstreamStore {
             markResolved(itemId, decision: .permission(mode))
         case .replyQuestion(let itemId, let selections):
             markResolved(itemId, decision: .question(selections: selections))
-        case .approveExitPlan(let itemId, let mode):
-            markResolved(itemId, decision: .exitPlan(mode))
+        case .approveExitPlan(let itemId, let mode, let feedback):
+            markResolved(itemId, decision: .exitPlan(mode, feedback: feedback))
         case .jumpToSession:
             // Jump is a navigation action; the item (if any) is unchanged.
             break

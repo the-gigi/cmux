@@ -3,7 +3,11 @@ import Foundation
 /// The user's decision on a resolved actionable item.
 public enum WorkstreamDecision: Codable, Sendable, Equatable {
     case permission(WorkstreamPermissionMode)
-    case exitPlan(WorkstreamExitPlanMode)
+    /// `feedback` carries the user's "Tell Claude what to change" text
+    /// when non-nil. When present the hook translates into a
+    /// `{decision: block, reason: feedback}` response so Claude refines
+    /// rather than proceeding.
+    case exitPlan(WorkstreamExitPlanMode, feedback: String? = nil)
     case question(selections: [String])
 }
 

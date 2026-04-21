@@ -118,7 +118,9 @@ private enum FeedPreviewActions {
         FeedRowActions(
             approvePermission: { id, mode in print("preview.permission \(id) \(mode)") },
             replyQuestion: { id, selections in print("preview.question \(id) \(selections)") },
-            approveExitPlan: { id, mode in print("preview.exitPlan \(id) \(mode)") },
+            approveExitPlan: { id, mode, feedback in
+                print("preview.exitPlan \(id) \(mode) feedback=\(feedback ?? "nil")")
+            },
             jump: { ws in print("preview.jump \(ws)") }
         )
     }
