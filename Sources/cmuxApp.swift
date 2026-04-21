@@ -502,6 +502,9 @@ struct cmuxApp: App {
                     Button("Debug Window Controls…") {
                         DebugWindowControlsWindowController.shared.show()
                     }
+                    Button("Feed Preview…") {
+                        FeedPreviewWindowController.shared.show()
+                    }
                     Button("Menu Bar Extra Debug…") {
                         MenuBarExtraDebugWindowController.shared.show()
                     }
@@ -1160,6 +1163,7 @@ struct cmuxApp: App {
         SidebarDebugWindowController.shared.show()
         BackgroundDebugWindowController.shared.show()
         MenuBarExtraDebugWindowController.shared.show()
+        FeedPreviewWindowController.shared.show()
     }
 }
 

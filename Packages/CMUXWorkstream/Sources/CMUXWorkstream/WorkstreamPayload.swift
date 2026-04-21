@@ -29,6 +29,28 @@ public struct WorkstreamQuestionOption: Codable, Sendable, Equatable {
     }
 }
 
+/// One prompt inside a `.question` payload. Claude Code's
+/// `AskUserQuestion` tool can include several questions in a single
+/// call, so a payload carries an array of these.
+public struct WorkstreamQuestionPrompt: Codable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public let prompt: String
+    public let multiSelect: Bool
+    public let options: [WorkstreamQuestionOption]
+
+    public init(
+        id: String,
+        prompt: String,
+        multiSelect: Bool,
+        options: [WorkstreamQuestionOption]
+    ) {
+        self.id = id
+        self.prompt = prompt
+        self.multiSelect = multiSelect
+        self.options = options
+    }
+}
+
 /// Task-list entry reported by Claude's `TodoWrite` tool or equivalent.
 public struct WorkstreamTaskTodo: Codable, Sendable, Equatable {
     public enum State: String, Codable, Sendable, Equatable {
@@ -66,9 +88,7 @@ public enum WorkstreamPayload: Codable, Sendable, Equatable {
     )
     case question(
         requestId: String,
-        prompt: String,
-        options: [WorkstreamQuestionOption],
-        multiSelect: Bool
+        questions: [WorkstreamQuestionPrompt]
     )
     case toolUse(toolName: String, toolInputJSON: String)
     case toolResult(toolName: String, resultJSON: String, isError: Bool)

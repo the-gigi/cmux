@@ -222,7 +222,7 @@ struct FeedRowActions {
             switch item.payload {
             case .permissionRequest(let rid, _, _, _): return rid
             case .exitPlan(let rid, _, _): return rid
-            case .question(let rid, _, _, _): return rid
+            case .question(let rid, _): return rid
             default: return nil
             }
         }
@@ -231,15 +231,22 @@ struct FeedRowActions {
 
 // MARK: - Row (matches SessionIndexView row aesthetic)
 
-private struct FeedItemRow: View {
+struct FeedItemRow: View {
     let snapshot: FeedItemSnapshot
     let actions: FeedRowActions
 
     @State private var isHovered: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            header
+        VStack(alignment: .leading, spacing: 10) {
+            chipHeader
+            if let echo = promptEcho, !echo.isEmpty {
+                Text(echo)
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+            }
             actionArea
         }
         .padding(.horizontal, 12)
@@ -259,6 +266,19 @@ private struct FeedItemRow: View {
         .help(helpText)
         .onTapGesture(count: 2) {
             actions.jump(workstreamIdForJump)
+        }
+    }
+
+    private var promptEcho: String? {
+        switch snapshot.payload {
+        case .permissionRequest(_, let toolName, _, _):
+            return "You: \(toolName) request from \(snapshot.source.rawValue.capitalized)"
+        case .exitPlan:
+            return nil
+        case .question:
+            return nil
+        default:
+            return nil
         }
     }
 
@@ -296,38 +316,120 @@ private struct FeedItemRow: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 8) {
+    /// Vibe-Island-inspired header: kind icon + project/path title on
+    /// the left, chip row on the right (agent, cmux, time, optional
+    /// jump indicator).
+    private var chipHeader: some View {
+        HStack(alignment: .center, spacing: 8) {
             Image(systemName: snapshot.kind.symbolName)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(kindTint)
-                .frame(width: 14, height: 14)
+                .frame(width: 16, height: 16)
+            Text(headerTitle)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.primary.opacity(0.92))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 4)
             HStack(spacing: 4) {
-                Text(kindLabel)
-                    .font(.system(size: 10, weight: .heavy))
-                    .tracking(0.5)
-                    .foregroundColor(kindTint)
-                Text("·")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(.secondary.opacity(0.5))
-                Text(snapshot.source.rawValue.capitalized)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.primary.opacity(0.85))
-            }
-            Spacer(minLength: 8)
-            if case .resolved(let decision, _) = snapshot.status {
-                statusTag(resolvedBadgeLabel(decision), color: .green)
-            } else if case .expired = snapshot.status {
-                statusTag(
-                    String(localized: "feed.status.expired", defaultValue: "Expired"),
-                    color: .secondary
+                chip(
+                    text: snapshot.source.rawValue.capitalized,
+                    fg: sourceChipForeground,
+                    bg: sourceChipBackground
                 )
+                chip(
+                    text: "cmux",
+                    fg: .secondary,
+                    bg: Color.primary.opacity(0.10)
+                )
+                chip(
+                    text: relativeTimeChip(snapshot.createdAt),
+                    fg: .secondary,
+                    bg: Color.primary.opacity(0.10),
+                    mono: true
+                )
+                if canJump {
+                    jumpChip
+                }
             }
-            Text(relativeTime(snapshot.createdAt))
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundColor(.secondary.opacity(0.7))
-                .fixedSize()
         }
+    }
+
+    private var headerTitle: String {
+        if let title = snapshot.title, !title.isEmpty {
+            if let cwd = snapshot.cwd, !cwd.isEmpty {
+                return "\(cwdShort(cwd)) · \(title)"
+            }
+            return title
+        }
+        if let cwd = snapshot.cwd, !cwd.isEmpty {
+            return "\(cwdShort(cwd)) · \(kindLabel.capitalized)"
+        }
+        return kindLabel.capitalized
+    }
+
+    private func cwdShort(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        if path.hasPrefix(home) {
+            return "~" + String(path.dropFirst(home.count))
+        }
+        return path
+    }
+
+    private var canJump: Bool {
+        return true
+    }
+
+    private var jumpChip: some View {
+        HStack(spacing: 2) {
+            Text("⌘G")
+                .font(.system(size: 10, weight: .semibold).monospaced())
+            Image(systemName: "arrow.up.forward")
+                .font(.system(size: 8, weight: .semibold))
+        }
+        .foregroundColor(.blue)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(Color.blue.opacity(0.15))
+        )
+    }
+
+    private func chip(text: String, fg: Color, bg: Color, mono: Bool = false) -> some View {
+        Text(text)
+            .font(mono
+                  ? .system(size: 10, weight: .semibold).monospacedDigit()
+                  : .system(size: 10, weight: .semibold))
+            .foregroundColor(fg)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(bg)
+            )
+    }
+
+    private var sourceChipForeground: Color {
+        switch snapshot.source {
+        case .claude: return Color(red: 0.92, green: 0.54, blue: 0.29)
+        case .codex: return .green
+        case .opencode: return .blue
+        case .cursor: return .purple
+        default: return .secondary
+        }
+    }
+
+    private var sourceChipBackground: Color {
+        return sourceChipForeground.opacity(0.18)
+    }
+
+    private func relativeTimeChip(_ date: Date) -> String {
+        let interval = Date().timeIntervalSince(date)
+        if interval < 60 { return "<1m" }
+        if interval < 3600 { return "\(Int(interval / 60))m" }
+        if interval < 86_400 { return "\(Int(interval / 3600))h" }
+        return "\(Int(interval / 86_400))d"
     }
 
     private var kindLabel: String {
@@ -371,11 +473,9 @@ private struct FeedItemRow: View {
                 status: snapshot.status,
                 onApprove: { mode in actions.approveExitPlan(snapshot.id, mode) }
             )
-        case .question(_, let prompt, let options, let multiSelect):
+        case .question(_, let questions):
             QuestionActionArea(
-                prompt: prompt,
-                options: options,
-                multiSelect: multiSelect,
+                questions: questions,
                 status: snapshot.status,
                 onReply: { selections in actions.replyQuestion(snapshot.id, selections) }
             )
@@ -510,102 +610,474 @@ private struct ExitPlanActionArea: View {
     let onApprove: (WorkstreamExitPlanMode) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(plan)
-                .font(.system(size: 11))
-                .foregroundColor(.primary.opacity(0.85))
-                .lineLimit(6)
+        VStack(alignment: .leading, spacing: 10) {
+            PlanBodyView(plan: plan)
             if status.isPending {
                 HStack(spacing: 6) {
-                    FeedPillButton(
-                        label: String(localized: "feed.exitplan.bypass", defaultValue: "Bypass"),
-                        symbolName: "bolt",
-                        style: .action
-                    ) { onApprove(.bypassPermissions) }
-                    FeedPillButton(
-                        label: String(localized: "feed.exitplan.autoaccept", defaultValue: "Auto-accept"),
-                        symbolName: "wand.and.stars",
-                        style: .action
-                    ) { onApprove(.autoAccept) }
-                    FeedPillButton(
-                        label: String(localized: "feed.exitplan.manual", defaultValue: "Manual"),
-                        symbolName: "hand.raised",
-                        style: .action
+                    PlanCTAButton(
+                        label: String(localized: "feed.exitplan.manual", defaultValue: "Manually Approve"),
+                        role: .neutral
                     ) { onApprove(.manual) }
-                    Spacer(minLength: 4)
-                    FeedPillButton(
-                        label: String(localized: "feed.exitplan.deny", defaultValue: "Deny"),
-                        symbolName: "xmark.circle",
-                        tint: .red,
-                        style: .action
-                    ) { onApprove(.deny) }
+                    PlanCTAButton(
+                        label: String(localized: "feed.exitplan.autoaccept", defaultValue: "Auto-accept Edits"),
+                        role: .orange
+                    ) { onApprove(.autoAccept) }
+                    PlanCTAButton(
+                        label: String(localized: "feed.exitplan.bypass", defaultValue: "Bypass Permissions"),
+                        role: .red
+                    ) { onApprove(.bypassPermissions) }
                 }
             }
         }
     }
 }
 
+/// Renders plan text as a stack of small structured sections. Looks for
+/// lines formatted like `**Context**` / `# Approach` / `- item` and
+/// renders them with matching emphasis. Everything else renders as
+/// prose so we never drop content.
+private struct PlanBodyView: View {
+    let plan: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .heading(let text):
+                    Text(text)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.primary.opacity(0.95))
+                        .padding(.top, 2)
+                case .paragraph(let text):
+                    Text(text)
+                        .font(.system(size: 12))
+                        .foregroundColor(.primary.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                case .numbered(let items):
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                            HStack(alignment: .top, spacing: 6) {
+                                Text("\(item.index).")
+                                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                                    .foregroundColor(.secondary)
+                                Text(item.text)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.primary.opacity(0.85))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                case .bulleted(let items):
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                            HStack(alignment: .top, spacing: 6) {
+                                Text("·")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(Color.blue.opacity(0.8))
+                                Text(item)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.primary.opacity(0.85))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private enum Block {
+        case heading(String)
+        case paragraph(String)
+        case numbered([NumberedItem])
+        case bulleted([String])
+    }
+
+    private struct NumberedItem {
+        let index: Int
+        let text: String
+    }
+
+    private var blocks: [Block] {
+        var out: [Block] = []
+        var buffer: [String] = []
+        func flushParagraph() {
+            guard !buffer.isEmpty else { return }
+            let joined = buffer.joined(separator: " ")
+            out.append(.paragraph(joined))
+            buffer = []
+        }
+        var numbered: [NumberedItem] = []
+        func flushNumbered() {
+            if !numbered.isEmpty {
+                out.append(.numbered(numbered))
+                numbered = []
+            }
+        }
+        var bulleted: [String] = []
+        func flushBulleted() {
+            if !bulleted.isEmpty {
+                out.append(.bulleted(bulleted))
+                bulleted = []
+            }
+        }
+
+        for rawLine in plan.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            if line.isEmpty {
+                flushParagraph(); flushNumbered(); flushBulleted()
+                continue
+            }
+            // **Bold heading** or ## heading or "Word:" on its own line
+            if line.hasPrefix("**") && line.hasSuffix("**") && line.count > 4 {
+                flushParagraph(); flushNumbered(); flushBulleted()
+                out.append(.heading(String(line.dropFirst(2).dropLast(2))))
+                continue
+            }
+            if line.hasPrefix("## ") {
+                flushParagraph(); flushNumbered(); flushBulleted()
+                out.append(.heading(String(line.dropFirst(3))))
+                continue
+            }
+            if line.hasPrefix("# ") {
+                flushParagraph(); flushNumbered(); flushBulleted()
+                out.append(.heading(String(line.dropFirst(2))))
+                continue
+            }
+            if line.hasSuffix(":") && line.count <= 40
+               && !line.contains(" ") == false && line.split(separator: " ").count <= 4
+            {
+                flushParagraph(); flushNumbered(); flushBulleted()
+                out.append(.heading(line))
+                continue
+            }
+            // Numbered list
+            if let match = line.range(
+                of: #"^(\d+)\.\s+(.+)$"#,
+                options: .regularExpression
+            ) {
+                flushParagraph(); flushBulleted()
+                let text = String(line[match])
+                if let dotIdx = text.firstIndex(of: ".") {
+                    let numStr = String(text[text.startIndex..<dotIdx])
+                    let content = String(text[text.index(after: dotIdx)...])
+                        .trimmingCharacters(in: .whitespaces)
+                    numbered.append(NumberedItem(
+                        index: Int(numStr) ?? (numbered.count + 1),
+                        text: content
+                    ))
+                }
+                continue
+            }
+            if line.hasPrefix("- ") || line.hasPrefix("• ") || line.hasPrefix("* ") {
+                flushParagraph(); flushNumbered()
+                let text = String(line.dropFirst(2))
+                bulleted.append(text)
+                continue
+            }
+            buffer.append(line)
+        }
+        flushParagraph(); flushNumbered(); flushBulleted()
+        return out
+    }
+}
+
+/// Full-width color-coded CTA for plan-mode decisions.
+private struct PlanCTAButton: View {
+    enum Role { case neutral, orange, red }
+    let label: String
+    let role: Role
+    let action: () -> Void
+
+    @State private var isHovered: Bool = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(foreground)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(fill)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(border, lineWidth: 1)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+
+    private var foreground: Color {
+        switch role {
+        case .neutral: return .primary
+        case .orange: return .white
+        case .red: return .white
+        }
+    }
+
+    private var fill: Color {
+        switch role {
+        case .neutral:
+            return isHovered ? Color.primary.opacity(0.16) : Color.primary.opacity(0.10)
+        case .orange:
+            return isHovered
+                ? Color(red: 0.95, green: 0.55, blue: 0.18)
+                : Color(red: 0.92, green: 0.54, blue: 0.29)
+        case .red:
+            return isHovered
+                ? Color(red: 0.85, green: 0.28, blue: 0.28)
+                : Color(red: 0.75, green: 0.22, blue: 0.22)
+        }
+    }
+
+    private var border: Color {
+        switch role {
+        case .neutral: return Color.primary.opacity(0.18)
+        case .orange: return Color.black.opacity(0.15)
+        case .red: return Color.black.opacity(0.20)
+        }
+    }
+}
+
 private struct QuestionActionArea: View {
-    let prompt: String
-    let options: [WorkstreamQuestionOption]
-    let multiSelect: Bool
+    let questions: [WorkstreamQuestionPrompt]
     let status: WorkstreamStatus
     let onReply: ([String]) -> Void
 
-    @State private var selectedIds: Set<String> = []
+    // Per-question selections keyed by question id.
+    @State private var selections: [String: Set<String>] = [:]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if !prompt.isEmpty {
-                Text(prompt)
-                    .font(.system(size: 12))
-                    .foregroundColor(.primary.opacity(0.9))
+        VStack(alignment: .leading, spacing: 12) {
+            headerLine
+            ForEach(Array(questions.enumerated()), id: \.offset) { idx, q in
+                questionBlock(index: idx + 1, question: q)
             }
-            if options.isEmpty {
+            if status.isPending {
+                submitCTA
+            }
+        }
+    }
+
+    private var headerLine: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "bubble.left.and.bubble.right.fill")
+                .font(.system(size: 12))
+                .foregroundColor(.blue)
+            Text("\(questions.first.map { _ in "Question" } ?? "Question")")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(.blue)
+            Text("(\(questions.count) \(questions.count == 1 ? "question" : "questions"))")
+                .font(.system(size: 11))
+                .foregroundColor(.blue.opacity(0.7))
+        }
+    }
+
+    private func questionBlock(index: Int, question: WorkstreamQuestionPrompt) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 6) {
+                Text("\(index).")
+                    .font(.system(size: 12, weight: .bold).monospacedDigit())
+                    .foregroundColor(.blue)
+                Text(question.prompt)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.primary.opacity(0.95))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if question.multiSelect {
+                HStack(spacing: 4) {
+                    Image(systemName: "checklist")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text("Multi-select")
+                        .font(.system(size: 10, weight: .bold))
+                        .tracking(0.3)
+                }
+                .foregroundColor(.orange)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(Color.orange.opacity(0.18))
+                )
+            }
+            if question.options.isEmpty {
                 Text(String(localized: "feed.question.noOptions",
                             defaultValue: "Agent provided no options."))
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             } else {
-                ForEach(options, id: \.id) { option in
-                    Button {
-                        if multiSelect {
-                            if selectedIds.contains(option.id) { selectedIds.remove(option.id) }
-                            else { selectedIds.insert(option.id) }
-                        } else {
-                            selectedIds = [option.id]
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: selectedIds.contains(option.id)
-                                ? (multiSelect ? "checkmark.square.fill" : "largecircle.fill.circle")
-                                : (multiSelect ? "square" : "circle"))
-                                .font(.system(size: 11))
-                                .foregroundColor(selectedIds.contains(option.id) ? .accentColor : .secondary)
-                                .frame(width: 12, height: 12)
-                            Text(option.label)
-                                .font(.system(size: 12))
-                                .foregroundColor(.primary.opacity(0.9))
-                            Spacer()
-                        }
-                        .contentShape(Rectangle())
+                WrapHStack(spacing: 6) {
+                    ForEach(question.options, id: \.id) { option in
+                        optionPill(questionId: question.id, option: option, multi: question.multiSelect)
                     }
-                    .buttonStyle(.plain)
                 }
             }
-            if status.isPending {
-                HStack {
-                    Spacer()
-                    FeedPillButton(
-                        label: String(localized: "feed.question.submit", defaultValue: "Submit"),
-                        symbolName: "paperplane",
-                        tint: selectedIds.isEmpty ? .secondary : .accentColor,
-                        style: .action
-                    ) { onReply(Array(selectedIds)) }
-                    .disabled(selectedIds.isEmpty)
-                    .opacity(selectedIds.isEmpty ? 0.5 : 1)
-                }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
+        )
+    }
+
+    private func optionPill(
+        questionId: String,
+        option: WorkstreamQuestionOption,
+        multi: Bool
+    ) -> some View {
+        let selected = selections[questionId]?.contains(option.id) == true
+        return Button {
+            var current = selections[questionId] ?? []
+            if multi {
+                if current.contains(option.id) { current.remove(option.id) }
+                else { current.insert(option.id) }
+            } else {
+                current = [option.id]
             }
+            selections[questionId] = current
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: selected
+                      ? (multi ? "checkmark.square.fill" : "largecircle.fill.circle")
+                      : (multi ? "square" : "circle"))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(selected ? .accentColor : .secondary)
+                Text(option.label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.primary.opacity(0.92))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(selected ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .stroke(selected ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.12), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var allAnswered: Bool {
+        for q in questions where (selections[q.id]?.isEmpty ?? true) {
+            return false
+        }
+        return true
+    }
+
+    private var submitCTA: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                // Flatten every question's selections into a single
+                // array, prefixed with the question id so the agent
+                // receives `["q0:minimal", "q1:reload_tagged"]`.
+                var out: [String] = []
+                for q in questions {
+                    if let set = selections[q.id] {
+                        for id in set { out.append("\(q.id):\(id)") }
+                    }
+                }
+                onReply(out)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 13))
+                    Text(String(localized: "feed.question.submitAll", defaultValue: "Submit All Answers"))
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundColor(allAnswered ? .primary : .secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(allAnswered ? Color.primary.opacity(0.14) : Color.primary.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.primary.opacity(allAnswered ? 0.22 : 0.12), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!allAnswered)
+
+            if !allAnswered {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                    Text(String(localized: "feed.question.answerAll",
+                                defaultValue: "Please answer all questions"))
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundColor(.orange)
+            }
+        }
+    }
+}
+
+/// Minimal wrapping HStack that flows its children into multiple rows.
+private struct WrapHStack<Content: View>: View {
+    let spacing: CGFloat
+    let content: () -> Content
+
+    init(spacing: CGFloat = 4, @ViewBuilder content: @escaping () -> Content) {
+        self.spacing = spacing
+        self.content = content
+    }
+
+    var body: some View {
+        FlowLayout(spacing: spacing) {
+            content()
+        }
+    }
+}
+
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 4
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var currentX: CGFloat = 0
+        var currentRowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if currentX + size.width > maxWidth && currentX > 0 {
+                totalHeight += currentRowHeight + spacing
+                totalWidth = max(totalWidth, currentX - spacing)
+                currentX = 0
+                currentRowHeight = 0
+            }
+            currentX += size.width + spacing
+            currentRowHeight = max(currentRowHeight, size.height)
+        }
+        totalHeight += currentRowHeight
+        totalWidth = max(totalWidth, currentX - spacing)
+        return CGSize(width: totalWidth, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x: CGFloat = bounds.minX
+        var y: CGFloat = bounds.minY
+        var rowHeight: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX && x > bounds.minX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            sub.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
         }
     }
 }
@@ -614,7 +1086,9 @@ private struct TelemetryActionArea: View {
     let snapshot: FeedItemSnapshot
 
     var body: some View {
-        if !summary.isEmpty {
+        if case .todos(let todos) = snapshot.payload {
+            TodoListBody(todos: todos)
+        } else if !summary.isEmpty {
             Text(summary)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.secondary.opacity(0.85))
@@ -634,13 +1108,103 @@ private struct TelemetryActionArea: View {
         case .sessionStart: return "session start"
         case .sessionEnd: return "session end"
         case .stop(let reason): return "stop \(reason ?? "")"
-        case .todos(let todos):
-            let done = todos.filter { $0.state == .completed }.count
-            let inProgress = todos.filter { $0.state == .inProgress }.count
-            let pending = todos.filter { $0.state == .pending }.count
-            return "todos: \(done) done, \(inProgress) in progress, \(pending) pending"
         default:
             return ""
+        }
+    }
+}
+
+private struct TodoListBody: View {
+    let todos: [WorkstreamTaskTodo]
+
+    @State private var expanded = false
+
+    private var done: [WorkstreamTaskTodo] { todos.filter { $0.state == .completed } }
+    private var inProgress: [WorkstreamTaskTodo] { todos.filter { $0.state == .inProgress } }
+    private var pending: [WorkstreamTaskTodo] { todos.filter { $0.state == .pending } }
+
+    private var visibleDone: [WorkstreamTaskTodo] {
+        expanded ? done : Array(done.prefix(2))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                Text("Tasks")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(.primary.opacity(0.9))
+                Text(summaryLabel)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(inProgress, id: \.id) { row($0) }
+                ForEach(pending, id: \.id) { row($0) }
+                ForEach(visibleDone, id: \.id) { row($0) }
+                if done.count > visibleDone.count {
+                    Button {
+                        expanded.toggle()
+                    } label: {
+                        Text("… +\(done.count - visibleDone.count) completed")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary.opacity(0.8))
+                            .padding(.leading, 22)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if expanded && done.count > 2 {
+                    Button { expanded = false } label: {
+                        Text("Collapse")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary.opacity(0.8))
+                            .padding(.leading, 22)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private var summaryLabel: String {
+        let d = done.count, ip = inProgress.count, p = pending.count
+        var parts: [String] = []
+        if d > 0 { parts.append("\(d) done") }
+        if ip > 0 { parts.append("\(ip) in progress") }
+        if p > 0 { parts.append("\(p) open") }
+        return "(" + parts.joined(separator: ", ") + ")"
+    }
+
+    @ViewBuilder
+    private func row(_ todo: WorkstreamTaskTodo) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: symbol(for: todo.state))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(color(for: todo.state))
+                .frame(width: 14, height: 14)
+            Text(todo.content)
+                .font(.system(size: 12))
+                .foregroundColor(todo.state == .completed
+                    ? .secondary.opacity(0.7)
+                    : .primary.opacity(0.9))
+                .strikethrough(todo.state == .completed, color: .secondary.opacity(0.6))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+        }
+    }
+
+    private func symbol(for state: WorkstreamTaskTodo.State) -> String {
+        switch state {
+        case .completed: return "checkmark.square.fill"
+        case .inProgress: return "circle.inset.filled"
+        case .pending: return "square"
+        }
+    }
+
+    private func color(for state: WorkstreamTaskTodo.State) -> Color {
+        switch state {
+        case .completed: return .secondary.opacity(0.7)
+        case .inProgress: return .blue
+        case .pending: return .secondary
         }
     }
 }

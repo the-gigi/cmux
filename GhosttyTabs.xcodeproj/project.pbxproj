@@ -22,6 +22,7 @@
 		AA11BB22CC33DD44EE550001 /* CMUXWorkstream in Frameworks */ = {isa = PBXBuildFile; productRef = AA11BB22CC33DD44EE550002 /* CMUXWorkstream */; };
 		FEED0000000000000000F002 /* FeedCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEED0000000000000000F001 /* FeedCoordinator.swift */; };
 		FEED0000000000000000F005 /* FeedPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEED0000000000000000F004 /* FeedPanelView.swift */; };
+		FEED0000000000000000F00B /* FeedPreviewWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEED0000000000000000F00A /* FeedPreviewWindowController.swift */; };
 		698944F99A6ADFBA24A7BFB9 /* AuthSettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1EA8948C5F126FE63CFB4E /* AuthSettingsStore.swift */; };
 		6B524A0BA34FD46A771335AB /* WorkspaceUnitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71F8ED91A4B55D34BE6A0668 /* WorkspaceUnitTests.swift */; };
 		734F49D37E543DD01C2F4FEF /* NotificationAndMenuBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2C075029771815DD5DA1332 /* NotificationAndMenuBarTests.swift */; };
@@ -236,6 +237,7 @@
 		312DE7503B4658DD173121B8 /* AuthManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthManager.swift; sourceTree = "<group>"; };
 		FEED0000000000000000F001 /* FeedCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FeedCoordinator.swift; sourceTree = "<group>"; };
 		FEED0000000000000000F004 /* FeedPanelView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FeedPanelView.swift; sourceTree = "<group>"; };
+		FEED0000000000000000F00A /* FeedPreviewWindowController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FeedPreviewWindowController.swift; sourceTree = "<group>"; };
 		FEED0000000000000000F006 /* opencode-plugin.js */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.javascript; path = "opencode-plugin.js"; sourceTree = "<group>"; };
 		42092CDB2109E250F7F2A76E /* TabManagerUnitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabManagerUnitTests.swift; sourceTree = "<group>"; };
 		43430FA5929121E2EAAB3091 /* AuthEnvironment.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthEnvironment.swift; sourceTree = "<group>"; };
@@ -454,6 +456,7 @@
 			children = (
 				FEED0000000000000000F001 /* FeedCoordinator.swift */,
 				FEED0000000000000000F004 /* FeedPanelView.swift */,
+				FEED0000000000000000F00A /* FeedPreviewWindowController.swift */,
 			);
 			name = Feed;
 			path = Feed;
@@ -941,6 +944,7 @@
 				FE003103 /* RightSidebarPanelView.swift in Sources */,
 				FEED0000000000000000F002 /* FeedCoordinator.swift in Sources */,
 				FEED0000000000000000F005 /* FeedPanelView.swift in Sources */,
+				FEED0000000000000000F00B /* FeedPreviewWindowController.swift in Sources */,
 				36CE99ED050785B5E96B72BB /* AuthCallbackRouter.swift in Sources */,
 				D9FEC58D5BACCF76459F1BBE /* AuthEnvironment.swift in Sources */,
 				350DAC5EBD38642A3E81471A /* AuthManager.swift in Sources */,

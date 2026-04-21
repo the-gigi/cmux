@@ -125,7 +125,7 @@ final class FeedCoordinator: @unchecked Sendable {
                 return item.id
             case .exitPlan(let rid, _, _) where rid == requestId:
                 return item.id
-            case .question(let rid, _, _, _) where rid == requestId:
+            case .question(let rid, _) where rid == requestId:
                 return item.id
             default:
                 continue

@@ -167,7 +167,7 @@ public final class WorkstreamStore {
             } else if case .exitPlan(let rid, _, _) = item.payload {
                 requestIdToItemId[rid] = item.id
                 itemIdToRequestId[item.id] = rid
-            } else if case .question(let rid, _, _, _) = item.payload {
+            } else if case .question(let rid, _) = item.payload {
                 requestIdToItemId[rid] = item.id
                 itemIdToRequestId[item.id] = rid
             }
@@ -208,13 +208,12 @@ public final class WorkstreamStore {
                 )
             )
         case .askUserQuestion:
+            let parsed = parseQuestions(fromToolInput: event.toolInputJSON)
             return (
                 .question,
                 .question(
                     requestId: event.requestId ?? event.sessionId,
-                    prompt: "",
-                    options: [],
-                    multiSelect: false
+                    questions: parsed
                 )
             )
         case .exitPlanMode:
@@ -253,5 +252,50 @@ public final class WorkstreamStore {
             return tool
         }
         return nil
+    }
+
+    /// Parses Claude Code's `AskUserQuestion` tool input (or similar)
+    /// into an array of question prompts. Recognized shape:
+    ///   { "questions": [{ "question": "…", "multiSelect": true,
+    ///                     "options": [{"id": "a", "label": "…"}] }] }
+    /// Also tolerates flat legacy shapes with a single prompt.
+    private func parseQuestions(fromToolInput json: String?) -> [WorkstreamQuestionPrompt] {
+        guard let json, let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [] }
+
+        if let arr = root["questions"] as? [[String: Any]] {
+            return arr.enumerated().map { idx, q in
+                Self.makeQuestion(from: q, fallbackId: "q\(idx)")
+            }
+        }
+        // Flat shape: top-level { question, options, multiSelect }.
+        return [Self.makeQuestion(from: root, fallbackId: "q0")]
+    }
+
+    private static func makeQuestion(from dict: [String: Any], fallbackId: String) -> WorkstreamQuestionPrompt {
+        let prompt = (dict["question"] as? String)
+            ?? (dict["prompt"] as? String)
+            ?? ""
+        let multi = (dict["multiSelect"] as? Bool)
+            ?? (dict["multi_select"] as? Bool)
+            ?? false
+        let rawOptions = dict["options"] as? [Any] ?? []
+        var options: [WorkstreamQuestionOption] = []
+        for (i, raw) in rawOptions.enumerated() {
+            if let s = raw as? String {
+                options.append(WorkstreamQuestionOption(id: "opt\(i)", label: s))
+            } else if let d = raw as? [String: Any] {
+                let id = (d["id"] as? String) ?? "opt\(i)"
+                let label = (d["label"] as? String) ?? (d["title"] as? String) ?? id
+                options.append(WorkstreamQuestionOption(id: id, label: label))
+            }
+        }
+        return WorkstreamQuestionPrompt(
+            id: (dict["id"] as? String) ?? fallbackId,
+            prompt: prompt,
+            multiSelect: multi,
+            options: options
+        )
     }
 }
