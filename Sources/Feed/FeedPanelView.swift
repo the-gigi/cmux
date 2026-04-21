@@ -298,9 +298,11 @@ struct FeedItemRow: View {
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onHover { isHovered = $0 }
         .help(helpText)
-        .onTapGesture(count: 2) {
-            actions.jump(workstreamIdForJump)
-        }
+        // Note: no card-wide tap gesture — the `⌘G ↗` chip in the
+        // header is the explicit jump affordance. A card-wide
+        // onTapGesture(count: 2) would add ~500ms latency to every
+        // button press inside the card while AppKit waits to see if a
+        // second tap arrives.
     }
 
     private var promptEcho: String? {
@@ -372,19 +374,11 @@ struct FeedItemRow: View {
                     bg: sourceChipBackground
                 )
                 chip(
-                    text: "cmux",
-                    fg: .secondary,
-                    bg: Color.primary.opacity(0.10)
-                )
-                chip(
                     text: relativeTimeChip(snapshot.createdAt),
                     fg: .secondary,
                     bg: Color.primary.opacity(0.10),
                     mono: true
                 )
-                if canJump {
-                    jumpChip
-                }
             }
         }
     }
