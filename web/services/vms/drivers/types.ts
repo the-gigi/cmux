@@ -25,6 +25,13 @@ export type SSHEndpoint = {
   // One-time credential for this attach session. Drivers decide whether that's a password,
   // a bearer over an SSH ProxyCommand, or an authorized_keys line the client pushes.
   credential: { kind: "password"; value: string } | { kind: "authorizedKey"; privateKeyPem: string };
+  /**
+   * Opaque identity/token handle the driver needs later to revoke these credentials.
+   * Freestyle uses its identity id; E2B returns an empty string (no identities there yet).
+   * `vmActor` stashes this in state and calls `revokeSSHIdentity` on destroy and before
+   * minting a replacement identity, so unreferenced tokens don't pile up on the provider side.
+   */
+  identityHandle: string;
 };
 
 export type ExecResult = {
@@ -56,6 +63,11 @@ export interface VMProvider {
   // Returns a live SSH endpoint the client can dial into. Drivers are responsible for ensuring
   // sshd is running (some providers need an explicit start step).
   openSSH(vmId: string): Promise<SSHEndpoint>;
+
+  // Best-effort revocation of an identity handle that `openSSH` previously returned. No-op
+  // if the driver doesn't mint revocable credentials (e.g. E2B), must not throw on unknown
+  // or already-revoked handles — vmActor cleanup paths rely on it being safe to call.
+  revokeSSHIdentity(identityHandle: string): Promise<void>;
 }
 
 export class ProviderError extends Error {

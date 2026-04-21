@@ -10,15 +10,11 @@ export type VMState = {
   createdAt: number;
   pausedAt: number | null;
   /**
-   * Monotonic counter of disconnects. Every `onDisconnect` increments this and schedules an
-   * autoPause keyed on the new value. `autoPause` then checks that its captured epoch still
-   * matches — otherwise a later reconnect/disconnect cycle has opened a fresh idle window
-   * and the old timer should not fire. Fixes the race CodeRabbit flagged: without this,
-   * a disconnect at t=0 schedules a pause at t=10min, a reconnect at t=5min, and a later
-   * disconnect at t=6min all coexisted, and the t=0 timer could pause the VM ~4 minutes
-   * into the new 10-minute window.
+   * Identity handles returned by `openSSH`. Kept here (not thrown away after the endpoint is
+   * handed out) so we can revoke them on VM destroy and before minting a fresh replacement.
+   * Without this, every `cmux vm shell` call would leak a live Freestyle credential.
    */
-  idleEpoch: number;
+  sshIdentityHandles: string[];
   snapshots: Array<{ id: string; name?: string; createdAt: number }>;
 };
 
@@ -29,11 +25,18 @@ export type VMCreateInput = {
   image: string;
 };
 
-const IDLE_PAUSE_MS = 10 * 60 * 1000;
-
 // One actor per VM. Actor key is the provider's own id. The provider VM is already created by
-// the caller (userVmsActor.create) before we spawn this actor — we just own lifecycle, idle
-// auto-pause, and per-VM actions (exec, snapshot, openSSH, remove, …).
+// the caller (userVmsActor.create) before we spawn this actor — we just own lifecycle,
+// per-VM actions (exec, snapshot, openSSH, remove, …), and cleanup of the credential material
+// we mint on the user's behalf.
+//
+// Note on idle auto-pause: the previous design scheduled `autoPause` from `onDisconnect`, but
+// `c.conns.size` tracks Rivet *actor* connections — not the SSH session the user actually
+// cares about. Because our REST routes open stateless one-shot actor connections that close
+// immediately, disconnect fired on every request and queued a 10-minute pause even while the
+// user's SSH shell was wide open. That behavior is gone until we track real SSH session
+// liveness (see the follow-up task for heartbeat wiring). Explicit `pause`/`resume` actions
+// still work; we just don't fire them on our own schedule.
 export const vmActor = actor({
   options: { name: "VM", icon: "cloud" },
 
@@ -45,11 +48,12 @@ export const vmActor = actor({
     status: "running",
     createdAt: Date.now(),
     pausedAt: null,
-    idleEpoch: 0,
+    sshIdentityHandles: [],
     snapshots: [],
   }),
 
   onDestroy: async (c) => {
+    await revokeAllIdentities(c.state);
     if (c.state.status !== "destroyed" && c.state.providerVmId) {
       try {
         await getProvider(c.state.provider).destroy(c.state.providerVmId);
@@ -59,30 +63,7 @@ export const vmActor = actor({
     }
   },
 
-  onConnect: (_c, _conn) => {
-    // New client attached. autoPause re-checks conns.size before pausing, so a reconnect race
-    // is a no-op; nothing to explicitly cancel here.
-  },
-
-  onDisconnect: (c, _conn) => {
-    if (c.conns.size === 0) {
-      c.state.idleEpoch += 1;
-      void c.schedule.after(IDLE_PAUSE_MS, "autoPause", c.state.idleEpoch);
-    }
-  },
-
   actions: {
-    autoPause: async (c, epoch: number) => {
-      // Skip if a later reconnect/disconnect cycle has bumped the epoch — otherwise the
-      // old timer could pause the VM mid-way through the newest idle window.
-      if (epoch !== c.state.idleEpoch) return;
-      if (c.conns.size !== 0) return; // raced with a reconnect
-      if (c.state.status !== "running") return;
-      await getProvider(c.state.provider).pause(c.state.providerVmId);
-      c.state.status = "paused";
-      c.state.pausedAt = Date.now();
-    },
-
     pause: async (c) => {
       if (c.state.status === "paused") return;
       await getProvider(c.state.provider).pause(c.state.providerVmId);
@@ -109,14 +90,22 @@ export const vmActor = actor({
     },
 
     openSSH: async (c) => {
-      // Mints a short-lived SSH endpoint the mac client can dial directly. Freestyle returns a
-      // real gateway endpoint (vm-ssh.freestyle.sh); E2B throws a clear error.
-      return await getProvider(c.state.provider).openSSH(c.state.providerVmId);
+      // Before minting a new identity, revoke any prior ones we've handed out for this VM.
+      // `cmux vm shell` can be invoked repeatedly; without this step each call leaks a live
+      // credential that outlives its usefulness.
+      await revokeAllIdentities(c.state);
+      c.state.sshIdentityHandles = [];
+      const endpoint = await getProvider(c.state.provider).openSSH(c.state.providerVmId);
+      if (endpoint.identityHandle) {
+        c.state.sshIdentityHandles = [endpoint.identityHandle];
+      }
+      return endpoint;
     },
 
     status: (c) => c.state,
 
     remove: async (c) => {
+      await revokeAllIdentities(c.state);
       if (c.state.status !== "destroyed" && c.state.providerVmId) {
         try {
           await getProvider(c.state.provider).destroy(c.state.providerVmId);
@@ -125,7 +114,16 @@ export const vmActor = actor({
         }
       }
       c.state.status = "destroyed";
+      c.state.sshIdentityHandles = [];
       c.destroy();
     },
   },
 });
+
+async function revokeAllIdentities(state: VMState): Promise<void> {
+  if (state.sshIdentityHandles.length === 0) return;
+  const provider = getProvider(state.provider);
+  await Promise.all(
+    state.sshIdentityHandles.map((handle) => provider.revokeSSHIdentity(handle)),
+  );
+}

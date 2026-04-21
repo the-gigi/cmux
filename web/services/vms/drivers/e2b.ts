@@ -98,4 +98,9 @@ export class E2BProvider implements VMProvider {
         "then `cmux vm exec <id> -- <cmd>`.",
     );
   }
+
+  async revokeSSHIdentity(_identityHandle: string): Promise<void> {
+    // E2B doesn't mint per-session credentials — openSSH always throws — so there's
+    // nothing to revoke. Defined to satisfy VMProvider; never called against this driver.
+  }
 }

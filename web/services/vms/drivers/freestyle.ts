@@ -169,9 +169,11 @@ export class FreestyleProvider implements VMProvider {
   async openSSH(vmId: string): Promise<SSHEndpoint> {
     try {
       const fs = client();
-      // A fresh identity per attach session. Token lifetime is tied to the identity;
-      // `vmActor.onDisconnect` revokes the token so it doesn't linger.
-      const { identity } = await fs.identities.create({});
+      // A fresh identity per attach session. `vmActor` persists the identityId so it can
+      // call `revokeSSHIdentity` on VM destroy / before minting a replacement, otherwise
+      // every `cmux vm shell` invocation would leak a live credential under the Freestyle
+      // account indefinitely.
+      const { identity, identityId } = await fs.identities.create({});
       await identity.permissions.vms.grant({
         vmId,
         allowedUsers: [CMUX_LINUX_USER],
@@ -183,9 +185,20 @@ export class FreestyleProvider implements VMProvider {
         username: `${vmId}+${CMUX_LINUX_USER}`,
         publicKeyFingerprint: null,
         credential: { kind: "password", value: token },
+        identityHandle: identityId,
       };
     } catch (err) {
       throw new ProviderError("freestyle", `openSSH(${vmId})`, err);
+    }
+  }
+
+  async revokeSSHIdentity(identityHandle: string): Promise<void> {
+    if (!identityHandle) return;
+    try {
+      await client().identities.delete({ identityId: identityHandle });
+    } catch {
+      // Best effort: identity may already be gone (e.g. VM was destroyed by the provider
+      // itself). Don't let cleanup failures cascade into the caller.
     }
   }
 }
