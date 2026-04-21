@@ -1,4 +1,6 @@
 import { createClient, type Client } from "rivetkit/client";
+import { getProvider } from "./drivers";
+import type { UserVmEntry } from "./actors/userVms";
 import type { Registry } from "./registry";
 
 /** Bearer + refresh token pair the mac app stashes in keychain. */
@@ -140,8 +142,24 @@ export async function userOwnsVm(
   userId: string,
   vmId: string,
 ): Promise<boolean> {
+  return (await userVmEntry(client, userId, vmId)) !== null;
+}
+
+export async function userVmEntry(
+  client: Client<Registry>,
+  userId: string,
+  vmId: string,
+): Promise<UserVmEntry | null> {
   const list = await client.userVmsActor.getOrCreate([userId]).list();
-  return list.some((v) => v.providerVmId === vmId);
+  return list.find((v) => v.providerVmId === vmId) ?? null;
+}
+
+export async function destroyTrackedProviderVm(entry: UserVmEntry): Promise<void> {
+  try {
+    await getProvider(entry.provider).destroy(entry.providerVmId);
+  } catch (err) {
+    if (!isProviderNotFoundError(err)) throw err;
+  }
 }
 
 /**
@@ -175,4 +193,33 @@ export function isActorMissingError(err: unknown): boolean {
     message.includes("no actor") ||
     message.includes("actor is not available")
   );
+}
+
+export function isProviderNotFoundError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const candidate = err as {
+    status?: number;
+    statusCode?: number;
+    response?: { status?: number };
+    message?: string;
+    cause?: unknown;
+  };
+  const status =
+    candidate.status ??
+    candidate.statusCode ??
+    candidate.response?.status ??
+    undefined;
+  if (status === 404) return true;
+  const message = (candidate.message ?? "").toLowerCase();
+  if (
+    message.includes("not found") ||
+    message.includes("does not exist") ||
+    message.includes("no such") ||
+    message.includes("already deleted") ||
+    message.includes("404")
+  ) {
+    return true;
+  }
+  if (candidate.cause) return isProviderNotFoundError(candidate.cause);
+  return false;
 }

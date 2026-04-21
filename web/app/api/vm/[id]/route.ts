@@ -1,11 +1,12 @@
 import { unauthorized, verifyRequest } from "../../../../services/vms/auth";
 import {
+  destroyTrackedProviderVm,
   isActorMissingError,
   jsonResponse,
   notFoundVm,
   parseForwardedCreds,
   rivetClient,
-  userOwnsVm,
+  userVmEntry,
 } from "../../../../services/vms/routeHelpers";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +23,8 @@ export async function DELETE(
     const { id } = await params;
     const client = rivetClient(creds);
     // Prevent IDOR: a user may only destroy VMs tracked in their own coordinator actor.
-    if (!(await userOwnsVm(client, user.id, id))) return notFoundVm(id);
+    const tracked = await userVmEntry(client, user.id, id);
+    if (!tracked) return notFoundVm(id);
     // `get` not `getOrCreate`: a coordinator entry without a live actor (partial cleanup
     // failure) should 404 instead of spawning an uninitialised actor that 500s. For the
     // DELETE path specifically we also forget() the coordinator entry regardless, so a
@@ -31,9 +33,15 @@ export async function DELETE(
       await client.vmActor.get([id]).remove();
     } catch (err) {
       // If the actor is genuinely missing, drop the coordinator reference so the user
-      // isn't permanently stuck with an un-removable entry. Providers' not-found is
-      // already treated as success inside vmActor.remove (see web/services/vms/actors/vm.ts).
-      if (!isActorMissingError(err)) throw err;
+      // isn't permanently stuck with an un-removable entry. This can happen when
+      // userVmsActor.create provisioned the provider VM, vmActor.create failed, and the
+      // rollback destroy also failed. Use the coordinator's preserved provider metadata to
+      // retry direct provider cleanup before forget().
+      if (isActorMissingError(err)) {
+        await destroyTrackedProviderVm(tracked);
+      } else {
+        throw err;
+      }
     }
     await client.userVmsActor.getOrCreate([user.id]).forget(id);
     return jsonResponse({ ok: true });

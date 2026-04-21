@@ -71,15 +71,19 @@ export const userVmsActor = actor({
       } catch (actorCreateError) {
         // vmActor.create failed *after* the provider already provisioned the VM. Without a
         // rollback, that VM lives on forever as an orphan (costing the user and cluttering
-        // the Freestyle/E2B dashboard). Best-effort destroy + rethrow so the caller sees a
-        // clean failure rather than a half-provisioned sandbox.
+        // the Freestyle/E2B dashboard). Best-effort destroy + rethrow so the caller sees
+        // the actor creation failure. If rollback also fails, preserve the provider entry
+        // so a later delete can retry cleanup instead of losing the only handle.
         try {
           await driver.destroy(entry.providerVmId);
-        } catch {
-          // The orphan-cleanup failure is less bad than the original; swallow but log.
+        } catch (rollbackError) {
+          if (!c.state.vms.some((v) => v.providerVmId === entry.providerVmId)) {
+            c.state.vms.push(entry);
+            await c.saveState({ immediate: true });
+          }
           console.error(
-            "userVmsActor.create: failed to roll back provider VM after vmActor.create error",
-            { providerVmId: entry.providerVmId, provider },
+            "userVmsActor.create: failed to roll back provider VM after vmActor.create error; preserving tracking for retry cleanup",
+            { providerVmId: entry.providerVmId, provider, rollbackError },
           );
         }
         throw actorCreateError;
