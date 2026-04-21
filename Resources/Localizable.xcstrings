@@ -91176,6 +91176,23 @@
           }
         }
       }
+    },
+    "feed.divider.resolved": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resolved"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "解決済み"
+          }
+        }
+      }
     }
   }
 }

@@ -75,15 +75,27 @@ private struct FeedListView: View {
                 emptyState
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(items, id: \.id) { item in
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        let pending = items.filter { $0.status.isPending }
+                        let rest = items.filter { !$0.status.isPending }
+                        ForEach(pending, id: \.id) { item in
+                            FeedItemRow(
+                                snapshot: FeedItemSnapshot(item: item),
+                                actions: FeedRowActions.bound()
+                            )
+                        }
+                        if !pending.isEmpty && !rest.isEmpty {
+                            ResolvedDivider()
+                        }
+                        ForEach(rest, id: \.id) { item in
                             FeedItemRow(
                                 snapshot: FeedItemSnapshot(item: item),
                                 actions: FeedRowActions.bound()
                             )
                         }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 8)
                 }
             }
         } else {
@@ -226,24 +238,49 @@ private struct FeedItemRow: View {
     @State private var isHovered: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             header
             actionArea
         }
-        .padding(.leading, 32)
-        .padding(.trailing, 12)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
         .background(
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
-                .padding(.horizontal, 6)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(cardBackground)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(cardBorder, lineWidth: 1)
+        )
+        .opacity(isResolvedOrExpired ? 0.6 : 1.0)
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onHover { isHovered = $0 }
         .help(helpText)
         .onTapGesture(count: 2) {
             actions.jump(workstreamIdForJump)
+        }
+    }
+
+    private var isResolvedOrExpired: Bool {
+        switch snapshot.status {
+        case .pending: return false
+        case .telemetry: return false
+        case .resolved, .expired: return true
+        }
+    }
+
+    private var cardBackground: Color {
+        if snapshot.status.isPending {
+            return Color.primary.opacity(isHovered ? 0.06 : 0.04)
+        }
+        return Color.primary.opacity(isHovered ? 0.03 : 0.02)
+    }
+
+    private var cardBorder: Color {
+        switch snapshot.status {
+        case .pending: return Color.primary.opacity(0.14)
+        default: return Color.primary.opacity(0.08)
         }
     }
 
@@ -260,23 +297,25 @@ private struct FeedItemRow: View {
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Image(systemName: snapshot.kind.symbolName)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(snapshot.status.isPending ? .orange : .secondary.opacity(0.8))
-                .frame(width: 12, height: 12)
-            Text(primaryTitle)
-                .font(.system(size: 13))
-                .foregroundColor(.primary.opacity(0.92))
-                .lineLimit(1)
-                .truncationMode(.tail)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(kindTint)
+                .frame(width: 14, height: 14)
+            HStack(spacing: 4) {
+                Text(kindLabel)
+                    .font(.system(size: 10, weight: .heavy))
+                    .tracking(0.5)
+                    .foregroundColor(kindTint)
+                Text("·")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.secondary.opacity(0.5))
+                Text(snapshot.source.rawValue.capitalized)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.primary.opacity(0.85))
+            }
             Spacer(minLength: 8)
-            if snapshot.status.isPending {
-                statusTag(
-                    String(localized: "feed.status.pending", defaultValue: "Pending"),
-                    color: .orange
-                )
-            } else if case .resolved(let decision, _) = snapshot.status {
+            if case .resolved(let decision, _) = snapshot.status {
                 statusTag(resolvedBadgeLabel(decision), color: .green)
             } else if case .expired = snapshot.status {
                 statusTag(
@@ -285,9 +324,34 @@ private struct FeedItemRow: View {
                 )
             }
             Text(relativeTime(snapshot.createdAt))
-                .font(.system(size: 12).monospacedDigit())
-                .foregroundColor(.secondary.opacity(0.65))
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundColor(.secondary.opacity(0.7))
                 .fixedSize()
+        }
+    }
+
+    private var kindLabel: String {
+        switch snapshot.kind {
+        case .permissionRequest: return "PERMISSION"
+        case .exitPlan: return "PLAN"
+        case .question: return "QUESTION"
+        case .toolUse: return "TOOL USE"
+        case .toolResult: return "TOOL RESULT"
+        case .userPrompt: return "PROMPT"
+        case .assistantMessage: return "MESSAGE"
+        case .sessionStart: return "SESSION START"
+        case .sessionEnd: return "SESSION END"
+        case .stop: return "STOP"
+        case .todos: return "TODOS"
+        }
+    }
+
+    private var kindTint: Color {
+        switch snapshot.kind {
+        case .permissionRequest: return .orange
+        case .exitPlan: return .purple
+        case .question: return .blue
+        default: return snapshot.status.isPending ? .orange : .secondary.opacity(0.8)
         }
     }
 
@@ -406,28 +470,33 @@ private struct PermissionActionArea: View {
                     .truncationMode(.tail)
             }
             if status.isPending {
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     FeedPillButton(
                         label: String(localized: "feed.permission.once", defaultValue: "Once"),
-                        symbolName: "checkmark.circle"
+                        symbolName: "checkmark.circle",
+                        style: .action
                     ) { onApprove(.once) }
                     FeedPillButton(
                         label: String(localized: "feed.permission.always", defaultValue: "Always"),
-                        symbolName: "infinity"
+                        symbolName: "infinity",
+                        style: .action
                     ) { onApprove(.always) }
                     FeedPillButton(
                         label: String(localized: "feed.permission.all", defaultValue: "All tools"),
-                        symbolName: "checkmark.seal"
+                        symbolName: "checkmark.seal",
+                        style: .action
                     ) { onApprove(.all) }
                     FeedPillButton(
                         label: String(localized: "feed.permission.bypass", defaultValue: "Bypass"),
-                        symbolName: "bolt"
+                        symbolName: "bolt",
+                        style: .action
                     ) { onApprove(.bypass) }
                     Spacer(minLength: 4)
                     FeedPillButton(
                         label: String(localized: "feed.permission.deny", defaultValue: "Deny"),
                         symbolName: "xmark.circle",
-                        tint: .red
+                        tint: .red,
+                        style: .action
                     ) { onApprove(.deny) }
                 }
             }
@@ -447,24 +516,28 @@ private struct ExitPlanActionArea: View {
                 .foregroundColor(.primary.opacity(0.85))
                 .lineLimit(6)
             if status.isPending {
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     FeedPillButton(
                         label: String(localized: "feed.exitplan.bypass", defaultValue: "Bypass"),
-                        symbolName: "bolt"
+                        symbolName: "bolt",
+                        style: .action
                     ) { onApprove(.bypassPermissions) }
                     FeedPillButton(
                         label: String(localized: "feed.exitplan.autoaccept", defaultValue: "Auto-accept"),
-                        symbolName: "wand.and.stars"
+                        symbolName: "wand.and.stars",
+                        style: .action
                     ) { onApprove(.autoAccept) }
                     FeedPillButton(
                         label: String(localized: "feed.exitplan.manual", defaultValue: "Manual"),
-                        symbolName: "hand.raised"
+                        symbolName: "hand.raised",
+                        style: .action
                     ) { onApprove(.manual) }
                     Spacer(minLength: 4)
                     FeedPillButton(
                         label: String(localized: "feed.exitplan.deny", defaultValue: "Deny"),
                         symbolName: "xmark.circle",
-                        tint: .red
+                        tint: .red,
+                        style: .action
                     ) { onApprove(.deny) }
                 }
             }
@@ -526,7 +599,8 @@ private struct QuestionActionArea: View {
                     FeedPillButton(
                         label: String(localized: "feed.question.submit", defaultValue: "Submit"),
                         symbolName: "paperplane",
-                        tint: selectedIds.isEmpty ? .secondary : .accentColor
+                        tint: selectedIds.isEmpty ? .secondary : .accentColor,
+                        style: .action
                     ) { onReply(Array(selectedIds)) }
                     .disabled(selectedIds.isEmpty)
                     .opacity(selectedIds.isEmpty ? 0.5 : 1)
@@ -587,33 +661,43 @@ private struct FeedPillButton: View {
         symbolName: String? = nil,
         isSelected: Bool = false,
         tint: Color = .primary,
+        style: Style = .filter,
         action: @escaping () -> Void
     ) {
         self.label = label
         self.symbolName = symbolName
         self.isSelected = isSelected
         self.tint = tint
+        self.style = style
         self.action = action
     }
 
+    /// Distinguishes the two button contexts: filter bar (toggleable,
+    /// flat until selected/hovered) versus action buttons inside a feed
+    /// card (CTA-style with a resting fill + bold label).
+    enum Style { case filter, action }
+    var style: Style = .filter
+
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 3) {
+            HStack(spacing: 4) {
                 if let symbolName {
                     Image(systemName: symbolName)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: style == .action ? 11 : 10, weight: .semibold))
                 }
                 Text(label)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: style == .action ? 12 : 11, weight: style == .action ? .semibold : .medium))
             }
-            .foregroundColor(tint == .primary
-                             ? (isSelected ? .primary : .secondary)
-                             : tint)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
+            .foregroundColor(foregroundColor)
+            .padding(.horizontal, style == .action ? 10 : 6)
+            .padding(.vertical, style == .action ? 5 : 3)
             .background(
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                RoundedRectangle(cornerRadius: style == .action ? 6 : 4, style: .continuous)
                     .fill(backgroundFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: style == .action ? 6 : 4, style: .continuous)
+                    .stroke(borderColor, lineWidth: style == .action ? 1 : 0)
             )
             .contentShape(Rectangle())
         }
@@ -622,14 +706,57 @@ private struct FeedPillButton: View {
         .help(label)
     }
 
+    private var foregroundColor: Color {
+        if tint == .red { return .red }
+        if tint == .accentColor { return .accentColor }
+        if tint == .secondary { return .secondary }
+        if tint != .primary { return tint }
+        return isSelected ? .primary : .secondary
+    }
+
     private var backgroundFill: Color {
-        if isSelected { return Color.primary.opacity(0.10) }
+        if isSelected { return Color.primary.opacity(0.12) }
+        if style == .action {
+            if tint == .red {
+                return isHovered ? Color.red.opacity(0.16) : Color.red.opacity(0.08)
+            }
+            return isHovered ? Color.primary.opacity(0.10) : Color.primary.opacity(0.06)
+        }
         if isHovered {
             return tint == .red
                 ? Color.red.opacity(0.10)
                 : Color.primary.opacity(0.05)
         }
         return Color.clear
+    }
+
+    private var borderColor: Color {
+        guard style == .action else { return .clear }
+        if tint == .red {
+            return Color.red.opacity(isHovered ? 0.35 : 0.18)
+        }
+        return Color.primary.opacity(isHovered ? 0.18 : 0.10)
+    }
+}
+
+/// Dashed separator between pending items and resolved ones.
+private struct ResolvedDivider: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            line
+            Text(String(localized: "feed.divider.resolved", defaultValue: "Resolved"))
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.5)
+                .foregroundColor(.secondary.opacity(0.7))
+            line
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var line: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.08))
+            .frame(height: 1)
     }
 }
 
