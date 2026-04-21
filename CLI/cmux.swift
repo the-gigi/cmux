@@ -12542,6 +12542,16 @@ struct CMUXCLI {
             ]
         )
 
+        // Fire-and-forget Feed telemetry push so the Feed's "All" view
+        // shows Claude session/prompt/stop activity even when there's
+        // no actionable permission/plan/question event.
+        sendFeedTelemetry(
+            client: client,
+            source: "claude",
+            subcommand: subcommand,
+            parsedInput: parsedInput
+        )
+
         switch subcommand {
         case "session-start", "active":
             telemetry.breadcrumb("claude-hook.session-start")
@@ -14069,6 +14079,15 @@ struct CMUXCLI {
         let rawInput = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? ""
         let input = parseClaudeHookInput(rawInput: rawInput)
 
+        // Feed telemetry so session events from every agent show up in
+        // the Feed "All" view.
+        sendFeedTelemetry(
+            client: client,
+            source: def.name,
+            subcommand: subcommand,
+            parsedInput: input
+        )
+
         let store = ClaudeHookSessionStore(
             processEnv: env.merging(
                 ["CMUX_CLAUDE_HOOK_STATE_PATH": "~/.cmuxterm/\(def.sessionStoreSuffix)-hook-sessions.json"],
@@ -14340,6 +14359,63 @@ struct CMUXCLI {
             i = json.index(after: i)
         }
         return out
+    }
+
+    // MARK: - Feed telemetry helper
+
+    /// Non-blocking `feed.push` call used by the per-agent hook handlers
+    /// so session-start / prompt-submit / stop events show up in Feed's
+    /// "All" view even when no permission/plan/question event fires.
+    /// Failures are swallowed — telemetry is best-effort.
+    private func sendFeedTelemetry(
+        client: SocketClient,
+        source: String,
+        subcommand: String,
+        parsedInput: ClaudeHookParsedInput
+    ) {
+        let hookEventName = Self.feedEventName(forClaudeSubcommand: subcommand)
+        guard !hookEventName.isEmpty else { return }
+        let sessionId = parsedInput.sessionId ?? UUID().uuidString
+        var event: [String: Any] = [
+            "session_id": "\(source)-\(sessionId)",
+            "hook_event_name": hookEventName,
+            "_source": source,
+            "_ppid": ProcessInfo.processInfo.processIdentifier,
+        ]
+        if let cwd = parsedInput.cwd { event["cwd"] = cwd }
+        if let toolName = parsedInput.object?["tool_name"] as? String, !toolName.isEmpty {
+            event["tool_name"] = toolName
+        }
+        if let toolInput = parsedInput.object?["tool_input"] {
+            event["tool_input"] = toolInput
+        }
+        event["_opencode_request_id"] = "\(source)-\(sessionId)-\(hookEventName)-\(Int(Date().timeIntervalSince1970 * 1000))"
+
+        let frame: [String: Any] = [
+            "id": UUID().uuidString,
+            "method": "feed.push",
+            "params": [
+                "event": event,
+                "wait_timeout_seconds": 0,
+            ],
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: frame),
+              let line = String(data: data, encoding: .utf8)
+        else { return }
+        _ = try? client.send(command: line)
+    }
+
+    private static func feedEventName(forClaudeSubcommand sub: String) -> String {
+        switch sub {
+        case "session-start", "active": return "SessionStart"
+        case "prompt-submit": return "UserPromptSubmit"
+        case "pre-tool-use": return "PreToolUse"
+        case "post-tool-use": return "PostToolUse"
+        case "stop", "idle": return "Stop"
+        case "session-end": return "SessionEnd"
+        case "notification": return "Notification"
+        default: return ""
+        }
     }
 
     // MARK: - Feed history
