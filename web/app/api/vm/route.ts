@@ -57,14 +57,18 @@ export async function POST(request: Request): Promise<Response> {
       // Allow callers to send no body at all — the handler already falls through to
       // default provider/image, so a bare `curl -X POST /api/vm` should create a default
       // VM. Previously request.json() threw on an empty body and the whole request came
-      // back as 400 "invalid JSON body".
+      // back as 400 "invalid JSON body". Distinguish empty-body from literal-`null`:
+      // empty is a default-create, `null` is malformed input and should 400.
       const rawText = await request.text();
-      const raw = rawText.length === 0 ? null : JSON.parse(rawText);
-      // Reject non-objects AND arrays — `typeof [] === "object"` so the previous guard
-      // silently accepted `[]` and treated it as `{}`, letting malformed clients still
-      // provision a billable VM with defaults.
-      if (raw !== null && (typeof raw !== "object" || Array.isArray(raw))) {
-        throw new TypeError("body must be a JSON object");
+      const bodyWasEmpty = rawText.length === 0;
+      const raw = bodyWasEmpty ? undefined : JSON.parse(rawText);
+      if (!bodyWasEmpty) {
+        if (raw === null) {
+          throw new TypeError("body must be a JSON object, got null");
+        }
+        if (typeof raw !== "object" || Array.isArray(raw)) {
+          throw new TypeError("body must be a JSON object");
+        }
       }
       const candidate = (raw ?? {}) as Record<string, unknown>;
       if (candidate.image !== undefined && typeof candidate.image !== "string") {
