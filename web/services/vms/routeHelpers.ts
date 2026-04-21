@@ -79,7 +79,11 @@ function rivetBaseURL(): string {
   if (explicit) return explicit.replace(/\/$/, "");
   const vercel = process.env.VERCEL_URL?.trim();
   if (vercel) return `https://${vercel}`;
-  return "http://localhost:3000";
+  // The repo's `next dev` script listens on 3777, not Next's default 3000 (web/package.json).
+  // Prefer PORT if the shell exports one, otherwise fall back to 3777 so a vanilla
+  // `bun run dev` works out of the box without extra env wrangling.
+  const port = process.env.PORT?.trim();
+  return `http://localhost:${port && /^\d+$/.test(port) ? port : "3777"}`;
 }
 
 export function parseBearer(request: Request): StackBearer | null {

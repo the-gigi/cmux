@@ -54,7 +54,12 @@ export async function POST(request: Request): Promise<Response> {
     // surfaced as a 500 from the driver after provisioning had already half-succeeded.
     let body: { image?: string; provider?: ProviderId };
     try {
-      const raw = await request.json();
+      // Allow callers to send no body at all — the handler already falls through to
+      // default provider/image, so a bare `curl -X POST /api/vm` should create a default
+      // VM. Previously request.json() threw on an empty body and the whole request came
+      // back as 400 "invalid JSON body".
+      const rawText = await request.text();
+      const raw = rawText.length === 0 ? null : JSON.parse(rawText);
       // Reject non-objects AND arrays — `typeof [] === "object"` so the previous guard
       // silently accepted `[]` and treated it as `{}`, letting malformed clients still
       // provision a billable VM with defaults.
