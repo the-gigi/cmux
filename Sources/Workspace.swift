@@ -10438,13 +10438,38 @@ final class Workspace: Identifiable, ObservableObject {
         // Previous version only escaped backslash and double-quote, which left command
         // substitution and backticks as a live injection vector (Codex P2).
         let encodedTarget = Data(target.utf8).base64EncodedString()
+        // Localized banner strings. Both use %s (not %@) because they're rendered by the
+        // POSIX printf inside the shell wrapper, not by Swift's String(format:).
+        let endedLineFormat = String(
+            localized: "remote.disconnectBanner.sessionEnded",
+            defaultValue: "[cmux] remote ssh session ended: %s"
+        )
+        let reconnectLine = String(
+            localized: "remote.disconnectBanner.reconnectHint",
+            defaultValue: "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+        )
+        // Encode the localized lines the same way as the target, so a translator using
+        // backticks or $(…) in a translation string can't unexpectedly execute in the
+        // user's local shell. Decoded inline at wrapper startup, then fed to printf.
+        let encodedEndedFormat = Data(endedLineFormat.utf8).base64EncodedString()
+        let encodedReconnectLine = Data(reconnectLine.utf8).base64EncodedString()
         let body = """
         #!/bin/sh
-        cmux_disconnect_target="$(printf '%s' '\(encodedTarget)' | base64 --decode 2>/dev/null || printf '%s' '\(encodedTarget)' | base64 -D 2>/dev/null)"
-        printf '\\033[1;33m[cmux] remote ssh session ended: %s\\033[0m\\n' "$cmux_disconnect_target" >&2
-        printf '\\033[2m[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>\\033[0m\\n' >&2
+        cmux_disconnect_decode() {
+          printf '%s' "$1" | base64 --decode 2>/dev/null || printf '%s' "$1" | base64 -D 2>/dev/null
+        }
+        cmux_disconnect_target="$(cmux_disconnect_decode '\(encodedTarget)')"
+        cmux_disconnect_ended_format="$(cmux_disconnect_decode '\(encodedEndedFormat)')"
+        cmux_disconnect_reconnect_line="$(cmux_disconnect_decode '\(encodedReconnectLine)')"
+        # Append newline + color codes ourselves rather than trusting the translator to
+        # preserve them in every locale.
+        printf '\\033[1;33m'
+        printf "$cmux_disconnect_ended_format" "$cmux_disconnect_target"
+        printf '\\033[0m\\n' >&2
+        printf '\\033[2m%s\\033[0m\\n' "$cmux_disconnect_reconnect_line" >&2
         printf '\\n'
-        unset cmux_disconnect_target
+        unset cmux_disconnect_target cmux_disconnect_ended_format cmux_disconnect_reconnect_line
+        unset -f cmux_disconnect_decode 2>/dev/null || true
         # Remove ourselves so /tmp doesn't accumulate these wrappers across sessions.
         rm -f -- "$0" 2>/dev/null || true
         exec "${SHELL:-/bin/sh}" -l
