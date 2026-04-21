@@ -1541,54 +1541,69 @@ private struct FlowLayout: Layout {
 /// When the user picks an option in the Feed, we type these into the
 /// agent's terminal via `surface.send_text` to answer Claude's TUI.
 ///
-/// The PreToolUse feed-hook is wired `async: true` in the Claude
-/// wrapper so Claude's native prompt appears instantly alongside the
-/// Feed card; the feed-hook's stdout is discarded. Without these
-/// keystrokes the user would have to answer twice (Feed + TUI).
+/// Claude Code's selector (Ink `T6` component) uses a numeric-key
+/// fast-path when `hideIndexes: false` — pressing a digit immediately
+/// commits that option via `q.onChange(...)` and closes the prompt.
+/// No trailing Enter is needed for non-input options; adding one
+/// would fall through to Claude's next prompt as a stray newline.
 ///
-/// Claude's prompts are all number-indexed menus (1 = default, N =
-/// deny/cancel). Indices here match Claude Code 2.1 behavior — if
-/// upstream re-orders options these mappings need updating.
+/// Input-type options (ExitPlanMode "No, keep planning" / AskUserQuestion
+/// "Other") are different: pressing their digit focuses the embedded
+/// text field, then further characters go into that field, and Enter
+/// submits. Escape always cancels the selector via its onCancel
+/// handler (= reject path).
+///
+/// Verified against Claude Code v2.1.116 binary strings. If upstream
+/// re-orders options or disables `hideIndexes`, these mappings need
+/// updating.
 private enum FeedTUIKeys {
     /// Bash / Edit / Write permission TUI:
-    ///   1. Yes, proceed once
-    ///   2. Yes, and don't ask again for this pattern
-    ///   3. No, and tell Claude what to do differently
-    /// Bypass maps to "Always" (closest equivalent; no native bypass).
+    ///   1. Yes (accept once)
+    ///   2. Yes, and don't ask again for this pattern (if applicable)
+    ///   3. No (reject)
+    /// Deny uses Escape because option 2 is conditional — pressing
+    /// "3" would hit nothing if only 2 options render. Escape always
+    /// triggers the selector's onCancel → reject path.
     static func permission(mode: WorkstreamPermissionMode) -> String {
         switch mode {
-        case .once: return "1\r"
-        case .always, .all, .bypass: return "2\r"
-        case .deny: return "3\r"
+        case .once: return "1"
+        case .always, .all, .bypass: return "2"
+        case .deny: return "\u{1B}"
         }
     }
 
     /// ExitPlanMode TUI:
-    ///   1. Yes, and auto-accept edits
-    ///   2. Yes, and manually approve edits
-    ///   3. No, keep planning
-    /// Bypass maps to auto-accept; feedback sends Esc + free-text.
+    ///   1. "Yes, auto-accept edits" (or "Yes, and bypass permissions"
+    ///      when `isBypassPermissionsModeAvailable`)
+    ///   2. "Yes, manually approve edits"
+    ///   3. "No, keep planning" — `type: "input"` with feedback
+    /// Bypass maps to option 1 (either way it's "accept with most
+    /// permissive mode"). Deny without feedback sends Escape.
+    /// Feedback sends digit-3 (focuses the input) + the text + Enter,
+    /// which Claude treats as reject-with-feedback.
     static func exitPlan(
         mode: WorkstreamExitPlanMode, feedback: String?
     ) -> String {
         if let feedback, !feedback.isEmpty {
-            // Dismiss the plan-mode prompt (Esc), then submit the
-            // feedback as a new user input line.
-            return "\u{1B}\(feedback)\r"
+            return "3\(feedback)\r"
         }
         switch mode {
-        case .autoAccept, .bypassPermissions: return "1\r"
-        case .manual: return "2\r"
-        case .deny: return "3\r"
+        case .autoAccept, .bypassPermissions: return "1"
+        case .manual: return "2"
+        case .deny: return "\u{1B}"
         }
     }
 
-    /// AskUserQuestion TUI is a numbered list of the question's
-    /// options followed by "Type something" (free-form). For each
-    /// answered question, emit either the preset-option index or
-    /// "Type something" + typed text. Multiple answers are
-    /// concatenated; Claude's TUI buffers input and consumes one
-    /// question at a time.
+    /// AskUserQuestion TUI is the question's preset options followed
+    /// by one "Other" option (`type: "input"`, placeholder "Type
+    /// something."). Digits 1..N select a preset; digit (N+1)
+    /// focuses the "Other" input.
+    ///
+    /// For each answered question: if the answer matches a preset
+    /// label, send its digit; otherwise send the "Other" digit, type
+    /// the answer, press Enter. Multi-select answers (joined with
+    /// ", ") fall through to the "Other" path — Claude reads the
+    /// free text and proceeds.
     static func question(
         questions: [WorkstreamQuestionPrompt],
         selections: [String]
@@ -1598,13 +1613,10 @@ private enum FeedTUIKeys {
             guard idx < questions.count else { break }
             let q = questions[idx]
             if let match = q.options.firstIndex(where: { $0.label == answer }) {
-                out += "\(match + 1)\r"
+                out += "\(match + 1)"
             } else {
-                // Free-text. "Type something" sits directly after the
-                // preset options in Claude's TUI, so its index is
-                // options.count + 1.
-                let freeFormIndex = q.options.count + 1
-                out += "\(freeFormIndex)\r\(answer)\r"
+                let otherIndex = q.options.count + 1
+                out += "\(otherIndex)\(answer)\r"
             }
         }
         return out
