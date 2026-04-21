@@ -31,19 +31,30 @@ struct FeedPanelView: View {
     }
 
     @State private var filter: Filter = .actionable
+    @State private var items: [WorkstreamItem] = []
 
     var body: some View {
-        // Reading `store?.items` here at the view that owns the filter
-        // state guarantees SwiftUI registers the @Observable dependency
-        // when the view first mounts — not only when we toggle the
-        // filter. Without this the first render captures a stale empty
-        // snapshot and only refreshes after some other state change
-        // (e.g. flipping the filter) triggers a body recomputation.
-        let items = FeedCoordinator.shared.store?.items ?? []
-        return VStack(spacing: 0) {
+        VStack(spacing: 0) {
             controlBar
             Divider()
             FeedListView(filter: filter, items: items)
+        }
+        .onAppear {
+            refreshItems()
+        }
+    }
+
+    /// Re-snapshot the store's items and re-arm a `withObservationTracking`
+    /// callback for the next mutation. Needed because SwiftUI's implicit
+    /// `@Observable` tracking isn't reliable when the observable lives
+    /// behind a non-observable singleton indirection
+    /// (`FeedCoordinator.shared.store`). Manual tracking is the
+    /// canonical pattern Apple recommends for this case.
+    private func refreshItems() {
+        withObservationTracking {
+            items = FeedCoordinator.shared.store?.items ?? []
+        } onChange: {
+            Task { @MainActor in refreshItems() }
         }
     }
 
