@@ -212,6 +212,26 @@ extension FeedCoordinator {
         FeedJumpResolver.focus(workspaceId: target.workspaceId, surfaceId: target.surfaceId)
         return true
     }
+
+    /// Resolves `workstreamId` to a `(workspace, surface)` pair and
+    /// types the user's `text` into that surface, followed by Return.
+    /// Used by Stop-kind cards so the user can reply to Claude from
+    /// the Feed without switching focus to the terminal.
+    @MainActor
+    @discardableResult
+    func sendTextToWorkstream(workstreamId: String, text: String) -> Bool {
+        guard let parsed = FeedJumpResolver.parse(workstreamId),
+              let target = FeedJumpResolver.lookup(
+                agent: parsed.agent, sessionId: parsed.sessionId
+              )
+        else { return false }
+        FeedJumpResolver.sendText(
+            workspaceId: target.workspaceId,
+            surfaceId: target.surfaceId,
+            text: text
+        )
+        return true
+    }
 }
 
 /// Reads the per-agent hook session stores (`~/.cmuxterm/<agent>-hook-sessions.json`)
@@ -270,10 +290,27 @@ enum FeedJumpResolver {
             ]
         )
     }
+
+    /// Dispatches a surface.send_text intent for the agent's terminal.
+    /// The observer in AppDelegate translates it into the V2 socket
+    /// call so the Feed stays decoupled from TerminalController.
+    @MainActor
+    static func sendText(workspaceId: String, surfaceId: String, text: String) {
+        NotificationCenter.default.post(
+            name: .feedRequestSendText,
+            object: nil,
+            userInfo: [
+                "workspaceId": workspaceId,
+                "surfaceId": surfaceId,
+                "text": text,
+            ]
+        )
+    }
 }
 
 extension Notification.Name {
     static let feedRequestFocus = Notification.Name("cmux.feedRequestFocus")
+    static let feedRequestSendText = Notification.Name("cmux.feedRequestSendText")
 }
 
 // MARK: - Native notification banner

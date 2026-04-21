@@ -116,13 +116,14 @@ private struct FeedListView: View {
             emptyState
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     // Single chronological stream — resolved cards stay
                     // where they are instead of jumping to a "Resolved"
                     // section. Each card's own header already says
                     // Submitted / Resolved, so position doesn't need to
-                    // double-encode the state.
-                    ForEach(visible, id: \.id) { item in
+                    // double-encode the state. Rows are separated by a
+                    // thin 1-px divider (matches Sessions panel).
+                    ForEach(Array(visible.enumerated()), id: \.element.id) { idx, item in
                         FeedItemRow(
                             snapshot: FeedItemSnapshot(
                                 item: item,
@@ -130,10 +131,15 @@ private struct FeedListView: View {
                             ),
                             actions: FeedRowActions.bound()
                         )
+                        if idx < visible.count - 1 {
+                            Rectangle()
+                                .fill(Color.primary.opacity(0.08))
+                                .frame(height: 1)
+                                .padding(.horizontal, 8)
+                        }
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 8)
+                .padding(.vertical, 4)
             }
         }
     }
@@ -159,13 +165,17 @@ private struct FeedListView: View {
         case .actionable:
             base = items.filter { $0.kind.isActionable }
         case .activity:
-            // Actionable kinds + todos. Tool use, user prompts,
+            // Actionable kinds + todos + stop. Tool use, user prompts,
             // assistant messages, session markers, and raw
             // notifications are intentionally excluded — they're too
             // noisy for a sidebar and already visible in the agent's
-            // terminal or the cmux notification system.
+            // terminal or the cmux notification system. Stop events
+            // render a "reply to Claude" textbox so the user can
+            // nudge Claude without switching focus to the terminal.
             base = items.filter { item in
-                item.kind.isActionable || item.kind == .todos
+                item.kind.isActionable
+                    || item.kind == .todos
+                    || item.kind == .stop
             }
         }
         // Newest first. Status isn't a sort key — resolved items stay
@@ -241,6 +251,10 @@ struct FeedRowActions {
     let replyQuestion: (UUID, [String]) -> Void
     let approveExitPlan: (UUID, WorkstreamExitPlanMode, String?) -> Void
     let jump: (String) -> Void
+    /// Types the user's reply into the agent's terminal surface and
+    /// presses Return. Used by Stop-kind cards so the user can nudge
+    /// Claude without switching focus to the terminal.
+    let sendText: (String, String) -> Void
 
     static func bound() -> FeedRowActions {
         FeedRowActions(
@@ -271,6 +285,14 @@ struct FeedRowActions {
             jump: { workstreamId in
                 Task { @MainActor in
                     _ = FeedCoordinator.shared.focusIfPossible(workstreamId: workstreamId)
+                }
+            },
+            sendText: { workstreamId, text in
+                Task { @MainActor in
+                    FeedCoordinator.shared.sendTextToWorkstream(
+                        workstreamId: workstreamId,
+                        text: text
+                    )
                 }
             }
         )
@@ -534,6 +556,11 @@ struct FeedItemRow: View {
                 status: snapshot.status,
                 onReply: { selections in actions.replyQuestion(snapshot.id, selections) }
             )
+        case .stop:
+            StopActionArea(
+                workstreamId: snapshot.workstreamId,
+                onSend: { text in actions.sendText(snapshot.workstreamId, text) }
+            )
         default:
             TelemetryActionArea(snapshot: snapshot)
         }
@@ -642,8 +669,26 @@ private struct PermissionActionArea: View {
                         kind: .destructive, size: .medium, fullWidth: true
                     ) { onApprove(.bypass) }
                 }
+            } else if let badge = submittedBadge {
+                FeedButton(
+                    label: badge,
+                    leadingIcon: "checkmark",
+                    kind: .success,
+                    size: .medium,
+                    fullWidth: true,
+                    dimmed: true
+                ) {}
             }
         }
+    }
+
+    private var submittedBadge: String? {
+        guard case .resolved(let decision, _) = status else { return nil }
+        let submitted = String(localized: "feed.badge.submitted", defaultValue: "Submitted")
+        if case .permission(let mode) = decision {
+            return "\(submitted) · \(mode.rawValue)"
+        }
+        return submitted
     }
 
     private var toolLabel: some View {
@@ -950,7 +995,32 @@ private struct ExitPlanActionArea: View {
                         onApprove(.bypassPermissions, hasFeedback ? trimmedFeedback : nil)
                     }
                 }
+            } else if let badge = submittedBadge {
+                FeedButton(
+                    label: badge,
+                    leadingIcon: "checkmark",
+                    kind: .success,
+                    size: .medium,
+                    fullWidth: true,
+                    dimmed: true
+                ) {}
             }
+        }
+    }
+
+    private var submittedBadge: String? {
+        guard case .resolved(let decision, _) = status else { return nil }
+        let submitted = String(localized: "feed.badge.submitted", defaultValue: "Submitted")
+        switch decision {
+        case .exitPlan(let mode, let feedback):
+            if let feedback, !feedback.isEmpty {
+                return "\(submitted) · " + String(
+                    localized: "feed.badge.refined", defaultValue: "refined"
+                )
+            }
+            return "\(submitted) · \(mode.rawValue)"
+        default:
+            return submitted
         }
     }
 }
@@ -1127,9 +1197,7 @@ private struct QuestionActionArea: View {
                     questionBlock(index: idx + 1, question: q)
                 }
             }
-            if status.isPending {
-                submitCTA
-            }
+            submitCTA
         }
     }
 
@@ -1369,13 +1437,19 @@ private struct QuestionActionArea: View {
     private var hasAnyAnswer: Bool { !composedAnswers.isEmpty }
 
     private var submitCTA: some View {
-        FeedButton(
-            label: String(localized: "feed.question.submitAll", defaultValue: "Submit All Answers"),
-            leadingIcon: "checkmark.circle.fill",
-            kind: hasAnyAnswer ? .primary : .soft,
+        let isPending = status.isPending
+        let enabled = isPending && hasAnyAnswer
+        return FeedButton(
+            label: isPending
+                ? String(localized: "feed.question.submitAll",
+                         defaultValue: "Submit All Answers")
+                : String(localized: "feed.badge.submitted",
+                         defaultValue: "Submitted"),
+            leadingIcon: isPending ? "checkmark.circle.fill" : "checkmark",
+            kind: enabled ? .primary : (isPending ? .soft : .success),
             size: .medium,
             fullWidth: true,
-            dimmed: !hasAnyAnswer
+            dimmed: !enabled
         ) {
             // Selections carry human-readable answer strings (one per
             // answered question) so the hook can feed them straight
@@ -1441,6 +1515,69 @@ private struct FlowLayout: Layout {
             sub.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
+/// Renders a Stop event (Claude finished a turn and is waiting for
+/// the next user prompt). Shows a text field + Send button that
+/// types the reply into the agent's terminal surface and presses
+/// Return — so the user can reply without switching focus.
+private struct StopActionArea: View {
+    let workstreamId: String
+    let onSend: (String) -> Void
+
+    @State private var reply: String = ""
+
+    private var trimmed: String {
+        reply.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var canSend: Bool { !trimmed.isEmpty }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                Text(String(localized: "feed.stop.label", defaultValue: "Claude finished — reply to continue"))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            TextField(
+                String(localized: "feed.stop.placeholder", defaultValue: "Reply to Claude…"),
+                text: $reply,
+                axis: .vertical
+            )
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
+            .lineLimit(1...5)
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Color.primary.opacity(canSend ? 0.25 : 0.10), lineWidth: 1)
+            )
+            .onSubmit {
+                if canSend {
+                    onSend(trimmed)
+                    reply = ""
+                }
+            }
+            FeedButton(
+                label: String(localized: "feed.stop.send", defaultValue: "Send to Claude"),
+                leadingIcon: "arrow.up.circle.fill",
+                kind: canSend ? .primary : .soft,
+                size: .medium,
+                fullWidth: true,
+                dimmed: !canSend
+            ) {
+                onSend(trimmed)
+                reply = ""
+            }
         }
     }
 }

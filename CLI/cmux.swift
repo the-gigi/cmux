@@ -14750,65 +14750,108 @@ struct CMUXCLI {
             return s
         }
 
+        // Modern Claude Code (2.x) expects PreToolUse decisions under
+        // `hookSpecificOutput.permissionDecision` ("allow" | "deny" |
+        // "ask"). Legacy `{decision: approve|block}` still works but
+        // is less reliable for tools with interactive TUI prompts
+        // (ExitPlanMode / AskUserQuestion). Emit both so legacy
+        // wrappers keep working and modern Claude honors the decision
+        // without also showing its own prompt.
+        func preToolClaudeDecision(
+            permission: String,
+            reason: String?
+        ) -> [String: Any] {
+            var out: [String: Any] = [
+                "hookSpecificOutput": [
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": permission,
+                    "permissionDecisionReason": reason ?? "",
+                ] as [String: Any]
+            ]
+            // Legacy mirror for older Claude Code versions.
+            if permission == "deny" {
+                out["decision"] = "block"
+                if let reason, !reason.isEmpty { out["reason"] = reason }
+            } else if permission == "allow" {
+                out["decision"] = "approve"
+                if let reason, !reason.isEmpty { out["systemMessage"] = reason }
+            }
+            return out
+        }
+
         switch kind {
         case "permission":
             let mode = decision["mode"] as? String ?? "deny"
-            if mode == "deny" {
-                return encode([
-                    "decision": "block",
-                    "reason": "User denied permission."
-                ])
-            }
-            var out: [String: Any] = ["decision": "approve"]
-            if mode == "always" || mode == "all" || mode == "bypass" {
-                // Hint the agent to reduce subsequent prompts.
-                out["systemMessage"] =
-                    "User granted \(mode) permission. Reduce subsequent approval prompts for similar calls."
-                if source == "codex" {
-                    // Codex uses `remember` rather than `systemMessage`.
-                    out.removeValue(forKey: "systemMessage")
+            if source == "codex" {
+                // Codex uses the older decision / remember shape.
+                if mode == "deny" {
+                    return encode([
+                        "decision": "block",
+                        "reason": "User denied permission."
+                    ])
+                }
+                var out: [String: Any] = ["decision": "approve"]
+                if mode == "always" || mode == "all" || mode == "bypass" {
                     out["remember"] = (mode == "bypass") ? "always" : "session"
                 }
+                return encode(out)
             }
-            return encode(out)
+            if mode == "deny" {
+                return encode(preToolClaudeDecision(
+                    permission: "deny",
+                    reason: "User denied permission."
+                ))
+            }
+            var reasonText = "User granted permission."
+            if mode == "always" || mode == "all" || mode == "bypass" {
+                reasonText = "User granted \(mode) permission. Reduce subsequent approval prompts for similar calls."
+            }
+            return encode(preToolClaudeDecision(
+                permission: "allow",
+                reason: reasonText
+            ))
 
         case "exit_plan":
             let mode = decision["mode"] as? String ?? "manual"
             let feedback = (decision["feedback"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             // Feedback always wins: any non-empty "Tell Claude what to
-            // change" text turns the decision into a block+reason so
-            // Claude refines rather than proceeding with the plan.
+            // change" text turns the decision into a deny+reason so
+            // Claude refines rather than exiting plan mode.
             if let feedback, !feedback.isEmpty {
-                return encode([
-                    "decision": "block",
-                    "reason": feedback
-                ])
+                return encode(preToolClaudeDecision(
+                    permission: "deny",
+                    reason: feedback
+                ))
             }
             if mode == "deny" {
-                return encode([
-                    "decision": "block",
-                    "reason": "User rejected the plan."
-                ])
+                return encode(preToolClaudeDecision(
+                    permission: "deny",
+                    reason: "User rejected the plan."
+                ))
             }
-            var out: [String: Any] = ["decision": "approve"]
+            let reasonText: String
             switch mode {
             case "bypassPermissions":
-                out["systemMessage"] = "User accepted the plan and chose bypass-permissions mode. Proceed without per-edit approval."
+                reasonText = "User accepted the plan and chose bypass-permissions mode. Proceed without per-edit approval."
             case "autoAccept":
-                out["systemMessage"] = "User accepted the plan and chose auto-accept edits. Proceed without per-edit approval."
+                reasonText = "User accepted the plan and chose auto-accept edits. Proceed without per-edit approval."
             default:
-                out["systemMessage"] = "User accepted the plan; continue asking for approval per edit as usual."
+                reasonText = "User accepted the plan. Exit plan mode and continue."
             }
-            return encode(out)
+            return encode(preToolClaudeDecision(
+                permission: "allow",
+                reason: reasonText
+            ))
 
         case "question":
             // Claude Code's hook protocol doesn't have a public
             // "return a tool result" path for AskUserQuestion. The
-            // pragmatic fix is to `block` the tool (so Claude's TUI
+            // pragmatic fix is to deny the tool (so Claude's TUI
             // doesn't also ask the same question) and put the user's
-            // answer in `reason` — Claude reads the reason as context
-            // and proceeds as if the question had been answered.
+            // answer in the reason — Claude reads the reason as
+            // context and proceeds as if the question had been
+            // answered.
             let selections = decision["selections"] as? [String] ?? []
             let reason: String
             if selections.isEmpty {
@@ -14822,10 +14865,10 @@ struct CMUXCLI {
                     .joined(separator: "\n")
                 reason = "User answered in the cmux Feed sidebar:\n\(lines)"
             }
-            return encode([
-                "decision": "block",
-                "reason": reason
-            ])
+            return encode(preToolClaudeDecision(
+                permission: "deny",
+                reason: reason
+            ))
 
         default:
             _ = hookEventName

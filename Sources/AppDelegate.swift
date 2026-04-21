@@ -2586,6 +2586,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             name: .feedRequestFocus,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleFeedRequestSendText(_:)),
+            name: .feedRequestSendText,
+            object: nil
+        )
 
 #if DEBUG
         // UI tests run on a shared VM user profile, so persisted shortcuts can drift and make
@@ -7598,6 +7604,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // cmd+shift+H / Flash Focused Panel) so the user's eye is
         // pulled to the terminal content the Feed jumped to.
         invoke("surface.trigger_flash", ["surface_id": surfaceId])
+    }
+
+    @objc private func handleFeedRequestSendText(_ notification: Notification) {
+        guard let surfaceId = notification.userInfo?["surfaceId"] as? String,
+              let text = notification.userInfo?["text"] as? String,
+              !text.isEmpty
+        else { return }
+
+        let controller = TerminalController.shared
+        let invoke: (String, [String: Any]) -> Void = { method, params in
+            let payload: [String: Any] = [
+                "id": UUID().uuidString,
+                "method": method,
+                "params": params,
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: payload),
+                  let line = String(data: data, encoding: .utf8)
+            else { return }
+            _ = controller.handleSocketLine(line)
+        }
+        // Terminal-mode Return is CR. sendNamedKey "Return" also works
+        // but one send_text is atomic, so append CR directly.
+        invoke("surface.send_text", [
+            "surface_id": surfaceId,
+            "text": text + "\r",
+        ])
     }
 
     @objc private func handleReactGrabDidCopySelection(_ notification: Notification) {
