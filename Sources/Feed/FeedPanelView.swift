@@ -31,30 +31,13 @@ struct FeedPanelView: View {
     }
 
     @State private var filter: Filter = .actionable
-    @State private var items: [WorkstreamItem] = []
+    @StateObject private var viewModel = FeedPanelViewModel()
 
     var body: some View {
         VStack(spacing: 0) {
             controlBar
             Divider()
-            FeedListView(filter: filter, items: items)
-        }
-        .onAppear {
-            refreshItems()
-        }
-    }
-
-    /// Re-snapshot the store's items and re-arm a `withObservationTracking`
-    /// callback for the next mutation. Needed because SwiftUI's implicit
-    /// `@Observable` tracking isn't reliable when the observable lives
-    /// behind a non-observable singleton indirection
-    /// (`FeedCoordinator.shared.store`). Manual tracking is the
-    /// canonical pattern Apple recommends for this case.
-    private func refreshItems() {
-        withObservationTracking {
-            items = FeedCoordinator.shared.store?.items ?? []
-        } onChange: {
-            Task { @MainActor in refreshItems() }
+            FeedListView(filter: filter, items: viewModel.items)
         }
     }
 
@@ -74,6 +57,44 @@ struct FeedPanelView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .frame(height: 29)
+    }
+}
+
+/// Bridges the `@Observable` WorkstreamStore to a Combine `@Published`
+/// snapshot so SwiftUI reliably re-renders the Feed panel on every
+/// mutation. This is the documented pattern for observing an
+/// Observable from outside SwiftUI's implicit body-tracking (singleton
+/// access + optional chain breaks the implicit path in our case).
+///
+/// Re-arms `withObservationTracking` after every change so the next
+/// mutation also fires. Also retries mounting the observation if the
+/// store isn't yet installed (launch-time ordering).
+@MainActor
+final class FeedPanelViewModel: ObservableObject {
+    @Published private(set) var items: [WorkstreamItem] = []
+
+    init() {
+        arm()
+    }
+
+    private func arm() {
+        if FeedCoordinator.shared.store == nil {
+            // Store not yet installed. Retry shortly — install happens
+            // synchronously in applicationDidFinishLaunching but the
+            // view might be constructed slightly earlier in the same
+            // runloop tick on edge cases.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.arm()
+            }
+            return
+        }
+        withObservationTracking {
+            items = FeedCoordinator.shared.store?.items ?? []
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.arm()
+            }
+        }
     }
 }
 
