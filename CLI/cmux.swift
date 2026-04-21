@@ -13916,22 +13916,26 @@ struct CMUXCLI {
             return ""
         }()
 
-        if !skipConfirm {
-            Self.printInstallPreview(
-                path: filePath,
-                oldContent: oldString,
-                newContent: newString,
-                fallbackContent: newString
-            )
-            print("\nProceed? [y/N] ", terminator: "")
-            guard readLine()?.lowercased().hasPrefix("y") == true else {
-                print("Aborted.")
-                return
+        if oldString == newString {
+            // No-op install; skip the write and the prompt entirely.
+            print("\(def.displayName) hooks already up to date at \(filePath)")
+        } else {
+            if !skipConfirm {
+                Self.printInstallPreview(
+                    path: filePath,
+                    oldContent: oldString,
+                    newContent: newString,
+                    fallbackContent: newString
+                )
+                print("\nProceed? [y/N] ", terminator: "")
+                guard readLine()?.lowercased().hasPrefix("y") == true else {
+                    print("Aborted.")
+                    return
+                }
             }
+            try newData.write(to: URL(fileURLWithPath: filePath), options: .atomic)
+            print("\(def.displayName) hooks installed at \(filePath)")
         }
-
-        try newData.write(to: URL(fileURLWithPath: filePath), options: .atomic)
-        print("\(def.displayName) hooks installed at \(filePath)")
 
         // Post-install actions
         if let action = def.postInstallAction {

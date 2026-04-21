@@ -627,9 +627,9 @@ private struct FeedPillButton: View {
         if isHovered {
             return tint == .red
                 ? Color.red.opacity(0.10)
-                : Color.primary.opacity(0.07)
+                : Color.primary.opacity(0.05)
         }
-        return Color.primary.opacity(0.03)
+        return Color.clear
     }
 }
 
