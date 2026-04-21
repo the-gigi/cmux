@@ -13969,6 +13969,11 @@ struct CMUXCLI {
                             newContent: newContent,
                             fallbackContent: newContent
                         )
+                        print("\nProceed? [y/N] ", terminator: "")
+                        guard readLine()?.lowercased().hasPrefix("y") == true else {
+                            print("Aborted (\(configPath) unchanged).")
+                            return
+                        }
                     }
                     try newContent.write(toFile: configPath, atomically: true, encoding: .utf8)
                     print("Enabled codex_hooks in \(configPath)")
@@ -14419,13 +14424,22 @@ struct CMUXCLI {
         )
         let skipConfirm = ProcessInfo.processInfo.arguments.contains("--yes")
             || ProcessInfo.processInfo.arguments.contains("-y")
-        if !skipConfirm && existing != source {
+        if existing == source {
+            print("OpenCode plugin already up to date at \(path)")
+            return
+        }
+        if !skipConfirm {
             Self.printInstallPreview(
                 path: path,
                 oldContent: existing,
                 newContent: source,
                 fallbackContent: source
             )
+            print("\nProceed? [y/N] ", terminator: "")
+            guard readLine()?.lowercased().hasPrefix("y") == true else {
+                print("Aborted.")
+                return
+            }
         }
         try source.write(toFile: path, atomically: true, encoding: .utf8)
         print("OpenCode plugin installed at \(path)")
