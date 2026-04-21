@@ -1,5 +1,10 @@
 import Foundation
 import Observation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// Size of the in-memory ring buffer. Older items are evicted to disk-only.
 public let WorkstreamDefaultRingCapacity = 2_000
@@ -187,8 +192,41 @@ public final class WorkstreamStore {
             cwd: event.cwd,
             title: defaultTitle(for: event),
             status: status,
-            payload: payload
+            payload: payload,
+            ppid: event.ppid
         )
+    }
+
+    /// Marks every pending item whose emitting agent process is no
+    /// longer alive as `.expired`. Called periodically so a killed
+    /// `claude` / `codex` doesn't leave actionable cards waiting
+    /// forever. Falls back silently on systems without `kill()`.
+    public func expireAbandonedItems(
+        isProcessAlive: (Int) -> Bool = WorkstreamStore.defaultIsProcessAlive
+    ) {
+        let now = clock()
+        for idx in items.indices {
+            guard items[idx].status.isPending else { continue }
+            guard let ppid = items[idx].ppid, ppid > 0 else { continue }
+            if !isProcessAlive(ppid) {
+                items[idx].status = .expired(at: now)
+                items[idx].updatedAt = now
+            }
+        }
+    }
+
+    /// Default liveness probe: `kill(pid, 0)` returns 0 if the
+    /// process exists and is signalable. `ESRCH` means gone;
+    /// `EPERM` means alive but owned by another user (treat as
+    /// alive — hook PIDs in practice are always same-user).
+    public static let defaultIsProcessAlive: (Int) -> Bool = { pid in
+        #if canImport(Darwin) || canImport(Glibc)
+        let rc = kill(pid_t(pid), 0)
+        if rc == 0 { return true }
+        return errno == EPERM
+        #else
+        return true
+        #endif
     }
 
     private func decode(

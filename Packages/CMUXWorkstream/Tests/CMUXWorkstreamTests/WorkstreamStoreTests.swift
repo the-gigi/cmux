@@ -39,6 +39,25 @@ struct WorkstreamStoreTests {
         #expect(store.items.last?.workstreamId == "s4")
     }
 
+    @Test("expireAbandonedItems expires items whose agent PID is dead")
+    func expireAbandoned() {
+        let clock = TestClock(initial: Date(timeIntervalSince1970: 0))
+        let store = WorkstreamStore(ringCapacity: 10, clock: { clock.now })
+        // Alive agent (pid=1000), dead agent (pid=2000).
+        store.ingest(.permission("alive", requestId: "r1", at: clock.now, ppid: 1000))
+        store.ingest(.permission("dead", requestId: "r2", at: clock.now, ppid: 2000))
+        store.ingest(.permission("untracked", requestId: "r3", at: clock.now))
+        // Injected liveness: only 1000 is alive.
+        store.expireAbandonedItems { pid in pid == 1000 }
+        #expect(store.items.count == 3)
+        #expect(store.items[0].status.isPending)
+        if case .expired = store.items[1].status {} else {
+            Issue.record("dead-pid item should be expired")
+        }
+        // Item with no ppid: no change (we don't know liveness).
+        #expect(store.items[2].status.isPending)
+    }
+
     @Test("expirePending moves stale pending items to expired")
     func expirePending() {
         let clock = TestClock(initial: Date(timeIntervalSince1970: 0))
@@ -87,7 +106,8 @@ private extension WorkstreamEvent {
     static func permission(
         _ sessionId: String,
         requestId: String,
-        at date: Date = Date()
+        at date: Date = Date(),
+        ppid: Int? = nil
     ) -> WorkstreamEvent {
         WorkstreamEvent(
             sessionId: sessionId,
@@ -97,6 +117,7 @@ private extension WorkstreamEvent {
             toolName: "Write",
             toolInputJSON: "{}",
             requestId: requestId,
+            ppid: ppid,
             receivedAt: date
         )
     }

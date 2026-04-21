@@ -14608,11 +14608,35 @@ struct CMUXCLI {
             toolName: toolName
         )
 
+        // Capture the agent's PID (not our subprocess PID) so the
+        // Feed can auto-expire pending cards when the agent is
+        // killed/crashed. Claude's wrapper exports CMUX_CLAUDE_PID.
+        // Other agents fall back to getppid() which walks up one
+        // level — close enough to catch most kill scenarios.
+        let env = ProcessInfo.processInfo.environment
+        let agentPid: Int = {
+            let envKey: String
+            switch source {
+            case "claude":   envKey = "CMUX_CLAUDE_PID"
+            case "codex":    envKey = "CMUX_CODEX_PID"
+            case "cursor":   envKey = "CMUX_CURSOR_PID"
+            case "gemini":   envKey = "CMUX_GEMINI_PID"
+            case "copilot":  envKey = "CMUX_COPILOT_PID"
+            default:         envKey = ""
+            }
+            if !envKey.isEmpty,
+               let raw = env[envKey],
+               let pid = Int(raw), pid > 0 {
+                return pid
+            }
+            return Int(getppid())
+        }()
+
         var eventDict: [String: Any] = [
             "session_id": "\(source)-\(sessionId)",
             "hook_event_name": hookEventName,
             "_source": source,
-            "_ppid": ProcessInfo.processInfo.processIdentifier,
+            "_ppid": agentPid,
         ]
         if let cwd = stdinObj["cwd"] as? String { eventDict["cwd"] = cwd }
         if !toolName.isEmpty { eventDict["tool_name"] = toolName }

@@ -42,6 +42,12 @@ public struct WorkstreamItem: Identifiable, Codable, Sendable, Equatable {
     public var title: String?
     public var status: WorkstreamStatus
     public var payload: WorkstreamPayload
+    /// PID of the agent process that emitted the event (hook's parent
+    /// pid). When non-nil, pending items get expired automatically as
+    /// soon as the agent process is gone — a crashed/killed `claude`
+    /// or `codex` would otherwise leave orphaned actionable cards
+    /// waiting forever. Only the agent PID; not the hook subprocess.
+    public var ppid: Int?
 
     public init(
         id: UUID = UUID(),
@@ -53,7 +59,8 @@ public struct WorkstreamItem: Identifiable, Codable, Sendable, Equatable {
         cwd: String? = nil,
         title: String? = nil,
         status: WorkstreamStatus? = nil,
-        payload: WorkstreamPayload
+        payload: WorkstreamPayload,
+        ppid: Int? = nil
     ) {
         self.id = id
         self.workstreamId = workstreamId
@@ -65,5 +72,6 @@ public struct WorkstreamItem: Identifiable, Codable, Sendable, Equatable {
         self.title = title
         self.status = status ?? (kind.isActionable ? .pending : .telemetry)
         self.payload = payload
+        self.ppid = ppid
     }
 }

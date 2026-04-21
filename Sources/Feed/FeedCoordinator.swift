@@ -25,12 +25,31 @@ final class FeedCoordinator: @unchecked Sendable {
     private let waiterLock = NSLock()
     private var waiters: [String: PendingWaiter] = [:]
 
+    @MainActor private var abandonedSweepTimer: Timer?
+
     private init() {}
 
     /// Must be called once at app launch to install the store.
     @MainActor
     func install(store: WorkstreamStore) {
         self.store = store
+        startAbandonedItemSweep()
+    }
+
+    /// Polls every 5s and expires any pending item whose emitting
+    /// agent process (`claude`, `codex`, `opencode`, …) has died.
+    /// Uses the agent PID captured on ingest (event.ppid). Runs on
+    /// the main actor; the kill(2) check is cheap.
+    @MainActor
+    private func startAbandonedItemSweep() {
+        guard abandonedSweepTimer == nil else { return }
+        let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.store?.expireAbandonedItems()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        abandonedSweepTimer = timer
     }
 
     /// Ingests a wire-frame event and, when `waitTimeout` > 0, blocks the
