@@ -1658,6 +1658,54 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
         )
     }
 
+    func testMinimalModeCollapsedSidebarSeedsTrafficLightInsetOnNewWindowCreation() {
+        guard let appDelegate = AppDelegate.shared else {
+            XCTFail("Expected AppDelegate.shared")
+            return
+        }
+
+        let defaults = UserDefaults.standard
+        let savedMode = defaults.object(forKey: WorkspacePresentationModeSettings.modeKey)
+        defaults.set(WorkspacePresentationModeSettings.Mode.minimal.rawValue, forKey: WorkspacePresentationModeSettings.modeKey)
+        defer {
+            restoreDefaultsValue(savedMode, forKey: WorkspacePresentationModeSettings.modeKey, defaults: defaults)
+        }
+
+        // Simulate the new-window flow: createMainWindow with a snapshot that forces
+        // sidebar collapsed. The initial workspace is created inside TabManager.init,
+        // before ContentView.onAppear can run syncTrafficLightInset — so the seed in
+        // createMainWindow is what protects the first render.
+        let snapshot = SessionWindowSnapshot(
+            frame: nil,
+            display: nil,
+            tabManager: SessionTabManagerSnapshot(selectedWorkspaceIndex: nil, workspaces: []),
+            sidebar: SessionSidebarSnapshot(isVisible: false, selection: .tabs, width: nil)
+        )
+        let windowId = appDelegate.createMainWindow(sessionWindowSnapshot: snapshot)
+        defer { closeWindow(withId: windowId) }
+
+        guard let manager = appDelegate.tabManagerFor(windowId: windowId) else {
+            XCTFail("Expected tab manager for created window")
+            return
+        }
+
+        XCTAssertEqual(appDelegate.sidebarVisibility(windowId: windowId), false)
+
+        guard let initialWorkspace = manager.selectedWorkspace else {
+            XCTFail("Expected selected workspace in fresh window")
+            return
+        }
+
+        // No RunLoop spin before reading the inset — the seed must be applied by the
+        // time createMainWindow returns, not lazily after onAppear runs.
+        XCTAssertEqual(
+            initialWorkspace.bonsplitController.configuration.appearance.tabBarLeadingInset,
+            80,
+            accuracy: 0.5,
+            "New minimal-mode windows with collapsed sidebar should reserve traffic-light space on the initial workspace before first render"
+        )
+    }
+
     func testAttachUpdateAccessoryRemovesTitlebarAccessoryWhenMinimalModeEnabled() {
         guard let appDelegate = AppDelegate.shared else {
             XCTFail("Expected AppDelegate.shared")
