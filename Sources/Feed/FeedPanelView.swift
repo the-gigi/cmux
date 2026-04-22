@@ -758,8 +758,6 @@ private struct FeedLabeledTextRow: View {
             Text(text)
                 .font(.system(size: 11))
                 .foregroundColor(textColor)
-                .lineLimit(2)
-                .truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -1853,7 +1851,6 @@ private struct QuestionActionArea: View {
             if shouldRenderLongForm, let q = questions.first {
                 longFormBlock(question: q)
             } else {
-                headerLine
                 ForEach(Array(questions.enumerated()), id: \.offset) { idx, q in
                     questionBlock(index: idx + 1, question: q)
                 }
@@ -1876,18 +1873,6 @@ private struct QuestionActionArea: View {
         // option, click-to-select.
         guard questions.count == 1, let q = questions.first else { return false }
         return q.options.contains { $0.description?.isEmpty == false }
-    }
-
-    private var headerLine: some View {
-        FeedLabeledTextRow(
-            label: agentLabel,
-            text: questions.count > 1
-                ? String(localized: "feed.question.count",
-                         defaultValue: "(\(questions.count) questions)")
-                : "",
-            labelColor: .secondary,
-            textColor: .secondary
-        )
     }
 
     private var agentLabel: String {

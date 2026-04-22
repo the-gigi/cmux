@@ -91876,20 +91876,6 @@
         "ja": { "stringUnit": { "state": "translated", "value": "拒否" } }
       }
     },
-    "feed.question.header": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Claude's Question" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "Claudeの質問" } }
-      }
-    },
-    "feed.question.count": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "(%lld questions)" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "(%lld件の質問)" } }
-      }
-    },
     "feed.question.multiSelect": {
       "extractionState": "manual",
       "localizations": {
