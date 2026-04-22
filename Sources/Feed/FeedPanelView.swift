@@ -598,7 +598,9 @@ struct FeedItemRow: View {
         case .question(_, let questions):
             QuestionActionArea(
                 questions: questions,
+                source: snapshot.source,
                 status: snapshot.status,
+                context: displayContext,
                 onReply: { selections in
                     actions.replyQuestion(snapshot.id, selections)
                 }
@@ -1802,8 +1804,12 @@ private struct PlanBodyView: View {
 
 private struct QuestionActionArea: View {
     let questions: [WorkstreamQuestionPrompt]
+    let source: WorkstreamSource
     let status: WorkstreamStatus
+    let context: WorkstreamContext?
     let onReply: ([String]) -> Void
+
+    private static let skipInterviewAndPlanAnswer = "Skip interview and plan immediately"
 
     // Per-question selections keyed by question id.
     @State private var selections: [String: Set<String>] = [:]
@@ -1823,6 +1829,9 @@ private struct QuestionActionArea: View {
                 }
             }
             submitCTA
+            if shouldShowSkipInterviewCTA {
+                skipInterviewCTA
+            }
         }
     }
 
@@ -2072,6 +2081,36 @@ private struct QuestionActionArea: View {
         !questions.isEmpty && questions.allSatisfy { $0.options.isEmpty }
     }
 
+    private var shouldShowSkipInterviewCTA: Bool {
+        status.isPending && isPlanAskUserQuestion
+    }
+
+    private var isPlanAskUserQuestion: Bool {
+        guard source == .claude else { return false }
+        if let mode = context?.permissionMode {
+            return mode.caseInsensitiveCompare("plan") == .orderedSame
+        }
+        return questionTextLooksLikePlanInterview
+    }
+
+    private var questionTextLooksLikePlanInterview: Bool {
+        let fragments: [String?] = questions.flatMap { q in
+            let questionFragments: [String?] = [q.header, q.prompt]
+            let optionFragments: [String?] = q.options.flatMap { option in
+                [option.label, option.description]
+            }
+            return questionFragments + optionFragments
+        }
+        let text = ([context?.lastUserMessage, context?.assistantPreamble] + fragments)
+            .compactMap { $0 }
+            .joined(separator: " ")
+            .lowercased()
+        return text.contains("plan mode")
+            || text.contains("make a plan")
+            || text.contains("plan-only")
+            || text.contains("plan immediately")
+    }
+
     private var submitCTA: some View {
         let isPending = status.isPending
         let enabled = isPending && (hasAnyAnswer || canSubmitEmptyAnswer)
@@ -2091,6 +2130,19 @@ private struct QuestionActionArea: View {
             // answered question) so the hook can feed them straight
             // back to the agent as the user's reply.
             onReply(composedAnswers)
+        }
+    }
+
+    private var skipInterviewCTA: some View {
+        FeedButton(
+            label: String(localized: "feed.question.skipInterviewPlan",
+                          defaultValue: "Skip interview and plan immediately"),
+            leadingIcon: "forward.end.fill",
+            kind: .soft,
+            size: .compact,
+            fullWidth: true
+        ) {
+            onReply([Self.skipInterviewAndPlanAnswer])
         }
     }
 }

@@ -11,19 +11,25 @@ public struct WorkstreamContext: Codable, Sendable, Equatable {
     public let planSummary: String?
     public let allowedPrompts: [WorkstreamAllowedPrompt]
     public let toolSummary: String?
+    /// Agent permission mode near this event. Claude records `plan`
+    /// for plan-mode sessions, which lets the Feed distinguish planning
+    /// interview questions from normal AskUserQuestion calls.
+    public let permissionMode: String?
 
     public init(
         lastUserMessage: String? = nil,
         assistantPreamble: String? = nil,
         planSummary: String? = nil,
         allowedPrompts: [WorkstreamAllowedPrompt] = [],
-        toolSummary: String? = nil
+        toolSummary: String? = nil,
+        permissionMode: String? = nil
     ) {
         self.lastUserMessage = Self.cleaned(lastUserMessage)
         self.assistantPreamble = Self.cleaned(assistantPreamble)
         self.planSummary = Self.cleaned(planSummary)
         self.allowedPrompts = allowedPrompts.filter { !$0.prompt.isEmpty }
         self.toolSummary = Self.cleaned(toolSummary)
+        self.permissionMode = Self.cleaned(permissionMode)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -32,6 +38,7 @@ public struct WorkstreamContext: Codable, Sendable, Equatable {
         case planSummary
         case allowedPrompts
         case toolSummary
+        case permissionMode
     }
 
     public init(from decoder: Decoder) throws {
@@ -44,7 +51,8 @@ public struct WorkstreamContext: Codable, Sendable, Equatable {
                 [WorkstreamAllowedPrompt].self,
                 forKey: .allowedPrompts
             ) ?? [],
-            toolSummary: try c.decodeIfPresent(String.self, forKey: .toolSummary)
+            toolSummary: try c.decodeIfPresent(String.self, forKey: .toolSummary),
+            permissionMode: try c.decodeIfPresent(String.self, forKey: .permissionMode)
         )
     }
 
@@ -54,6 +62,7 @@ public struct WorkstreamContext: Codable, Sendable, Equatable {
             && planSummary == nil
             && allowedPrompts.isEmpty
             && toolSummary == nil
+            && permissionMode == nil
     }
 
     /// Returns a context where non-empty values from `self` win and
@@ -65,7 +74,8 @@ public struct WorkstreamContext: Codable, Sendable, Equatable {
             assistantPreamble: assistantPreamble ?? fallback.assistantPreamble,
             planSummary: planSummary ?? fallback.planSummary,
             allowedPrompts: allowedPrompts.isEmpty ? fallback.allowedPrompts : allowedPrompts,
-            toolSummary: toolSummary ?? fallback.toolSummary
+            toolSummary: toolSummary ?? fallback.toolSummary,
+            permissionMode: permissionMode ?? fallback.permissionMode
         )
     }
 

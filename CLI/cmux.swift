@@ -14503,6 +14503,12 @@ struct CMUXCLI {
         if let rawObject {
             setFeedContext(
                 &context,
+                key: "permissionMode",
+                value: firstString(in: rawObject, keys: ["permissionMode", "permission_mode"]),
+                maxLength: 80
+            )
+            setFeedContext(
+                &context,
                 key: "assistantPreamble",
                 value: firstString(
                     in: rawObject,
@@ -14581,6 +14587,12 @@ struct CMUXCLI {
             value: firstString(in: raw, keys: ["toolSummary", "tool_summary"]),
             maxLength: 600
         )
+        setFeedContext(
+            &context,
+            key: "permissionMode",
+            value: firstString(in: raw, keys: ["permissionMode", "permission_mode"]),
+            maxLength: 80
+        )
         let allowed = feedAllowedPrompts(from: raw["allowedPrompts"] ?? raw["allowed_prompts"])
         if !allowed.isEmpty {
             context["allowedPrompts"] = allowed
@@ -14601,14 +14613,27 @@ struct CMUXCLI {
 
         var lastUserMessage: String?
         var lastAssistantText: String?
+        var permissionMode: String?
         var matchedContext: [String: Any]?
 
         for line in content.components(separatedBy: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty,
                   let lineData = trimmed.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                  let message = obj["message"] as? [String: Any],
+                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
+            else {
+                continue
+            }
+
+            if let mode = firstString(in: obj, keys: ["permissionMode", "permission_mode"]) {
+                permissionMode = mode
+            }
+            if let attachment = obj["attachment"] as? [String: Any],
+               (attachment["type"] as? String) == "plan_mode" {
+                permissionMode = "plan"
+            }
+
+            guard let message = obj["message"] as? [String: Any],
                   let role = message["role"] as? String
             else {
                 continue
@@ -14649,6 +14674,12 @@ struct CMUXCLI {
                     value: messageText ?? lastAssistantText,
                     maxLength: 1_000
                 )
+                setFeedContext(
+                    &context,
+                    key: "permissionMode",
+                    value: permissionMode,
+                    maxLength: 80
+                )
                 if let input = block["input"], let planContext = feedPlanContext(from: input) {
                     mergeFeedContext(&context, planContext, preferIncoming: true)
                 }
@@ -14663,6 +14694,7 @@ struct CMUXCLI {
         var fallback: [String: Any] = [:]
         setFeedContext(&fallback, key: "lastUserMessage", value: lastUserMessage, maxLength: 1_000)
         setFeedContext(&fallback, key: "assistantPreamble", value: lastAssistantText, maxLength: 1_000)
+        setFeedContext(&fallback, key: "permissionMode", value: permissionMode, maxLength: 80)
         return fallback.isEmpty ? nil : fallback
     }
 
@@ -15213,6 +15245,8 @@ struct CMUXCLI {
         "shell",         // Codex / other agents
     ]
 
+    private static let skipInterviewAndPlanAnswer = "Skip interview and plan immediately"
+
     /// Encodes the user's decision in the agent's expected hook stdout
     /// shape so the agent honors it.
     private static func renderAgentDecision(
@@ -15419,6 +15453,20 @@ struct CMUXCLI {
 
         case "question":
             let selections = decision["selections"] as? [String] ?? []
+            if selections == [Self.skipInterviewAndPlanAnswer] {
+                let message = "User chose Skip interview and plan immediately via cmux Feed. Do not ask more interview questions. Write the plan now."
+                if source == "claude" {
+                    return encode(claudePermissionRequestDecision(
+                        behavior: "deny",
+                        message: message
+                    ))
+                }
+                return encode(nonClaudePreToolDecision(
+                    permission: "deny",
+                    reason: message,
+                    additionalContext: message
+                ))
+            }
             if source == "claude" {
                 let updatedInput = claudeAskUserQuestionInput(
                     toolInput: toolInput,

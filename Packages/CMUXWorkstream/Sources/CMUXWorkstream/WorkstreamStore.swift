@@ -437,9 +437,9 @@ public final class WorkstreamStore {
 
         switch item.payload {
         case .userPrompt(let text):
-            next = WorkstreamContext(lastUserMessage: text).mergingMissing(from: current)
+            next = WorkstreamContext(lastUserMessage: text).mergingMissing(from: next ?? current)
         case .assistantMessage(let text):
-            next = WorkstreamContext(assistantPreamble: text).mergingMissing(from: current)
+            next = WorkstreamContext(assistantPreamble: text).mergingMissing(from: next ?? current)
         default:
             break
         }
@@ -451,7 +451,8 @@ public final class WorkstreamStore {
     private static func carriedContext(from context: WorkstreamContext) -> WorkstreamContext? {
         let carried = WorkstreamContext(
             lastUserMessage: context.lastUserMessage,
-            assistantPreamble: context.assistantPreamble
+            assistantPreamble: context.assistantPreamble,
+            permissionMode: context.permissionMode
         )
         return carried.isEmpty ? nil : carried
     }

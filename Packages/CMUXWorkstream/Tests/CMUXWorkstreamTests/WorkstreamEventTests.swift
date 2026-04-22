@@ -14,7 +14,7 @@ struct WorkstreamEventTests {
           "cwd": "/tmp/proj",
           "tool_name": "Write",
           "tool_input": {"file_path": "/etc/passwd", "content": "x"},
-          "context": {"lastUserMessage": "write a file"},
+          "context": {"lastUserMessage": "write a file", "permissionMode": "plan"},
           "_opencode_request_id": "req-1",
           "_ppid": 1234
         }
@@ -25,6 +25,7 @@ struct WorkstreamEventTests {
         #expect(event.source == "claude")
         #expect(event.toolName == "Write")
         #expect(event.context?.lastUserMessage == "write a file")
+        #expect(event.context?.permissionMode == "plan")
         #expect(event.requestId == "req-1")
         #expect(event.ppid == 1234)
         // `toolInputJSON` round-trips through JSONSerialization which may
@@ -51,7 +52,8 @@ struct WorkstreamEventTests {
                 assistantPreamble: "I will make a short plan.",
                 allowedPrompts: [
                     WorkstreamAllowedPrompt(tool: "Bash", prompt: "run tests")
-                ]
+                ],
+                permissionMode: "plan"
             ),
             requestId: "plan-1",
             ppid: 999
@@ -69,6 +71,7 @@ struct WorkstreamEventTests {
         #expect(back.context?.lastUserMessage == "make a plan")
         #expect(back.context?.assistantPreamble == "I will make a short plan.")
         #expect(back.context?.allowedPrompts.first?.prompt == "run tests")
+        #expect(back.context?.permissionMode == "plan")
     }
 
     @Test("Missing optional fields decode as nil")

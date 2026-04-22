@@ -91568,6 +91568,23 @@
         }
       }
     },
+    "feed.question.skipInterviewPlan": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skip interview and plan immediately"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インタビューをスキップしてすぐ計画"
+          }
+        }
+      }
+    },
     "feed.question.typeSomething": {
       "extractionState": "manual",
       "localizations": {

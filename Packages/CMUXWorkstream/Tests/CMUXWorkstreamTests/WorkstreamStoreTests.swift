@@ -133,7 +133,8 @@ struct WorkstreamStoreTests {
             sessionId: "s1",
             hookEventName: .userPromptSubmit,
             source: "claude",
-            toolInputJSON: #"{"prompt":"demo the permission UI"}"#
+            toolInputJSON: #"{"prompt":"demo the permission UI"}"#,
+            context: WorkstreamContext(permissionMode: "plan")
         ))
         store.ingest(WorkstreamEvent(
             sessionId: "s1",
@@ -145,6 +146,7 @@ struct WorkstreamStoreTests {
         ))
 
         #expect(store.items[1].context?.lastUserMessage == "demo the permission UI")
+        #expect(store.items[1].context?.permissionMode == "plan")
     }
 
     @Test("Exit plan context parses plan JSON")
