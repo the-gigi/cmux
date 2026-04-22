@@ -92279,6 +92279,13 @@
         "ja": { "stringUnit": { "state": "translated", "value": "クリアGlass" } }
       }
     },
+    "feed.buttonDebug.preset.compactGlass": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Compact Glass" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "コンパクトGlass" } }
+      }
+    },
     "feed.buttonDebug.preset.nativeBlue": {
       "extractionState": "manual",
       "localizations": {

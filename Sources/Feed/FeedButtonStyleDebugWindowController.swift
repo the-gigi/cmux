@@ -256,6 +256,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
     case commandDark
     case commandLight
     case clearGlass
+    case compactGlass
     case nativeBlue
     case liquidMono
     case softHalo
@@ -286,6 +287,8 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
             return String(localized: "feed.buttonDebug.preset.commandLight", defaultValue: "Command Light")
         case .clearGlass:
             return String(localized: "feed.buttonDebug.preset.clearGlass", defaultValue: "Clear Glass")
+        case .compactGlass:
+            return String(localized: "feed.buttonDebug.preset.compactGlass", defaultValue: "Compact Glass")
         case .nativeBlue:
             return String(localized: "feed.buttonDebug.preset.nativeBlue", defaultValue: "Native Blue")
         case .liquidMono:
@@ -311,6 +314,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .commandDark: return .command
         case .commandLight: return .commandLight
         case .clearGlass: return .nativeGlass
+        case .compactGlass: return .glass
         case .nativeBlue: return .nativeGlass
         case .liquidMono: return .liquid
         case .softHalo: return .halo
@@ -328,6 +332,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .liquidCapsule: return 12.0
         case .haloGlow, .commandDark, .commandLight: return 8.0
         case .clearGlass, .nativeBlue, .softHalo: return 9.0
+        case .compactGlass: return 6.0
         case .liquidMono: return 11.0
         case .hairlineGlass: return 6.0
         }
@@ -343,6 +348,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .haloGlow: return 9.0
         case .commandLight: return 8.0
         case .clearGlass, .nativeBlue, .softHalo: return 10.0
+        case .compactGlass: return 7.0
         case .liquidMono: return 13.0
         case .hairlineGlass: return 7.0
         }
@@ -357,6 +363,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .liquidCapsule: return 10.0
         case .haloGlow: return 9.5
         case .commandLight, .clearGlass, .nativeBlue, .softHalo: return 9.5
+        case .compactGlass: return 8.0
         case .liquidMono: return 10.5
         case .hairlineGlass: return 8.5
         case .solidClassic: return 8.0
@@ -373,6 +380,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .solidClassic, .raycastGlass, .frostedOutline, .commandDark: return 12.0
         case .commandLight: return 12.0
         case .clearGlass, .nativeBlue, .softHalo: return 13.0
+        case .compactGlass: return 11.0
         case .liquidMono: return 14.0
         case .hairlineGlass: return 11.0
         }
@@ -386,6 +394,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .liquidCapsule, .haloGlow: return 5.0
         case .raycastGlass, .frostedOutline, .commandDark: return 4.5
         case .commandLight, .clearGlass, .nativeBlue, .softHalo: return 4.5
+        case .compactGlass: return 2.5
         case .liquidMono: return 5.0
         case .hairlineGlass: return 4.0
         case .solidClassic: return 4.0
@@ -401,6 +410,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .raycastGlass, .haloGlow: return 6.0
         case .frostedOutline, .commandDark: return 5.5
         case .commandLight, .clearGlass, .nativeBlue, .softHalo: return 5.5
+        case .compactGlass: return 3.5
         case .liquidMono: return 6.0
         case .hairlineGlass: return 5.0
         case .solidClassic: return 5.0
@@ -419,6 +429,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .commandDark: return 0.24
         case .commandLight: return 0.18
         case .clearGlass: return 0.08
+        case .compactGlass: return 0.24
         case .nativeBlue: return 0.34
         case .liquidMono: return 0.20
         case .softHalo: return 0.18
@@ -437,6 +448,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .haloGlow: return 0.9
         case .commandLight: return 0.8
         case .clearGlass, .nativeBlue: return 0.6
+        case .compactGlass: return 0.7
         case .liquidMono, .softHalo: return 0.8
         case .hairlineGlass: return 0.7
         case .minimalFlat: return 0.5
@@ -461,6 +473,8 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
             return commandLightPalette(for: kind)
         case .clearGlass:
             return clearGlassPalette(for: kind)
+        case .compactGlass:
+            return compactGlassPalette(for: kind)
         case .nativeBlue:
             return nativeBluePalette(for: kind)
         case .liquidMono:
@@ -562,6 +576,19 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .success: return .init(background: "#D6F1E2", hoverBackground: "#E6F8EE", foreground: "#145234")
         case .warning: return .init(background: "#F4E1CF", hoverBackground: "#FAECDF", foreground: "#6B401E")
         case .destructive: return .init(background: "#F1D6DB", hoverBackground: "#F8E5E9", foreground: "#751D2A")
+        }
+    }
+
+    private func compactGlassPalette(for kind: FeedButton.Kind) -> FeedButtonDebugPalette {
+        switch kind {
+        case .ghost: return .init(background: "#AAB4BF", hoverBackground: "#C1CAD4", foreground: "#F8FAFC")
+        case .soft: return .init(background: "#7B858F", hoverBackground: "#909BA7", foreground: "#FFFFFF")
+        case .dark: return .init(background: "#262C34", hoverBackground: "#373F4A", foreground: "#FFFFFF")
+        case .light: return .init(background: "#EEF2F6", hoverBackground: "#FFFFFF", foreground: "#111827")
+        case .primary: return .init(background: "#4E8EE8", hoverBackground: "#68A1F4", foreground: "#FFFFFF")
+        case .success: return .init(background: "#47A876", hoverBackground: "#5DC08C", foreground: "#FFFFFF")
+        case .warning: return .init(background: "#D99050", hoverBackground: "#EDA261", foreground: "#FFFFFF")
+        case .destructive: return .init(background: "#C95E68", hoverBackground: "#DD737D", foreground: "#FFFFFF")
         }
     }
 
@@ -723,6 +750,7 @@ private struct FeedButtonDebugPresetSection: Identifiable {
                 label: String(localized: "feed.buttonDebug.section.material", defaultValue: "Material"),
                 presets: [
                     .raycastGlass,
+                    .compactGlass,
                     .liquidCapsule,
                     .liquidMono,
                     .frostedOutline,
