@@ -75,6 +75,21 @@ struct FeedPanelView: View {
     }
 
     private var controlBar: some View {
+        Group {
+            if #available(macOS 26.0, *) {
+                GlassEffectContainer(spacing: 6) {
+                    controlBarContent
+                }
+            } else {
+                controlBarContent
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .frame(height: 29)
+    }
+
+    private var controlBarContent: some View {
         HStack(spacing: 6) {
             ForEach(Filter.allCases) { f in
                 FeedButton(
@@ -89,9 +104,6 @@ struct FeedPanelView: View {
             }
             Spacer(minLength: 4)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .frame(height: 29)
     }
 }
 
@@ -1055,6 +1067,29 @@ struct FeedButton: View {
         }
     }
 
+#if DEBUG
+    private var glassEffectTint: Color {
+        _ = debugStyleGeneration
+        if let color = FeedButtonDebugSettings.color(
+            for: kind,
+            role: isHovered ? .hoverBackground : .background
+        ) {
+            return color
+        }
+
+        switch kind {
+        case .ghost: return Color.accentColor
+        case .soft: return Color.gray
+        case .dark: return Color.black
+        case .light: return Color.white
+        case .primary: return Color(red: 0.24, green: 0.48, blue: 0.88)
+        case .success: return Color(red: 0.18, green: 0.62, blue: 0.35)
+        case .warning: return Color(red: 0.92, green: 0.54, blue: 0.29)
+        case .destructive: return Color(red: 0.75, green: 0.22, blue: 0.22)
+        }
+    }
+#endif
+
     @ViewBuilder
     private var buttonBackground: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -1073,6 +1108,41 @@ struct FeedButton: View {
                         )
                     )
                 )
+        case .nativeGlass:
+            if #available(macOS 26.0, *) {
+                shape
+                    .fill(Color.clear)
+                    .glassEffect(
+                        .regular
+                            .tint(glassEffectTint.opacity(FeedButtonDebugSettings.glassTintOpacity))
+                            .interactive(!dimmed),
+                        in: shape
+                    )
+            } else {
+                shape
+                    .fill(.ultraThinMaterial)
+                    .overlay(shape.fill(backgroundFill.opacity(0.20)))
+            }
+        case .nativeProminentGlass:
+            if #available(macOS 26.0, *) {
+                shape
+                    .fill(Color.clear)
+                    .glassEffect(
+                        .regular
+                            .tint(glassEffectTint.opacity(FeedButtonDebugSettings.glassTintOpacity))
+                            .interactive(!dimmed),
+                        in: shape
+                    )
+                    .overlay(
+                        shape.fill(
+                            backgroundFill.opacity(isHovered || isSelected ? 0.30 : 0.18)
+                        )
+                    )
+            } else {
+                shape
+                    .fill(.regularMaterial)
+                    .overlay(shape.fill(backgroundFill.opacity(0.26)))
+            }
         case .liquid:
             shape
                 .fill(.ultraThinMaterial)
@@ -1152,6 +1222,10 @@ struct FeedButton: View {
             EmptyView()
         case .glass:
             shape.stroke(Color.white.opacity(0.16), lineWidth: 0.75)
+        case .nativeGlass:
+            shape.stroke(Color.white.opacity(0.14), lineWidth: FeedButtonDebugSettings.borderWidth)
+        case .nativeProminentGlass:
+            shape.stroke(Color.white.opacity(0.18), lineWidth: FeedButtonDebugSettings.borderWidth)
         case .liquid:
             shape.stroke(
                 LinearGradient(
@@ -1192,7 +1266,9 @@ struct FeedButton: View {
             return backgroundFill.opacity(isHovered || isSelected ? 0.18 : 0.10)
         case .command:
             return Color.black.opacity(0.28)
-        case .solid, .glass, .outline, .flat:
+        case .nativeProminentGlass:
+            return backgroundFill.opacity(isHovered || isSelected ? 0.18 : 0.10)
+        case .solid, .glass, .nativeGlass, .outline, .flat:
             return Color.clear
         }
 #else
@@ -1206,8 +1282,9 @@ struct FeedButton: View {
         switch FeedButtonDebugSettings.visualStyle {
         case .halo: return isHovered || isSelected ? 9 : 6
         case .liquid: return isHovered || isSelected ? 5 : 3
+        case .nativeProminentGlass: return isHovered || isSelected ? 5 : 3
         case .command: return 3
-        case .solid, .glass, .outline, .flat: return 0
+        case .solid, .glass, .nativeGlass, .outline, .flat: return 0
         }
 #else
         return 0
@@ -1219,8 +1296,8 @@ struct FeedButton: View {
         _ = debugStyleGeneration
         switch FeedButtonDebugSettings.visualStyle {
         case .halo: return 2
-        case .liquid, .command: return 1
-        case .solid, .glass, .outline, .flat: return 0
+        case .liquid, .nativeProminentGlass, .command: return 1
+        case .solid, .glass, .nativeGlass, .outline, .flat: return 0
         }
 #else
         return 0

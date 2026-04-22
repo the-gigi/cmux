@@ -5,6 +5,8 @@ import SwiftUI
 enum FeedButtonDebugVisualStyle: String, CaseIterable, Identifiable {
     case solid
     case glass
+    case nativeGlass
+    case nativeProminentGlass
     case liquid
     case halo
     case command
@@ -19,6 +21,10 @@ enum FeedButtonDebugVisualStyle: String, CaseIterable, Identifiable {
             return String(localized: "feed.buttonDebug.style.solid", defaultValue: "Solid")
         case .glass:
             return String(localized: "feed.buttonDebug.style.glass", defaultValue: "Raycast Glass")
+        case .nativeGlass:
+            return String(localized: "feed.buttonDebug.style.nativeGlass", defaultValue: "Native Glass")
+        case .nativeProminentGlass:
+            return String(localized: "feed.buttonDebug.style.nativeProminentGlass", defaultValue: "Prominent Glass")
         case .liquid:
             return String(localized: "feed.buttonDebug.style.liquid", defaultValue: "Liquid")
         case .halo:
@@ -239,6 +245,8 @@ struct FeedButtonDebugPalette {
 enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
     case solidClassic
     case raycastGlass
+    case nativeGlass
+    case nativeProminentGlass
     case liquidCapsule
     case frostedOutline
     case haloGlow
@@ -253,6 +261,10 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
             return String(localized: "feed.buttonDebug.preset.solidClassic", defaultValue: "Solid Classic")
         case .raycastGlass:
             return String(localized: "feed.buttonDebug.preset.raycastGlass", defaultValue: "Raycast Glass")
+        case .nativeGlass:
+            return String(localized: "feed.buttonDebug.preset.nativeGlass", defaultValue: "Native Glass")
+        case .nativeProminentGlass:
+            return String(localized: "feed.buttonDebug.preset.nativeProminentGlass", defaultValue: "Prominent Glass")
         case .liquidCapsule:
             return String(localized: "feed.buttonDebug.preset.liquidCapsule", defaultValue: "Liquid Capsule")
         case .frostedOutline:
@@ -270,6 +282,8 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         switch self {
         case .solidClassic: return .solid
         case .raycastGlass: return .glass
+        case .nativeGlass: return .nativeGlass
+        case .nativeProminentGlass: return .nativeProminentGlass
         case .liquidCapsule: return .liquid
         case .frostedOutline: return .outline
         case .haloGlow: return .halo
@@ -282,6 +296,8 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         switch self {
         case .solidClassic, .minimalFlat: return 5.0
         case .raycastGlass, .frostedOutline: return 7.0
+        case .nativeGlass: return 9.0
+        case .nativeProminentGlass: return 10.0
         case .liquidCapsule: return 12.0
         case .haloGlow, .commandDark: return 8.0
         }
@@ -291,6 +307,8 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         switch self {
         case .solidClassic, .minimalFlat: return 6.0
         case .raycastGlass, .frostedOutline, .commandDark: return 8.0
+        case .nativeGlass: return 10.0
+        case .nativeProminentGlass: return 11.0
         case .liquidCapsule: return 14.0
         case .haloGlow: return 9.0
         }
@@ -300,6 +318,8 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         switch self {
         case .minimalFlat: return 7.0
         case .raycastGlass, .frostedOutline, .commandDark: return 9.0
+        case .nativeGlass: return 9.5
+        case .nativeProminentGlass: return 10.0
         case .liquidCapsule: return 10.0
         case .haloGlow: return 9.5
         case .solidClassic: return 8.0
@@ -309,6 +329,8 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
     var mediumHorizontalPadding: Double {
         switch self {
         case .minimalFlat: return 10.0
+        case .nativeGlass: return 13.0
+        case .nativeProminentGlass: return 14.0
         case .liquidCapsule: return 15.0
         case .haloGlow: return 13.0
         case .solidClassic, .raycastGlass, .frostedOutline, .commandDark: return 12.0
@@ -318,6 +340,8 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
     var compactVerticalPadding: Double {
         switch self {
         case .minimalFlat: return 3.5
+        case .nativeGlass: return 5.0
+        case .nativeProminentGlass: return 5.5
         case .liquidCapsule, .haloGlow: return 5.0
         case .raycastGlass, .frostedOutline, .commandDark: return 4.5
         case .solidClassic: return 4.0
@@ -327,6 +351,8 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
     var mediumVerticalPadding: Double {
         switch self {
         case .minimalFlat: return 4.5
+        case .nativeGlass: return 6.0
+        case .nativeProminentGlass: return 6.5
         case .liquidCapsule: return 6.5
         case .raycastGlass, .haloGlow: return 6.0
         case .frostedOutline, .commandDark: return 5.5
@@ -338,6 +364,8 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         switch self {
         case .solidClassic: return 0.42
         case .raycastGlass: return 0.38
+        case .nativeGlass: return 0.22
+        case .nativeProminentGlass: return 0.46
         case .liquidCapsule: return 0.30
         case .frostedOutline: return 0.18
         case .haloGlow: return 0.34
@@ -349,6 +377,8 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
     var borderWidth: Double {
         switch self {
         case .solidClassic, .raycastGlass, .commandDark: return 0.8
+        case .nativeGlass: return 0.6
+        case .nativeProminentGlass: return 0.7
         case .liquidCapsule: return 0.7
         case .frostedOutline: return 1.2
         case .haloGlow: return 0.9
@@ -358,8 +388,10 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
 
     func palette(for kind: FeedButton.Kind) -> FeedButtonDebugPalette? {
         switch self {
-        case .solidClassic, .raycastGlass:
+        case .solidClassic, .raycastGlass, .nativeGlass:
             return nil
+        case .nativeProminentGlass:
+            return nativeProminentPalette(for: kind)
         case .liquidCapsule:
             return liquidPalette(for: kind)
         case .frostedOutline:
@@ -370,6 +402,19 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
             return commandPalette(for: kind)
         case .minimalFlat:
             return minimalPalette(for: kind)
+        }
+    }
+
+    private func nativeProminentPalette(for kind: FeedButton.Kind) -> FeedButtonDebugPalette {
+        switch kind {
+        case .ghost: return .init(background: "#76869A", hoverBackground: "#8C9DB2", foreground: "#FFFFFF")
+        case .soft: return .init(background: "#65717E", hoverBackground: "#7A8795", foreground: "#FFFFFF")
+        case .dark: return .init(background: "#1B2027", hoverBackground: "#2A3039", foreground: "#FFFFFF")
+        case .light: return .init(background: "#EEF2F6", hoverBackground: "#FFFFFF", foreground: "#111827")
+        case .primary: return .init(background: "#2E78E6", hoverBackground: "#4A91FF", foreground: "#FFFFFF")
+        case .success: return .init(background: "#239D66", hoverBackground: "#30B978", foreground: "#FFFFFF")
+        case .warning: return .init(background: "#DA7C38", hoverBackground: "#F09046", foreground: "#FFFFFF")
+        case .destructive: return .init(background: "#BF3F4A", hoverBackground: "#D9515C", foreground: "#FFFFFF")
         }
     }
 
@@ -580,6 +625,21 @@ private struct FeedButtonStyleDebugView: View {
     }
 
     private var previewRail: some View {
+        Group {
+            if #available(macOS 26.0, *) {
+                GlassEffectContainer(spacing: 8) {
+                    previewRailContent
+                }
+            } else {
+                previewRailContent
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private var previewRailContent: some View {
         HStack(spacing: 8) {
             ForEach(FeedButton.Kind.allCases) { kind in
                 FeedButton(
@@ -592,9 +652,6 @@ private struct FeedButtonStyleDebugView: View {
                 }
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private var styleControls: some View {
