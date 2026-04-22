@@ -155,6 +155,8 @@ private struct FeedListView: View {
     let filter: FeedPanelView.Filter
     let items: [WorkstreamItem]
 
+    @State private var hoveredItemId: UUID?
+
     var body: some View {
         let visible = filtered(items)
         let lastPromptByWorkstream = Self.lastPromptByWorkstream(items)
@@ -167,12 +169,14 @@ private struct FeedListView: View {
                 // virtualization instead of retaining every card view in
                 // a long ScrollView stack.
                 ForEach(Array(visible.enumerated()), id: \.element.id) { idx, item in
+                    let snapshot = FeedItemSnapshot(
+                        item: item,
+                        userPromptEcho: lastPromptByWorkstream[item.workstreamId]
+                    )
+                    let isHovered = hoveredItemId == item.id
                     VStack(spacing: 0) {
                         FeedItemRow(
-                            snapshot: FeedItemSnapshot(
-                                item: item,
-                                userPromptEcho: lastPromptByWorkstream[item.workstreamId]
-                            ),
+                            snapshot: snapshot,
                             actions: FeedRowActions.bound()
                         )
                         if idx < visible.count - 1 {
@@ -182,9 +186,20 @@ private struct FeedListView: View {
                                 .frame(height: 1)
                         }
                     }
+                    .onHover { hovering in
+                        if hovering {
+                            hoveredItemId = item.id
+                        } else if hoveredItemId == item.id {
+                            hoveredItemId = nil
+                        }
+                    }
+                    .animation(.easeOut(duration: 0.12), value: isHovered)
                     .listRowInsets(EdgeInsets())
                     .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
+                    .listRowBackground(
+                        Rectangle()
+                            .fill(rowHoverFill(for: snapshot, isHovered: isHovered))
+                    )
                 }
             }
             .listStyle(.plain)
@@ -233,6 +248,23 @@ private struct FeedListView: View {
         // mental map of "this was the second request I got" doesn't
         // get shuffled when they answer it.
         return base.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func rowHoverFill(for snapshot: FeedItemSnapshot, isHovered: Bool) -> Color {
+        guard isHovered else { return Color.clear }
+        if snapshot.status.isPending {
+            return tint(for: snapshot).opacity(0.10)
+        }
+        return Color.primary.opacity(0.055)
+    }
+
+    private func tint(for snapshot: FeedItemSnapshot) -> Color {
+        switch snapshot.kind {
+        case .permissionRequest: return .orange
+        case .exitPlan: return .purple
+        case .question: return .blue
+        default: return snapshot.status.isPending ? .orange : .secondary.opacity(0.8)
+        }
     }
 
     private var emptyState: some View {
@@ -377,8 +409,6 @@ struct FeedItemRow: View {
     let snapshot: FeedItemSnapshot
     let actions: FeedRowActions
 
-    @State private var isHovered = false
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             chipHeader
@@ -398,8 +428,6 @@ struct FeedItemRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(isResolvedOrExpired ? 0.6 : 1.0)
         .contentShape(Rectangle())
-        .background(rowHoverBackground)
-        .animation(.easeOut(duration: 0.12), value: isHovered)
         .help(helpText)
         // Single-tap on the card background focuses the agent's
         // cmux terminal and flashes the terminal's own ring (same
@@ -409,21 +437,6 @@ struct FeedItemRow: View {
         .onTapGesture {
             actions.jump(snapshot.workstreamId)
         }
-        .onHover { hovering in
-            isHovered = hovering
-        }
-    }
-
-    private var rowHoverBackground: some View {
-        Rectangle()
-            .fill(isHovered ? hoverFill : Color.clear)
-    }
-
-    private var hoverFill: Color {
-        if snapshot.status.isPending {
-            return kindTint.opacity(0.10)
-        }
-        return Color.primary.opacity(0.055)
     }
 
     private var promptEcho: String? {
