@@ -14544,6 +14544,12 @@ private extension NSWindow {
             cmuxFirstResponderGuardContextWindowNumber = previousContextWindowNumber
         }
 
+        if event.type == .keyDown,
+           let webView = self.firstResponder as? CmuxWebView,
+           webView.handleRestoredWebContentTextInputBeforeWindowDispatch(event) {
+            return
+        }
+
         if cmux_routeBrowserSearchOverlayCommandKeyDown(event) {
             return
         }

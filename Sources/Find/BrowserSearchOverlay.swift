@@ -251,8 +251,9 @@ private final class BrowserSearchNativeTextField: NSTextField {
             .intersection(.deviceIndependentFlagsMask)
             .subtracting([.numericPad, .function, .capsLock])
         if flags.contains(.command) {
-            if let panelId = browserSearchOverlayPanelId(for: self),
-               let window,
+            if let window,
+               let panelId = browserSearchOverlayPanelId(for: self) ??
+                   AppDelegate.shared?.activeBrowserSearchOverlayPanelId(in: window),
                AppDelegate.shared?.handleBrowserSearchOverlayKeyDown(
                    event,
                    panelId: panelId,

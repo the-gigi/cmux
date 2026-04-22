@@ -847,6 +847,21 @@ final class CmuxWebView: WKWebView {
         return inserted ? "focusRepairBridgeInserted" : "focusRepairBridgeInsertFailed"
     }
 
+    @discardableResult
+    func handleRestoredWebContentTextInputBeforeWindowDispatch(_ event: NSEvent) -> Bool {
+        guard let repairText = Self.restoredTextInputRepairText(for: event),
+              let repairRoute = performRestoredTextInputRepairIfNeeded(event: event, text: repairText) else {
+            return false
+        }
+#if DEBUG
+        dlog(
+            "browser.focus.textRepair.windowDispatch web=\(ObjectIdentifier(self)) " +
+            "route=\(repairRoute)"
+        )
+#endif
+        return true
+    }
+
     private func pageCanAcceptPlainTextPaste() -> Bool {
         let script = """
         (() => {
