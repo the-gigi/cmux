@@ -1952,6 +1952,7 @@ private struct QuestionActionArea: View {
     // question — mirrors Claude's TUI fallback.
     @State private var freeTexts: [String: String] = [:]
     @State private var focusedCustomAnswerId: String?
+    @State private var customAnswerHeights: [String: CGFloat] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -2090,7 +2091,9 @@ private struct QuestionActionArea: View {
         let customId = Self.customAnswerSelectionId
         let selected = selections[questionId]?.contains(customId) == true
         let focusKey = customAnswerFocusKey(questionId)
-        return HStack(alignment: .center, spacing: 10) {
+        let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        let measuredHeight = customAnswerHeight(questionId: questionId, font: font)
+        return HStack(alignment: .top, spacing: 10) {
             Text("\(index)")
                 .font(.system(size: 11, weight: .bold).monospacedDigit())
                 .foregroundColor(selected ? .white : .secondary)
@@ -2102,19 +2105,21 @@ private struct QuestionActionArea: View {
             FeedInlineTextField(
                 text: customAnswerBinding(questionId: questionId, multi: multi),
                 isFocused: customAnswerFocusBinding(focusKey),
+                measuredHeight: customAnswerHeightBinding(questionId: questionId, font: font),
                 placeholder: String(localized: "feed.question.typeSomething",
                                     defaultValue: "Type something..."),
                 isEnabled: status.isPending,
-                font: .systemFont(ofSize: 12, weight: .semibold),
+                font: font,
                 onFocus: {
                     selectCustomAnswer(questionId: questionId, multi: multi)
                 }
             )
-            .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: measuredHeight, maxHeight: measuredHeight, alignment: .leading)
             Spacer(minLength: 8)
             Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(selected ? Color(red: 0.24, green: 0.48, blue: 0.88) : .secondary.opacity(0.45))
+                .padding(.top, 3)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2191,18 +2196,21 @@ private struct QuestionActionArea: View {
     /// preset option selection for that question on submit.
     private func freeFormField(questionId: String, multi: Bool) -> some View {
         let focusKey = customAnswerFocusKey(questionId)
+        let font = NSFont.systemFont(ofSize: 11)
+        let measuredHeight = customAnswerHeight(questionId: questionId, font: font)
         return FeedInlineTextField(
             text: customAnswerBinding(questionId: questionId, multi: multi),
             isFocused: customAnswerFocusBinding(focusKey),
+            measuredHeight: customAnswerHeightBinding(questionId: questionId, font: font),
             placeholder: String(localized: "feed.question.typeSomething",
                                 defaultValue: "Type something..."),
             isEnabled: status.isPending,
-            font: .systemFont(ofSize: 11),
+            font: font,
             onFocus: {
                 selectCustomAnswer(questionId: questionId, multi: multi)
             }
         )
-        .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: measuredHeight, maxHeight: measuredHeight, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(
@@ -2251,6 +2259,22 @@ private struct QuestionActionArea: View {
                 }
             }
         )
+    }
+
+    private func customAnswerHeightBinding(questionId: String, font: NSFont) -> Binding<CGFloat> {
+        Binding<CGFloat>(
+            get: { customAnswerHeight(questionId: questionId, font: font) },
+            set: { value in
+                customAnswerHeights[questionId] = max(
+                    FeedInlineTextEditorView.minimumHeight(for: font),
+                    value
+                )
+            }
+        )
+    }
+
+    private func customAnswerHeight(questionId: String, font: NSFont) -> CGFloat {
+        customAnswerHeights[questionId] ?? FeedInlineTextEditorView.minimumHeight(for: font)
     }
 
     private func customAnswerFocusKey(_ questionId: String) -> String {
@@ -2398,37 +2422,27 @@ private struct QuestionActionArea: View {
     }
 }
 
-private final class FeedInlineNativeTextField: NSTextField {
+private final class FeedInlinePassthroughLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+private final class FeedInlineTextScrollView: NSScrollView {
+    weak var focusTextView: NSTextView?
+
+    override func mouseDown(with event: NSEvent) {
+        if let focusTextView {
+            _ = window?.makeFirstResponder(focusTextView)
+        }
+        super.mouseDown(with: event)
+    }
+}
+
+private final class FeedInlineNativeTextView: NSTextView {
     var onActivate: (() -> Void)?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        isBordered = false
-        isBezeled = false
-        drawsBackground = false
-        focusRingType = .none
-        usesSingleLineMode = true
-        lineBreakMode = .byTruncatingTail
-        isEditable = true
-        isSelectable = true
-        setContentHuggingPriority(.defaultLow, for: .horizontal)
-        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        cell?.wraps = false
-        cell?.isScrollable = true
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: 18)
-    }
 
     override func mouseDown(with event: NSEvent) {
         onActivate?()
         super.mouseDown(with: event)
-        configureFieldEditor()
     }
 
     override func resetCursorRects() {
@@ -2440,34 +2454,206 @@ private final class FeedInlineNativeTextField: NSTextField {
         let didBecomeFirstResponder = super.becomeFirstResponder()
         if didBecomeFirstResponder {
             onActivate?()
-            configureFieldEditor()
         }
         return didBecomeFirstResponder
     }
+}
 
-    func configureFieldEditor() {
-        guard let editor = currentEditor() as? NSTextView else { return }
-        editor.drawsBackground = false
-        editor.backgroundColor = .clear
-        editor.insertionPointColor = .controlAccentColor
-        editor.textColor = textColor
-        editor.font = font
+private final class FeedInlineTextEditorView: NSView {
+    private static let textInset = NSSize(width: 0, height: 1)
+
+    private let scrollView = FeedInlineTextScrollView(frame: .zero)
+    let textView = FeedInlineNativeTextView(frame: .zero)
+    private let placeholderField = FeedInlinePassthroughLabel(labelWithString: "")
+    var onMeasuredHeightChange: ((CGFloat) -> Void)?
+    private var lastReportedHeight: CGFloat?
+    private var currentFont = NSFont.systemFont(ofSize: 11)
+
+    static func minimumHeight(for font: NSFont) -> CGFloat {
+        ceil(font.ascender - font.descender + font.leading) + textInset.height * 2
+    }
+
+    var placeholder: String = "" {
+        didSet {
+            placeholderField.stringValue = placeholder
+            updatePlaceholderVisibility()
+        }
+    }
+
+    var isEnabled: Bool = true {
+        didSet {
+            textView.isEditable = isEnabled
+            textView.isSelectable = isEnabled
+            textView.textColor = isEnabled ? .labelColor : .disabledControlTextColor
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setContentHuggingPriority(.defaultLow, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.focusTextView = textView
+        addSubview(scrollView)
+
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.backgroundColor = .clear
+        textView.drawsBackground = false
+        textView.textContainerInset = Self.textInset
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.minSize = .zero
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        scrollView.documentView = textView
+
+        placeholderField.translatesAutoresizingMaskIntoConstraints = false
+        placeholderField.textColor = .placeholderTextColor
+        placeholderField.lineBreakMode = .byWordWrapping
+        placeholderField.maximumNumberOfLines = 0
+        addSubview(placeholderField)
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(textDidChange(_:)),
+            name: NSText.didChangeNotification,
+            object: textView
+        )
+
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            placeholderField.topAnchor.constraint(equalTo: topAnchor, constant: Self.textInset.height),
+            placeholderField.leadingAnchor.constraint(equalTo: leadingAnchor),
+            placeholderField.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+        ])
+
+        apply(font: currentFont, isEnabled: true)
+        updatePlaceholderVisibility()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: fittingHeight())
+    }
+
+    override func layout() {
+        super.layout()
+        updateTextViewLayout()
+        reportMeasuredHeightIfNeeded()
+    }
+
+    func apply(font: NSFont, isEnabled: Bool) {
+        currentFont = font
+        textView.font = font
+        textView.textColor = isEnabled ? .labelColor : .disabledControlTextColor
+        textView.insertionPointColor = .controlAccentColor
+        placeholderField.font = font
+        self.isEnabled = isEnabled
+        refreshMetrics()
+    }
+
+    func refreshMetrics() {
+        updatePlaceholderVisibility()
+        needsLayout = true
+        invalidateIntrinsicContentSize()
+        layoutSubtreeIfNeeded()
+        reportMeasuredHeightIfNeeded()
+    }
+
+    func focusIfNeeded() {
+        guard let window, window.firstResponder !== textView else { return }
+        window.makeFirstResponder(textView)
+        let length = (textView.string as NSString).length
+        textView.setSelectedRange(NSRange(location: length, length: 0))
+    }
+
+    private func naturalHeight(for width: CGFloat) -> CGFloat {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else {
+            return Self.minimumHeight(for: currentFont)
+        }
+        textContainer.containerSize = NSSize(
+            width: max(width, 1),
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        layoutManager.ensureLayout(for: textContainer)
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        let lineHeight = ceil(currentFont.ascender - currentFont.descender + currentFont.leading)
+        let contentHeight = max(lineHeight, ceil(usedRect.height))
+        return max(
+            Self.minimumHeight(for: currentFont),
+            ceil(contentHeight + Self.textInset.height * 2)
+        )
+    }
+
+    private func updateTextViewLayout() {
+        let availableWidth = max(scrollView.contentSize.width, bounds.width, 1)
+        let height = naturalHeight(for: availableWidth)
+        textView.frame = NSRect(x: 0, y: 0, width: availableWidth, height: height)
+    }
+
+    private func fittingHeight() -> CGFloat {
+        let availableWidth = max(scrollView.contentSize.width, bounds.width, 1)
+        return naturalHeight(for: availableWidth)
+    }
+
+    private func reportMeasuredHeightIfNeeded() {
+        let height = fittingHeight()
+        guard lastReportedHeight == nil || abs((lastReportedHeight ?? height) - height) > 0.5 else { return }
+        lastReportedHeight = height
+        onMeasuredHeightChange?(height)
+    }
+
+    @objc
+    private func textDidChange(_ notification: Notification) {
+        refreshMetrics()
+    }
+
+    private func updatePlaceholderVisibility() {
+        placeholderField.isHidden = !textView.string.isEmpty
     }
 }
 
 private struct FeedInlineTextField: NSViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
+    @Binding var measuredHeight: CGFloat
 
     let placeholder: String
     let isEnabled: Bool
     let font: NSFont
     let onFocus: () -> Void
 
-    final class Coordinator: NSObject, NSTextFieldDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: FeedInlineTextField
         var isProgrammaticMutation = false
-        weak var field: FeedInlineNativeTextField?
+        weak var view: FeedInlineTextEditorView?
         var pendingFocusRequest: Bool?
 
         init(parent: FeedInlineTextField) {
@@ -2481,24 +2667,30 @@ private struct FeedInlineTextField: NSViewRepresentable {
             }
         }
 
-        func controlTextDidBeginEditing(_ obj: Notification) {
-            guard let field = obj.object as? FeedInlineNativeTextField else { return }
-            field.configureFieldEditor()
+        func textDidBeginEditing(_ notification: Notification) {
             activateField()
         }
 
-        func controlTextDidChange(_ obj: Notification) {
+        func textDidChange(_ notification: Notification) {
             guard !isProgrammaticMutation else { return }
-            guard let field = obj.object as? NSTextField else { return }
-            parent.text = (field.currentEditor() as? NSTextView)?.string ?? field.stringValue
+            guard let textView = notification.object as? NSTextView else { return }
+            parent.text = textView.string
+            view?.refreshMetrics()
         }
 
-        func controlTextDidEndEditing(_ obj: Notification) {
-            if !isProgrammaticMutation, let field = obj.object as? NSTextField {
-                parent.text = (field.currentEditor() as? NSTextView)?.string ?? field.stringValue
+        func textDidEndEditing(_ notification: Notification) {
+            if !isProgrammaticMutation, let textView = notification.object as? NSTextView {
+                parent.text = textView.string
             }
             if parent.isFocused {
                 parent.isFocused = false
+            }
+        }
+
+        func handleMeasuredHeight(_ height: CGFloat) {
+            guard abs(parent.measuredHeight - height) > 0.5 else { return }
+            DispatchQueue.main.async {
+                self.parent.measuredHeight = height
             }
         }
     }
@@ -2507,88 +2699,71 @@ private struct FeedInlineTextField: NSViewRepresentable {
         Coordinator(parent: self)
     }
 
-    func makeNSView(context: Context) -> FeedInlineNativeTextField {
-        let field = FeedInlineNativeTextField(frame: .zero)
-        field.delegate = context.coordinator
-        field.stringValue = text
-        field.onActivate = { [weak coordinator = context.coordinator] in
+    func makeNSView(context: Context) -> FeedInlineTextEditorView {
+        let view = FeedInlineTextEditorView(frame: .zero)
+        view.textView.delegate = context.coordinator
+        view.textView.string = text
+        view.textView.onActivate = { [weak coordinator = context.coordinator] in
             coordinator?.activateField()
         }
-        configure(field)
-        context.coordinator.field = field
-        return field
+        view.onMeasuredHeightChange = { [weak coordinator = context.coordinator] height in
+            coordinator?.handleMeasuredHeight(height)
+        }
+        configure(view)
+        context.coordinator.view = view
+        return view
     }
 
-    func updateNSView(_ nsView: FeedInlineNativeTextField, context: Context) {
+    func updateNSView(_ nsView: FeedInlineTextEditorView, context: Context) {
         context.coordinator.parent = self
-        context.coordinator.field = nsView
-        nsView.onActivate = { [weak coordinator = context.coordinator] in
+        context.coordinator.view = nsView
+        nsView.textView.onActivate = { [weak coordinator = context.coordinator] in
             coordinator?.activateField()
+        }
+        nsView.onMeasuredHeightChange = { [weak coordinator = context.coordinator] height in
+            coordinator?.handleMeasuredHeight(height)
         }
         configure(nsView)
 
-        if let editor = nsView.currentEditor() as? NSTextView {
-            nsView.configureFieldEditor()
-            if editor.string != text, !editor.hasMarkedText() {
-                context.coordinator.isProgrammaticMutation = true
-                editor.string = text
-                nsView.stringValue = text
-                context.coordinator.isProgrammaticMutation = false
-            }
-        } else if nsView.stringValue != text {
-            nsView.stringValue = text
+        if nsView.textView.string != text, !nsView.textView.hasMarkedText() {
+            context.coordinator.isProgrammaticMutation = true
+            nsView.textView.string = text
+            context.coordinator.isProgrammaticMutation = false
+            nsView.refreshMetrics()
         }
 
         guard let window = nsView.window else { return }
         let firstResponder = window.firstResponder
-        let isFirstResponder = firstResponder === nsView ||
-            nsView.currentEditor() != nil ||
-            ((firstResponder as? NSTextView)?.delegate as? NSTextField) === nsView
+        let isFirstResponder = firstResponder === nsView.textView
 
         if isFocused, isEnabled, !isFirstResponder, context.coordinator.pendingFocusRequest != true {
             context.coordinator.pendingFocusRequest = true
             DispatchQueue.main.async { [weak nsView, weak coordinator = context.coordinator] in
                 coordinator?.pendingFocusRequest = nil
                 guard let coordinator, coordinator.parent.isFocused, coordinator.parent.isEnabled else { return }
-                guard let nsView, let window = nsView.window else { return }
-                let firstResponder = window.firstResponder
-                let alreadyFocused = firstResponder === nsView ||
-                    nsView.currentEditor() != nil ||
-                    ((firstResponder as? NSTextView)?.delegate as? NSTextField) === nsView
-                guard !alreadyFocused else { return }
-                window.makeFirstResponder(nsView)
-                nsView.configureFieldEditor()
+                nsView?.focusIfNeeded()
             }
         } else if (!isFocused || !isEnabled), isFirstResponder, context.coordinator.pendingFocusRequest != false {
             context.coordinator.pendingFocusRequest = false
             DispatchQueue.main.async { [weak nsView, weak coordinator = context.coordinator] in
                 coordinator?.pendingFocusRequest = nil
                 guard let nsView, let window = nsView.window else { return }
-                let firstResponder = window.firstResponder
-                let stillFocused = firstResponder === nsView ||
-                    ((firstResponder as? NSTextView)?.delegate as? NSTextField) === nsView
+                let stillFocused = window.firstResponder === nsView.textView
                 guard stillFocused else { return }
                 window.makeFirstResponder(nil)
             }
         }
     }
 
-    private func configure(_ field: FeedInlineNativeTextField) {
-        field.font = font
-        field.textColor = isEnabled ? .labelColor : .disabledControlTextColor
-        field.placeholderAttributedString = NSAttributedString(
-            string: placeholder,
-            attributes: [
-                .font: font,
-                .foregroundColor: NSColor.placeholderTextColor,
-            ]
-        )
-        field.isEnabled = isEnabled
-        field.isEditable = isEnabled
-        field.isSelectable = isEnabled
-        field.drawsBackground = false
-        field.backgroundColor = .clear
-        field.configureFieldEditor()
+    private func configure(_ view: FeedInlineTextEditorView) {
+        view.placeholder = placeholder
+        view.apply(font: font, isEnabled: isEnabled)
+    }
+
+    static func dismantleNSView(_ nsView: FeedInlineTextEditorView, coordinator: Coordinator) {
+        nsView.textView.delegate = nil
+        nsView.textView.onActivate = nil
+        nsView.onMeasuredHeightChange = nil
     }
 }
 
