@@ -2400,6 +2400,8 @@ private struct QuestionActionArea: View {
 }
 
 private final class FeedInlineNativeTextField: NSTextField {
+    var onActivate: (() -> Void)?
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         isBordered = false
@@ -2424,9 +2426,18 @@ private final class FeedInlineNativeTextField: NSTextField {
         NSSize(width: NSView.noIntrinsicMetric, height: 18)
     }
 
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        onActivate?()
+        configureFieldEditor()
+    }
+
     override func becomeFirstResponder() -> Bool {
         let didBecomeFirstResponder = super.becomeFirstResponder()
-        configureFieldEditor()
+        if didBecomeFirstResponder {
+            onActivate?()
+            configureFieldEditor()
+        }
         return didBecomeFirstResponder
     }
 
@@ -2459,15 +2470,17 @@ private struct FeedInlineTextField: NSViewRepresentable {
             self.parent = parent
         }
 
+        func activateField() {
+            parent.onFocus()
+            if !parent.isFocused {
+                parent.isFocused = true
+            }
+        }
+
         func controlTextDidBeginEditing(_ obj: Notification) {
             guard let field = obj.object as? FeedInlineNativeTextField else { return }
             field.configureFieldEditor()
-            parent.onFocus()
-            if !parent.isFocused {
-                DispatchQueue.main.async {
-                    self.parent.isFocused = true
-                }
-            }
+            activateField()
         }
 
         func controlTextDidChange(_ obj: Notification) {
@@ -2478,9 +2491,7 @@ private struct FeedInlineTextField: NSViewRepresentable {
 
         func controlTextDidEndEditing(_ obj: Notification) {
             if parent.isFocused {
-                DispatchQueue.main.async {
-                    self.parent.isFocused = false
-                }
+                parent.isFocused = false
             }
         }
     }
@@ -2493,6 +2504,9 @@ private struct FeedInlineTextField: NSViewRepresentable {
         let field = FeedInlineNativeTextField(frame: .zero)
         field.delegate = context.coordinator
         field.stringValue = text
+        field.onActivate = { [weak coordinator = context.coordinator] in
+            coordinator?.activateField()
+        }
         configure(field)
         context.coordinator.field = field
         return field
@@ -2501,6 +2515,9 @@ private struct FeedInlineTextField: NSViewRepresentable {
     func updateNSView(_ nsView: FeedInlineNativeTextField, context: Context) {
         context.coordinator.parent = self
         context.coordinator.field = nsView
+        nsView.onActivate = { [weak coordinator = context.coordinator] in
+            coordinator?.activateField()
+        }
         configure(nsView)
 
         if let editor = nsView.currentEditor() as? NSTextView {
