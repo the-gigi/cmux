@@ -2128,22 +2128,18 @@ private struct QuestionActionArea: View {
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(selected ? Color(red: 0.24, green: 0.48, blue: 0.88) : Color.primary.opacity(0.08))
                 )
-            FeedInlineTextField(
+            customAnswerField(
                 text: customAnswerBinding(questionId: questionId, multi: multi),
                 isFocused: customAnswerFocusBinding(focusKey),
-                placeholder: String(localized: "feed.question.typeSomething",
-                                    defaultValue: "Type something..."),
-                isEnabled: status.isPending,
                 font: font,
                 onFocus: {
                     selectCustomAnswer(questionId: questionId, multi: multi)
                 }
             )
-            .frame(maxWidth: .infinity, minHeight: FeedInlineTextEditorView.minimumHeight(for: font), alignment: .leading)
-            Spacer(minLength: 8)
             Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(selected ? Color(red: 0.24, green: 0.48, blue: 0.88) : .secondary.opacity(0.45))
+                .padding(.leading, 8)
                 .padding(.top, 3)
         }
         .padding(10)
@@ -2222,18 +2218,14 @@ private struct QuestionActionArea: View {
     private func freeFormField(questionId: String, multi: Bool) -> some View {
         let focusKey = customAnswerFocusKey(questionId)
         let font = NSFont.systemFont(ofSize: 11)
-        return FeedInlineTextField(
+        return customAnswerField(
             text: customAnswerBinding(questionId: questionId, multi: multi),
             isFocused: customAnswerFocusBinding(focusKey),
-            placeholder: String(localized: "feed.question.typeSomething",
-                                defaultValue: "Type something..."),
-            isEnabled: status.isPending,
             font: font,
             onFocus: {
                 selectCustomAnswer(questionId: questionId, multi: multi)
             }
         )
-        .frame(maxWidth: .infinity, minHeight: FeedInlineTextEditorView.minimumHeight(for: font), alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(
@@ -2251,6 +2243,29 @@ private struct QuestionActionArea: View {
             selectCustomAnswer(questionId: questionId, multi: multi)
             focusedCustomAnswerId = focusKey
         }
+    }
+
+    private func customAnswerField(
+        text: Binding<String>,
+        isFocused: Binding<Bool>,
+        font: NSFont,
+        onFocus: @escaping () -> Void
+    ) -> some View {
+        FeedInlineTextField(
+            text: text,
+            isFocused: isFocused,
+            placeholder: String(localized: "feed.question.typeSomething",
+                                defaultValue: "Type something..."),
+            isEnabled: status.isPending,
+            font: font,
+            onFocus: onFocus
+        )
+        .frame(
+            maxWidth: .infinity,
+            minHeight: FeedInlineTextEditorView.minimumHeight(for: font),
+            alignment: .leading
+        )
+        .layoutPriority(1)
     }
 
     private func customAnswerBinding(questionId: String, multi: Bool) -> Binding<String> {
@@ -2593,6 +2608,9 @@ private final class FeedInlineTextEditorView: NSView {
     }
 
     private func fittingHeight() -> CGFloat {
+        guard bounds.width > 1 else {
+            return Self.minimumHeight(for: currentFont)
+        }
         let availableWidth = max(bounds.width, 1)
         return fittingHeight(for: availableWidth)
     }
