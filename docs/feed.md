@@ -90,6 +90,8 @@ Agents without a binary on `PATH` are skipped at install time — `cmux setup-ho
 | Bypass | Allow and request session-level bypass mode when the agent supports it.        |
 | Deny   | Deny through the agent's native permission hook.                               |
 
+For Claude Code, the cmux wrapper launches Claude with `--allow-dangerously-skip-permissions`. This does not enable bypass by default, but it lets a later `PermissionRequest` response switch the current session into `bypassPermissions`. Without that launch flag, Claude ignores `setMode: bypassPermissions`.
+
 **Plan-mode decisions**
 
 | Mode              | Behavior                                                  |

@@ -216,6 +216,11 @@ def test_live_socket_injects_supported_hooks(failures: list[str]) -> None:
     expect(code == 0, f"live socket: wrapper exited {code}: {stderr}", failures)
     expect("--settings" in real_argv, f"live socket: missing --settings in args: {real_argv}", failures)
     expect("--session-id" in real_argv, f"live socket: missing --session-id in args: {real_argv}", failures)
+    expect(
+        "--allow-dangerously-skip-permissions" in real_argv,
+        f"live socket: missing bypass availability flag in args: {real_argv}",
+        failures,
+    )
     expect(real_argv[-1] == "hello", f"live socket: expected original arg to pass through, got {real_argv}", failures)
     expect(any(" ping" in line for line in cmux_log), f"live socket: expected cmux ping, got {cmux_log}", failures)
     expect(
@@ -241,7 +246,7 @@ def test_live_socket_injects_supported_hooks(failures: list[str]) -> None:
 
     settings = parse_settings_arg(real_argv)
     hooks = settings.get("hooks", {})
-    expected_hooks = {"SessionStart", "Stop", "SessionEnd", "Notification", "UserPromptSubmit", "PreToolUse"}
+    expected_hooks = {"SessionStart", "Stop", "SessionEnd", "Notification", "UserPromptSubmit", "PreToolUse", "PermissionRequest"}
     expect(set(hooks.keys()) == expected_hooks, f"unexpected hook keys: {hooks.keys()}, expected {expected_hooks}", failures)
     for hook_name, expected_subcommand in {
         "SessionStart": "session-start",
@@ -262,6 +267,12 @@ def test_live_socket_injects_supported_hooks(failures: list[str]) -> None:
     expect(
         any(h.get("async") is True for h in pre_tool_use_hooks),
         f"PreToolUse hook should have async:true, got {pre_tool_use_hooks}",
+        failures,
+    )
+    permission_request_hooks = hooks.get("PermissionRequest", [{}])[0].get("hooks", [{}])
+    expect(
+        any(h.get("command") == '"${CMUX_CLAUDE_HOOK_CMUX_BIN:-cmux}" feed-hook --source claude' for h in permission_request_hooks),
+        f"PermissionRequest hook should call feed-hook, got {permission_request_hooks}",
         failures,
     )
     # SessionEnd should have a short timeout (session is exiting)
@@ -316,6 +327,16 @@ def test_live_socket_tmpdir_failure_skips_node_options_injection(failures: list[
     expect(child_node_options == "__UNSET__", f"tmpdir failure: expected child NODE_OPTIONS passthrough, got {child_node_options!r}", failures)
 
 
+def test_live_socket_does_not_duplicate_bypass_availability_flag(failures: list[str]) -> None:
+    code, real_argv, _, stderr, _, _, _, _, _ = run_wrapper(
+        socket_state="live",
+        argv=["--allow-dangerously-skip-permissions", "hello"],
+    )
+    expect(code == 0, f"bypass flag dedupe: wrapper exited {code}: {stderr}", failures)
+    count = real_argv.count("--allow-dangerously-skip-permissions")
+    expect(count == 1, f"bypass flag dedupe: expected one allow flag, got {count} in {real_argv}", failures)
+
+
 def test_missing_socket_skips_hook_injection(failures: list[str]) -> None:
     code, real_argv, cmux_log, stderr, claudecode, node_options, runtime_node_options, child_node_options, hook_cmux_bin = run_wrapper(
         socket_state="missing",
@@ -356,6 +377,7 @@ def main() -> int:
     test_live_socket_injects_supported_hooks(failures)
     test_live_socket_enforces_heap_cap_for_space_separated_flag(failures)
     test_live_socket_tmpdir_failure_skips_node_options_injection(failures)
+    test_live_socket_does_not_duplicate_bypass_availability_flag(failures)
     test_missing_socket_skips_hook_injection(failures)
     test_stale_socket_skips_hook_injection(failures)
 
