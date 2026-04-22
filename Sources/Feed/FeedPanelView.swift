@@ -2028,6 +2028,7 @@ private struct QuestionActionArea: View {
         let selected = selections[questionId]?.contains(option.id) == true
         return Button {
             guard status.isPending else { return }
+            clearCustomAnswerFocus()
             var current = selections[questionId] ?? []
             if multi {
                 if current.contains(option.id) {
@@ -2272,6 +2273,10 @@ private struct QuestionActionArea: View {
         selections[questionId] = current
     }
 
+    private func clearCustomAnswerFocus() {
+        focusedCustomAnswerId = nil
+    }
+
     private func optionPill(
         questionId: String,
         option: WorkstreamQuestionOption,
@@ -2290,6 +2295,7 @@ private struct QuestionActionArea: View {
             dimmed: !status.isPending
         ) {
             guard status.isPending else { return }
+            clearCustomAnswerFocus()
             var current = selections[questionId] ?? []
             if multi {
                 if current.contains(option.id) { current.remove(option.id) }
@@ -2427,8 +2433,8 @@ private final class FeedInlineNativeTextField: NSTextField {
     }
 
     override func mouseDown(with event: NSEvent) {
-        super.mouseDown(with: event)
         onActivate?()
+        super.mouseDown(with: event)
         configureFieldEditor()
     }
 
