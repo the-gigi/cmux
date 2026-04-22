@@ -92188,6 +92188,13 @@
         "ja": { "stringUnit": { "state": "translated", "value": "標準Glass" } }
       }
     },
+    "feed.buttonDebug.style.standardTintedGlass": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Standard Tinted Glass" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "標準Tint Glass" } }
+      }
+    },
     "feed.buttonDebug.style.nativeGlass": {
       "extractionState": "manual",
       "localizations": {
@@ -92305,6 +92312,13 @@
       "localizations": {
         "en": { "stringUnit": { "state": "translated", "value": "Standard Liquid Glass" } },
         "ja": { "stringUnit": { "state": "translated", "value": "標準Liquid Glass" } }
+      }
+    },
+    "feed.buttonDebug.preset.tintedLiquidGlass": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Tinted Liquid Glass" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "Tint付きLiquid Glass" } }
       }
     },
     "feed.buttonDebug.preset.nativeGlass": {
