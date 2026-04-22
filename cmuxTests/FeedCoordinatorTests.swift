@@ -9,8 +9,8 @@ import CMUXWorkstream
 
 final class FeedCoordinatorTests: XCTestCase {
     func testBlockingIngestExpiresItemWhenHookTimesOut() async {
-        let store = WorkstreamStore(ringCapacity: 10)
         await MainActor.run {
+            let store = WorkstreamStore(ringCapacity: 10)
             FeedCoordinator.shared.install(store: store)
         }
 
@@ -25,36 +25,33 @@ final class FeedCoordinatorTests: XCTestCase {
         )
 
         let done = DispatchSemaphore(value: 0)
-        let lock = NSLock()
-        var result: FeedCoordinator.IngestBlockingResult?
+        let resultBox = IngestResultBox()
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let ingestResult = FeedCoordinator.shared.ingestBlocking(
+            resultBox.value = FeedCoordinator.shared.ingestBlocking(
                 event: event,
                 waitTimeout: 0.05
             )
-            lock.lock()
-            result = ingestResult
-            lock.unlock()
             done.signal()
         }
 
         XCTAssertEqual(done.wait(timeout: .now() + 2), .success)
-        lock.lock()
-        let captured = result
-        lock.unlock()
 
-        guard case .timedOut = captured else {
+        guard case .timedOut = resultBox.value else {
             XCTFail("expected feed.push to time out")
             return
         }
 
         let status = await MainActor.run {
-            store.items.first?.status
+            FeedCoordinator.shared.store.items.first?.status
         }
         guard case .expired = status else {
             XCTFail("timed-out hook item should be expired")
             return
         }
     }
+}
+
+private final class IngestResultBox: @unchecked Sendable {
+    var value: FeedCoordinator.IngestBlockingResult?
 }
