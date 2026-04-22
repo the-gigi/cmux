@@ -607,6 +607,7 @@ struct FeedItemRow: View {
         case .exitPlan(_, let plan, _):
             ExitPlanActionArea(
                 plan: plan,
+                source: snapshot.source,
                 status: snapshot.status,
                 onApprove: { mode, feedback in
                     actions.approveExitPlan(snapshot.id, mode, feedback)
@@ -725,7 +726,8 @@ private struct FeedContextBlock: View {
                     label: agentLabel,
                     text: preamble,
                     labelColor: .secondary,
-                    textColor: .secondary
+                    textColor: .secondary,
+                    rendersMarkdown: source == .claude
                 )
             }
             if let plan = context.planSummary {
@@ -733,7 +735,8 @@ private struct FeedContextBlock: View {
                     label: String(localized: "feed.context.plan", defaultValue: "Plan:"),
                     text: plan,
                     labelColor: Color.purple.opacity(0.85),
-                    textColor: .secondary
+                    textColor: .secondary,
+                    rendersMarkdown: source == .claude
                 )
             }
         }
@@ -750,6 +753,7 @@ private struct FeedLabeledTextRow: View {
     let text: String
     let labelColor: Color
     let textColor: Color
+    var rendersMarkdown: Bool = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -757,10 +761,18 @@ private struct FeedLabeledTextRow: View {
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(labelColor)
                 .frame(width: 48, alignment: .leading)
-            Text(text)
-                .font(.system(size: 11))
-                .foregroundColor(textColor)
-                .fixedSize(horizontal: false, vertical: true)
+            if rendersMarkdown {
+                FeedMarkdownInlineText(
+                    text: text,
+                    fontSize: 11,
+                    foregroundColor: textColor
+                )
+            } else {
+                Text(text)
+                    .font(.system(size: 11))
+                    .foregroundColor(textColor)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
@@ -1511,6 +1523,7 @@ struct FeedButton: View {
 
 private struct ExitPlanActionArea: View {
     let plan: String
+    let source: WorkstreamSource
     let status: WorkstreamStatus
     let onApprove: (WorkstreamExitPlanMode, String?) -> Void
 
@@ -1526,7 +1539,10 @@ private struct ExitPlanActionArea: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            PlanBodyView(plan: preview.planText)
+            PlanBodyView(
+                plan: preview.planText,
+                rendersMarkdown: source == .claude
+            )
             if !preview.allowedPrompts.isEmpty {
                 ExitPlanAllowedPromptsView(prompts: preview.allowedPrompts)
             }
@@ -1682,27 +1698,61 @@ private struct ExitPlanPlanFileView: View {
     }
 }
 
-/// Renders plan text as a stack of small structured sections. Looks for
-/// lines formatted like `**Context**` / `# Approach` / `- item` and
-/// renders them with matching emphasis. Everything else renders as
-/// prose so we never drop content.
+private struct FeedMarkdownInlineText: View {
+    let text: String
+    let fontSize: CGFloat
+    let weight: Font.Weight?
+    let foregroundColor: Color
+
+    init(
+        text: String,
+        fontSize: CGFloat,
+        weight: Font.Weight? = nil,
+        foregroundColor: Color
+    ) {
+        self.text = text
+        self.fontSize = fontSize
+        self.weight = weight
+        self.foregroundColor = foregroundColor
+    }
+
+    var body: some View {
+        let parsed = (try? AttributedString(
+            markdown: text,
+            options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace
+            )
+        )) ?? AttributedString(text)
+        let font = weight.map { Font.system(size: fontSize, weight: $0) }
+            ?? Font.system(size: fontSize)
+        Text(parsed)
+            .font(font)
+            .foregroundColor(foregroundColor)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Renders plan text as a stack of small structured sections. Block
+/// headings, lists, and paragraphs keep the Feed's compact rhythm, while
+/// Claude markdown inside each line gets parsed tastefully. Heading text
+/// intentionally stays at body scale.
 private struct PlanBodyView: View {
     let plan: String
+    let rendersMarkdown: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .heading(let text):
-                    Text(text)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.primary.opacity(0.95))
+                    markdownText(
+                        text,
+                        weight: .semibold,
+                        color: .primary.opacity(0.95)
+                    )
                         .padding(.top, 2)
                 case .paragraph(let text):
-                    Text(text)
-                        .font(.system(size: 11))
-                        .foregroundColor(.primary.opacity(0.85))
-                        .fixedSize(horizontal: false, vertical: true)
+                    markdownText(text, color: .primary.opacity(0.85))
                 case .numbered(let items):
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
@@ -1710,10 +1760,7 @@ private struct PlanBodyView: View {
                                 Text("\(item.index).")
                                     .font(.system(size: 11, weight: .medium).monospacedDigit())
                                     .foregroundColor(.secondary)
-                                Text(item.text)
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.primary.opacity(0.85))
-                                    .fixedSize(horizontal: false, vertical: true)
+                                markdownText(item.text, color: .primary.opacity(0.85))
                             }
                         }
                     }
@@ -1724,15 +1771,33 @@ private struct PlanBodyView: View {
                                 Text("·")
                                     .font(.system(size: 11, weight: .medium))
                                     .foregroundColor(Color.blue.opacity(0.8))
-                                Text(item)
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.primary.opacity(0.85))
-                                    .fixedSize(horizontal: false, vertical: true)
+                                markdownText(item, color: .primary.opacity(0.85))
                             }
                         }
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func markdownText(
+        _ text: String,
+        weight: Font.Weight? = nil,
+        color: Color
+    ) -> some View {
+        if rendersMarkdown {
+            FeedMarkdownInlineText(
+                text: text,
+                fontSize: 11,
+                weight: weight,
+                foregroundColor: color
+            )
+        } else {
+            Text(text)
+                .font(.system(size: 11, weight: weight ?? .regular))
+                .foregroundColor(color)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -1784,14 +1849,9 @@ private struct PlanBodyView: View {
                 out.append(.heading(String(line.dropFirst(2).dropLast(2))))
                 continue
             }
-            if line.hasPrefix("## ") {
+            if let heading = markdownHeadingText(line) {
                 flushParagraph(); flushNumbered(); flushBulleted()
-                out.append(.heading(String(line.dropFirst(3))))
-                continue
-            }
-            if line.hasPrefix("# ") {
-                flushParagraph(); flushNumbered(); flushBulleted()
-                out.append(.heading(String(line.dropFirst(2))))
+                out.append(.heading(heading))
                 continue
             }
             if line.hasSuffix(":") && line.count <= 40
@@ -1829,6 +1889,16 @@ private struct PlanBodyView: View {
         }
         flushParagraph(); flushNumbered(); flushBulleted()
         return out
+    }
+
+    private func markdownHeadingText(_ line: String) -> String? {
+        guard line.hasPrefix("#") else { return nil }
+        let hashCount = line.prefix(while: { $0 == "#" }).count
+        guard (1...6).contains(hashCount),
+              line.count > hashCount,
+              line[line.index(line.startIndex, offsetBy: hashCount)] == " "
+        else { return nil }
+        return String(line.dropFirst(hashCount + 1))
     }
 }
 
@@ -2412,6 +2482,15 @@ private struct TelemetryActionArea: View {
     var body: some View {
         if case .todos(let todos) = snapshot.payload {
             TodoListBody(todos: todos)
+        } else if case .assistantMessage(let text) = snapshot.payload,
+                  snapshot.source == .claude {
+            FeedMarkdownInlineText(
+                text: text,
+                fontSize: 11,
+                foregroundColor: .secondary.opacity(0.85)
+            )
+            .lineLimit(3)
+            .truncationMode(.tail)
         } else if !summary.isEmpty {
             Text(summary)
                 .font(.system(size: 11, design: .monospaced))
