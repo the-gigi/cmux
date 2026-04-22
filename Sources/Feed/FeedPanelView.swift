@@ -2714,8 +2714,7 @@ private struct FeedInlineTextField: NSViewRepresentable {
         nsView: FeedInlineTextEditorView,
         context: Context
     ) -> CGSize? {
-        guard let width = proposal.width else { return nil }
-        return CGSize(width: width, height: nsView.fittingHeight(for: width))
+        nil
     }
 
     static func dismantleNSView(_ nsView: FeedInlineTextEditorView, coordinator: Coordinator) {
