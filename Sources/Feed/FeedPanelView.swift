@@ -1528,6 +1528,7 @@ private struct ExitPlanActionArea: View {
     let onApprove: (WorkstreamExitPlanMode, String?) -> Void
 
     @State private var feedback: String = ""
+    @FocusState private var feedbackFocused: Bool
 
     private var trimmedFeedback: String {
         feedback.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1560,15 +1561,20 @@ private struct ExitPlanActionArea: View {
                 )
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
+                .tint(Color.primary.opacity(0.75))
+                .focused($feedbackFocused)
                 .lineLimit(2...5)
                 .padding(10)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.primary.opacity(0.06))
+                        .fill(Color.primary.opacity(feedbackFocused ? 0.075 : 0.06))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(Color.primary.opacity(hasFeedback ? 0.25 : 0.10), lineWidth: 1)
+                        .stroke(
+                            Color.primary.opacity(feedbackFocused ? 0.20 : (hasFeedback ? 0.25 : 0.10)),
+                            lineWidth: 1
+                        )
                 )
                 HStack(spacing: 6) {
                     FeedButton(
@@ -1767,10 +1773,12 @@ private struct PlanBodyView: View {
                 case .bulleted(let items):
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                            HStack(alignment: .top, spacing: 5) {
-                                Text("·")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(Color.blue.opacity(0.8))
+                            HStack(alignment: .top, spacing: 8) {
+                                Circle()
+                                    .fill(Color.blue.opacity(0.85))
+                                    .frame(width: 3.5, height: 3.5)
+                                    .padding(.top, 5.5)
+                                    .frame(width: 10, alignment: .center)
                                 markdownText(item, color: .primary.opacity(0.85))
                             }
                         }
