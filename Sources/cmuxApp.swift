@@ -505,6 +505,14 @@ struct cmuxApp: App {
                     Button("Feed Preview…") {
                         FeedPreviewWindowController.shared.show()
                     }
+                    Button(
+                        String(
+                            localized: "debug.menu.feedButtonStyleDebug",
+                            defaultValue: "Feed Button Style Debug…"
+                        )
+                    ) {
+                        FeedButtonStyleDebugWindowController.shared.show()
+                    }
                     Button("Menu Bar Extra Debug…") {
                         MenuBarExtraDebugWindowController.shared.show()
                     }
@@ -1164,6 +1172,7 @@ struct cmuxApp: App {
         BackgroundDebugWindowController.shared.show()
         MenuBarExtraDebugWindowController.shared.show()
         FeedPreviewWindowController.shared.show()
+        FeedButtonStyleDebugWindowController.shared.show()
     }
 }
 

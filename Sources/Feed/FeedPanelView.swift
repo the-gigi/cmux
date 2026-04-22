@@ -147,15 +147,13 @@ private struct FeedListView: View {
         if visible.isEmpty {
             emptyState
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    // Single chronological stream — resolved cards stay
-                    // where they are instead of jumping to a "Resolved"
-                    // section. Each card's own header already says
-                    // Submitted / Resolved, so position doesn't need to
-                    // double-encode the state. Rows are separated by a
-                    // thin 1-px divider (matches Sessions panel).
-                    ForEach(Array(visible.enumerated()), id: \.element.id) { idx, item in
+            List {
+                // Single chronological stream. The plain List keeps the
+                // custom row surface while giving Feed real row
+                // virtualization instead of retaining every card view in
+                // a long ScrollView stack.
+                ForEach(Array(visible.enumerated()), id: \.element.id) { idx, item in
+                    VStack(spacing: 0) {
                         FeedItemRow(
                             snapshot: FeedItemSnapshot(
                                 item: item,
@@ -170,9 +168,14 @@ private struct FeedListView: View {
                                 .frame(height: 1)
                         }
                     }
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                 }
-                .padding(.vertical, 4)
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 0)
         }
     }
 
@@ -865,7 +868,7 @@ private struct PermissionInputPreview {
 /// Replaces the old PermissionCTAButton / PlanCTAButton /
 /// FeedPillButton trio so styling is defined in exactly one place.
 struct FeedButton: View {
-    enum Kind {
+    enum Kind: String {
         /// Transparent pill that lights up on hover/selection. Used
         /// for filter bar pills and single-select option pills.
         case ghost
@@ -901,6 +904,9 @@ struct FeedButton: View {
     let action: () -> Void
 
     @State private var isHovered: Bool = false
+#if DEBUG
+    @AppStorage(FeedButtonDebugSettings.generationKey) private var debugStyleGeneration = 0
+#endif
 
     var body: some View {
         Button {
@@ -926,10 +932,8 @@ struct FeedButton: View {
             .frame(maxWidth: fullWidth ? .infinity : nil)
             .padding(.horizontal, horizontalPadding)
             .padding(.vertical, verticalPadding)
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(backgroundFill)
-            )
+            .background(buttonBackground)
+            .overlay(buttonBorder)
             .opacity(dimmed ? 0.55 : 1.0)
             .contentShape(Rectangle())
         }
@@ -954,11 +958,44 @@ struct FeedButton: View {
     private var labelSize: CGFloat { size == .compact ? 10.5 : 11 }
     private var iconSize: CGFloat { size == .compact ? 9 : 10 }
     private var iconSpacing: CGFloat { size == .compact ? 3 : 5 }
-    private var cornerRadius: CGFloat { size == .compact ? 5 : 6 }
-    private var horizontalPadding: CGFloat { size == .compact ? 8 : 12 }
-    private var verticalPadding: CGFloat { size == .compact ? 4 : 5 }
+    private var cornerRadius: CGFloat {
+#if DEBUG
+        _ = debugStyleGeneration
+        return size == .compact
+            ? CGFloat(FeedButtonDebugSettings.compactCornerRadius)
+            : CGFloat(FeedButtonDebugSettings.mediumCornerRadius)
+#else
+        return size == .compact ? 5 : 6
+#endif
+    }
+    private var horizontalPadding: CGFloat {
+#if DEBUG
+        _ = debugStyleGeneration
+        return size == .compact
+            ? CGFloat(FeedButtonDebugSettings.compactHorizontalPadding)
+            : CGFloat(FeedButtonDebugSettings.mediumHorizontalPadding)
+#else
+        return size == .compact ? 8 : 12
+#endif
+    }
+    private var verticalPadding: CGFloat {
+#if DEBUG
+        _ = debugStyleGeneration
+        return size == .compact
+            ? CGFloat(FeedButtonDebugSettings.compactVerticalPadding)
+            : CGFloat(FeedButtonDebugSettings.mediumVerticalPadding)
+#else
+        return size == .compact ? 4 : 5
+#endif
+    }
 
     private var foreground: Color {
+#if DEBUG
+        _ = debugStyleGeneration
+        if let color = FeedButtonDebugSettings.color(for: kind, role: .foreground) {
+            return color
+        }
+#endif
         switch kind {
         case .ghost:
             return isSelected ? .primary : .primary.opacity(0.85)
@@ -973,6 +1010,15 @@ struct FeedButton: View {
     }
 
     private var backgroundFill: Color {
+#if DEBUG
+        _ = debugStyleGeneration
+        if let color = FeedButtonDebugSettings.color(
+            for: kind,
+            role: isHovered ? .hoverBackground : .background
+        ) {
+            return color
+        }
+#endif
         switch kind {
         case .ghost:
             if isSelected { return Color.primary.opacity(0.12) }
@@ -1001,6 +1047,54 @@ struct FeedButton: View {
                 ? Color(red: 0.85, green: 0.28, blue: 0.28)
                 : Color(red: 0.75, green: 0.22, blue: 0.22)
         }
+    }
+
+    @ViewBuilder
+    private var buttonBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+#if DEBUG
+        let generation = debugStyleGeneration
+        switch generation >= 0 ? FeedButtonDebugSettings.visualStyle : .solid {
+        case .solid:
+            shape.fill(backgroundFill)
+        case .glass:
+            shape
+                .fill(.thinMaterial)
+                .overlay(
+                    shape.fill(
+                        backgroundFill.opacity(
+                            FeedButtonDebugSettings.glassTintOpacity
+                        )
+                    )
+                )
+        case .outline:
+            shape.fill(isHovered || isSelected ? backgroundFill.opacity(0.14) : Color.clear)
+        case .flat:
+            shape.fill(isHovered || isSelected ? backgroundFill.opacity(0.12) : Color.clear)
+        }
+#else
+        shape.fill(backgroundFill)
+#endif
+    }
+
+    @ViewBuilder
+    private var buttonBorder: some View {
+#if DEBUG
+        let generation = debugStyleGeneration
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        switch generation >= 0 ? FeedButtonDebugSettings.visualStyle : .solid {
+        case .solid:
+            EmptyView()
+        case .glass:
+            shape.stroke(Color.white.opacity(0.16), lineWidth: 0.75)
+        case .outline:
+            shape.stroke(backgroundFill.opacity(0.75), lineWidth: FeedButtonDebugSettings.borderWidth)
+        case .flat:
+            EmptyView()
+        }
+#else
+        EmptyView()
+#endif
     }
 }
 

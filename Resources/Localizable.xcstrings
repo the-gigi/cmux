@@ -92055,6 +92055,237 @@
         "ja": { "stringUnit": { "state": "translated", "value": "返信" } }
       }
     },
+    "debug.menu.feedButtonStyleDebug": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Feed Button Style Debug…" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "フィードボタンスタイルのデバッグ…" } }
+      }
+    },
+    "feed.buttonDebug.windowTitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Feed Button Style" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "フィードボタンスタイル" } }
+      }
+    },
+    "feed.buttonDebug.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Feed Buttons" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "フィードボタン" } }
+      }
+    },
+    "feed.buttonDebug.subtitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Tune every Feed button kind live." } },
+        "ja": { "stringUnit": { "state": "translated", "value": "すべてのフィードボタン種別をライブ調整します。" } }
+      }
+    },
+    "feed.buttonDebug.reset": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Reset" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "リセット" } }
+      }
+    },
+    "feed.buttonDebug.style": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Style" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "スタイル" } }
+      }
+    },
+    "feed.buttonDebug.style.solid": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Solid" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ソリッド" } }
+      }
+    },
+    "feed.buttonDebug.style.glass": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Raycast Glass" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "Raycast Glass" } }
+      }
+    },
+    "feed.buttonDebug.style.outline": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Outline" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "アウトライン" } }
+      }
+    },
+    "feed.buttonDebug.style.flat": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Flat" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "フラット" } }
+      }
+    },
+    "feed.buttonDebug.applyRaycastGlass": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Apply Raycast Glass" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "Raycast Glassを適用" } }
+      }
+    },
+    "feed.buttonDebug.compactRadius": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Compact radius" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "コンパクト半径" } }
+      }
+    },
+    "feed.buttonDebug.mediumRadius": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Medium radius" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "中サイズ半径" } }
+      }
+    },
+    "feed.buttonDebug.horizontalPadding": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Medium horizontal padding" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "中サイズ横余白" } }
+      }
+    },
+    "feed.buttonDebug.compactHorizontalPadding": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Compact horizontal padding" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "コンパクト横余白" } }
+      }
+    },
+    "feed.buttonDebug.compactVerticalPadding": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Compact vertical padding" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "コンパクト縦余白" } }
+      }
+    },
+    "feed.buttonDebug.mediumVerticalPadding": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Medium vertical padding" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "中サイズ縦余白" } }
+      }
+    },
+    "feed.buttonDebug.glassTint": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Glass tint" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ガラスの色合い" } }
+      }
+    },
+    "feed.buttonDebug.borderWidth": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Border" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "境界線" } }
+      }
+    },
+    "feed.buttonDebug.kind": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Button Kind" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ボタン種別" } }
+      }
+    },
+    "feed.buttonDebug.colors": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Colors" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "色" } }
+      }
+    },
+    "feed.buttonDebug.background": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Background" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "背景" } }
+      }
+    },
+    "feed.buttonDebug.hover": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Hover" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ホバー" } }
+      }
+    },
+    "feed.buttonDebug.foreground": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Foreground" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "前景" } }
+      }
+    },
+    "feed.buttonDebug.preview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Preview" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "プレビュー" } }
+      }
+    },
+    "feed.buttonDebug.kind.ghost": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Ghost" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ゴースト" } }
+      }
+    },
+    "feed.buttonDebug.kind.soft": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Soft" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ソフト" } }
+      }
+    },
+    "feed.buttonDebug.kind.dark": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Dark" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ダーク" } }
+      }
+    },
+    "feed.buttonDebug.kind.light": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Light" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ライト" } }
+      }
+    },
+    "feed.buttonDebug.kind.primary": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Primary" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "プライマリ" } }
+      }
+    },
+    "feed.buttonDebug.kind.success": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Success" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "成功" } }
+      }
+    },
+    "feed.buttonDebug.kind.warning": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Warning" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "警告" } }
+      }
+    },
+    "feed.buttonDebug.kind.destructive": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Destructive" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "破壊的" } }
+      }
+    },
     "rightSidebar.mode.pendingHelp": {
       "extractionState": "manual",
       "localizations": {
