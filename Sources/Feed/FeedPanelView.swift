@@ -187,18 +187,21 @@ private struct FeedListView: View {
                         }
                     }
                     .onHover { hovering in
-                        if hovering {
-                            hoveredItemId = item.id
-                        } else if hoveredItemId == item.id {
-                            hoveredItemId = nil
+                        withAnimation(.easeOut(duration: 0.14)) {
+                            if hovering {
+                                hoveredItemId = item.id
+                            } else if hoveredItemId == item.id {
+                                hoveredItemId = nil
+                            }
                         }
                     }
-                    .animation(.easeOut(duration: 0.12), value: isHovered)
                     .listRowInsets(EdgeInsets())
                     .listRowSeparator(.hidden)
                     .listRowBackground(
                         Rectangle()
-                            .fill(rowHoverFill(for: snapshot, isHovered: isHovered))
+                            .fill(rowHoverFill(for: snapshot))
+                            .opacity(isHovered ? 1 : 0)
+                            .animation(.easeOut(duration: 0.14), value: isHovered)
                     )
                 }
             }
@@ -250,8 +253,7 @@ private struct FeedListView: View {
         return base.sorted { $0.createdAt > $1.createdAt }
     }
 
-    private func rowHoverFill(for snapshot: FeedItemSnapshot, isHovered: Bool) -> Color {
-        guard isHovered else { return Color.clear }
+    private func rowHoverFill(for snapshot: FeedItemSnapshot) -> Color {
         if snapshot.status.isPending {
             return tint(for: snapshot).opacity(0.10)
         }
