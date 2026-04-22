@@ -1881,8 +1881,8 @@ private struct QuestionActionArea: View {
 
     /// Long-form rendering: single question with rich options. Each
     /// option becomes a tappable card with numbered index, title, and
-    /// description. Selecting immediately submits (no separate Submit
-    /// button required).
+    /// description. Selecting only updates local state; the Submit
+    /// button sends the answer.
     @ViewBuilder
     private func longFormBlock(question: WorkstreamQuestionPrompt) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1897,6 +1897,7 @@ private struct QuestionActionArea: View {
             ForEach(Array(question.options.enumerated()), id: \.offset) { idx, option in
                 longFormOptionCard(
                     questionId: question.id,
+                    multi: question.multiSelect,
                     index: idx + 1,
                     option: option
                 )
@@ -1909,25 +1910,33 @@ private struct QuestionActionArea: View {
 
     private func longFormOptionCard(
         questionId: String,
+        multi: Bool,
         index: Int,
         option: WorkstreamQuestionOption
     ) -> some View {
-        Button {
+        let selected = selections[questionId]?.contains(option.id) == true
+        return Button {
             guard status.isPending else { return }
-            // Long-form is always single-select, and selecting submits
-            // immediately because there's no separate Submit button.
-            // Selections carry human-readable labels (not ids) so the
-            // hook can paste them straight into the agent's reply.
-            onReply([option.label])
+            var current = selections[questionId] ?? []
+            if multi {
+                if current.contains(option.id) {
+                    current.remove(option.id)
+                } else {
+                    current.insert(option.id)
+                }
+            } else {
+                current = [option.id]
+            }
+            selections[questionId] = current
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Text("\(index)")
                     .font(.system(size: 11, weight: .bold).monospacedDigit())
-                    .foregroundColor(.white)
+                    .foregroundColor(selected ? .white : .secondary)
                     .frame(width: 20, height: 20)
                     .background(
                         RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(Color(red: 0.24, green: 0.48, blue: 0.88))
+                            .fill(selected ? Color(red: 0.24, green: 0.48, blue: 0.88) : Color.primary.opacity(0.08))
                     )
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
@@ -1941,15 +1950,19 @@ private struct QuestionActionArea: View {
                     }
                 }
                 Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.secondary.opacity(0.6))
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(selected ? Color(red: 0.24, green: 0.48, blue: 0.88) : .secondary.opacity(0.45))
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.primary.opacity(0.05))
+                    .fill(selected ? Color(red: 0.24, green: 0.48, blue: 0.88).opacity(0.14) : Color.primary.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(selected ? Color(red: 0.24, green: 0.48, blue: 0.88).opacity(0.55) : Color.clear, lineWidth: 1)
             )
             .contentShape(Rectangle())
         }
