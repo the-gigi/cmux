@@ -92181,6 +92181,13 @@
         "ja": { "stringUnit": { "state": "translated", "value": "Raycast Glass" } }
       }
     },
+    "feed.buttonDebug.style.standardGlass": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Standard Glass" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "標準Glass" } }
+      }
+    },
     "feed.buttonDebug.style.nativeGlass": {
       "extractionState": "manual",
       "localizations": {
@@ -92291,6 +92298,13 @@
       "localizations": {
         "en": { "stringUnit": { "state": "translated", "value": "Raycast Glass" } },
         "ja": { "stringUnit": { "state": "translated", "value": "Raycast Glass" } }
+      }
+    },
+    "feed.buttonDebug.preset.standardLiquidGlass": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Standard Liquid Glass" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "標準Liquid Glass" } }
       }
     },
     "feed.buttonDebug.preset.nativeGlass": {

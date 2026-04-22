@@ -5,6 +5,7 @@ import SwiftUI
 enum FeedButtonDebugVisualStyle: String, CaseIterable, Identifiable {
     case solid
     case glass
+    case standardGlass
     case nativeGlass
     case nativeProminentGlass
     case liquid
@@ -22,6 +23,8 @@ enum FeedButtonDebugVisualStyle: String, CaseIterable, Identifiable {
             return String(localized: "feed.buttonDebug.style.solid", defaultValue: "Solid")
         case .glass:
             return String(localized: "feed.buttonDebug.style.glass", defaultValue: "Raycast Glass")
+        case .standardGlass:
+            return String(localized: "feed.buttonDebug.style.standardGlass", defaultValue: "Standard Glass")
         case .nativeGlass:
             return String(localized: "feed.buttonDebug.style.nativeGlass", defaultValue: "Native Glass")
         case .nativeProminentGlass:
@@ -397,6 +400,10 @@ enum FeedButtonDebugSettings {
         defaults.set(preset.mediumVerticalPadding, forKey: mediumVerticalPaddingKey)
         defaults.set(preset.glassTintOpacity, forKey: glassTintOpacityKey)
         defaults.set(preset.borderWidth, forKey: borderWidthKey)
+        if let palette = preset.palette {
+            defaults.set(palette.rawValue, forKey: paletteKey)
+            clearCustomColors()
+        }
         bumpGeneration()
     }
 
@@ -500,6 +507,7 @@ struct FeedButtonDebugPalette {
 enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
     case solidClassic
     case raycastGlass
+    case standardLiquidGlass
     case nativeGlass
     case nativeProminentGlass
     case liquidCapsule
@@ -523,6 +531,8 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
             return String(localized: "feed.buttonDebug.preset.solidClassic", defaultValue: "Solid Classic")
         case .raycastGlass:
             return String(localized: "feed.buttonDebug.preset.raycastGlass", defaultValue: "Raycast Glass")
+        case .standardLiquidGlass:
+            return String(localized: "feed.buttonDebug.preset.standardLiquidGlass", defaultValue: "Standard Liquid Glass")
         case .nativeGlass:
             return String(localized: "feed.buttonDebug.preset.nativeGlass", defaultValue: "Native Glass")
         case .nativeProminentGlass:
@@ -558,6 +568,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         switch self {
         case .solidClassic: return .solid
         case .raycastGlass: return .glass
+        case .standardLiquidGlass: return .standardGlass
         case .nativeGlass: return .nativeGlass
         case .nativeProminentGlass: return .nativeProminentGlass
         case .liquidCapsule: return .liquid
@@ -575,10 +586,23 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         }
     }
 
+    var palette: FeedButtonDebugPalettePreset? {
+        switch self {
+        case .standardLiquidGlass:
+            return .system
+        case .solidClassic, .raycastGlass, .nativeGlass, .nativeProminentGlass,
+             .liquidCapsule, .frostedOutline, .haloGlow, .commandDark, .commandLight,
+             .clearGlass, .compactGlass, .nativeBlue, .liquidMono, .softHalo,
+             .hairlineGlass, .minimalFlat:
+            return nil
+        }
+    }
+
     var compactCornerRadius: Double {
         switch self {
         case .solidClassic, .minimalFlat: return 5.0
         case .raycastGlass, .frostedOutline: return 7.0
+        case .standardLiquidGlass: return 8.0
         case .nativeGlass: return 9.0
         case .nativeProminentGlass: return 10.0
         case .liquidCapsule: return 12.0
@@ -594,6 +618,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         switch self {
         case .solidClassic, .minimalFlat: return 6.0
         case .raycastGlass, .frostedOutline, .commandDark: return 8.0
+        case .standardLiquidGlass: return 9.0
         case .nativeGlass: return 10.0
         case .nativeProminentGlass: return 11.0
         case .liquidCapsule: return 14.0
@@ -610,6 +635,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         switch self {
         case .minimalFlat: return 7.0
         case .raycastGlass, .frostedOutline, .commandDark: return 9.0
+        case .standardLiquidGlass: return 8.0
         case .nativeGlass: return 9.5
         case .nativeProminentGlass: return 10.0
         case .liquidCapsule: return 10.0
@@ -625,6 +651,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
     var mediumHorizontalPadding: Double {
         switch self {
         case .minimalFlat: return 10.0
+        case .standardLiquidGlass: return 12.0
         case .nativeGlass: return 13.0
         case .nativeProminentGlass: return 14.0
         case .liquidCapsule: return 15.0
@@ -641,6 +668,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
     var compactVerticalPadding: Double {
         switch self {
         case .minimalFlat: return 3.5
+        case .standardLiquidGlass: return 4.0
         case .nativeGlass: return 5.0
         case .nativeProminentGlass: return 5.5
         case .liquidCapsule, .haloGlow: return 5.0
@@ -656,6 +684,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
     var mediumVerticalPadding: Double {
         switch self {
         case .minimalFlat: return 4.5
+        case .standardLiquidGlass: return 5.0
         case .nativeGlass: return 6.0
         case .nativeProminentGlass: return 6.5
         case .liquidCapsule: return 6.5
@@ -673,6 +702,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         switch self {
         case .solidClassic: return 0.42
         case .raycastGlass: return 0.38
+        case .standardLiquidGlass: return 0.0
         case .nativeGlass: return 0.22
         case .nativeProminentGlass: return 0.46
         case .liquidCapsule: return 0.30
@@ -693,6 +723,7 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
     var borderWidth: Double {
         switch self {
         case .solidClassic, .raycastGlass, .commandDark: return 0.8
+        case .standardLiquidGlass: return 0.6
         case .nativeGlass: return 0.6
         case .nativeProminentGlass: return 0.7
         case .liquidCapsule: return 0.7
@@ -789,7 +820,7 @@ private struct FeedButtonDebugPresetSection: Identifiable {
             FeedButtonDebugPresetSection(
                 id: "native",
                 label: String(localized: "feed.buttonDebug.section.nativeGlass", defaultValue: "Native Glass"),
-                presets: [.nativeGlass, .nativeProminentGlass, .clearGlass, .nativeBlue]
+                presets: [.standardLiquidGlass, .nativeGlass, .nativeProminentGlass, .clearGlass, .nativeBlue]
             ),
             FeedButtonDebugPresetSection(
                 id: "command",
@@ -1128,7 +1159,7 @@ private struct FeedButtonStyleDebugView: View {
                 debugSlider(
                     title: String(localized: "feed.buttonDebug.glassTint", defaultValue: "Glass tint"),
                     value: $glassTintOpacity,
-                    range: 0.05...0.9,
+                    range: 0...0.9,
                     suffix: "%"
                 )
                 debugSlider(
@@ -1274,6 +1305,9 @@ private struct FeedButtonStyleDebugView: View {
     private func applyPreset(_ preset: FeedButtonDebugPreset) {
         FeedButtonDebugSettings.apply(preset)
         styleRaw = preset.style.rawValue
+        if let palette = preset.palette {
+            paletteRaw = palette.rawValue
+        }
         compactCornerRadius = preset.compactCornerRadius
         mediumCornerRadius = preset.mediumCornerRadius
         compactHorizontalPadding = preset.compactHorizontalPadding

@@ -975,6 +975,18 @@ struct FeedButton: View {
         }
     }
 
+    private var standardLabelContent: some View {
+        HStack(spacing: 4) {
+            if let leadingIcon {
+                Image(systemName: leadingIcon)
+            }
+            Text(label)
+            if let trailingIcon {
+                Image(systemName: trailingIcon)
+            }
+        }
+    }
+
     private func performAction() {
         // `dimmed` doubles as the disabled signal — swallow the
         // click at the primitive so upstream action closures don't
@@ -1000,7 +1012,7 @@ struct FeedButton: View {
     private var usesSystemGlassButtonStyle: Bool {
         _ = debugStyleGeneration
         switch FeedButtonDebugSettings.visualStyle {
-        case .nativeGlass, .nativeProminentGlass, .commandLight:
+        case .standardGlass, .nativeGlass, .nativeProminentGlass, .commandLight:
             return true
         case .solid, .glass, .liquid, .halo, .command, .outline, .flat:
             return false
@@ -1010,13 +1022,33 @@ struct FeedButton: View {
     @available(macOS 26.0, *)
     @ViewBuilder
     private var systemGlassButton: some View {
-        if FeedButtonDebugSettings.visualStyle == .nativeProminentGlass {
+        if FeedButtonDebugSettings.visualStyle == .standardGlass {
+            standardSystemGlassButtonBase
+                .buttonStyle(.glass)
+        } else if FeedButtonDebugSettings.visualStyle == .nativeProminentGlass {
             systemGlassButtonBase
                 .buttonStyle(.glassProminent)
         } else {
             systemGlassButtonBase
                 .buttonStyle(.glass)
         }
+    }
+
+    @available(macOS 26.0, *)
+    private var standardSystemGlassButtonBase: some View {
+        Button {
+            performAction()
+        } label: {
+            standardLabelContent
+                .frame(maxWidth: fullWidth ? .infinity : nil)
+        }
+        .controlSize(size == .compact ? .small : .regular)
+        .disabled(dimmed)
+        .opacity(dimmed ? 0.55 : 1.0)
+        .onHover { hovering in
+            handleHover(hovering)
+        }
+        .help(label)
     }
 
     @available(macOS 26.0, *)
@@ -1062,7 +1094,7 @@ struct FeedButton: View {
             return kind == .light ? .black : .white
         case .nativeGlass:
             return .primary
-        case .solid, .glass, .liquid, .halo, .command, .commandLight, .outline, .flat:
+        case .standardGlass, .solid, .glass, .liquid, .halo, .command, .commandLight, .outline, .flat:
             return foreground
         }
     }
@@ -1201,6 +1233,8 @@ struct FeedButton: View {
         switch generation >= 0 ? FeedButtonDebugSettings.visualStyle : .solid {
         case .solid:
             shape.fill(backgroundFill)
+        case .standardGlass:
+            shape.fill(.regularMaterial)
         case .glass:
             shape
                 .fill(.thinMaterial)
@@ -1334,6 +1368,8 @@ struct FeedButton: View {
         switch generation >= 0 ? FeedButtonDebugSettings.visualStyle : .solid {
         case .solid:
             EmptyView()
+        case .standardGlass:
+            shape.stroke(Color.white.opacity(0.12), lineWidth: FeedButtonDebugSettings.borderWidth)
         case .glass:
             shape.stroke(Color.white.opacity(0.16), lineWidth: 0.75)
         case .nativeGlass:
@@ -1386,7 +1422,7 @@ struct FeedButton: View {
             return Color.black.opacity(isHovered || isSelected ? 0.16 : 0.08)
         case .nativeProminentGlass:
             return backgroundFill.opacity(isHovered || isSelected ? 0.18 : 0.10)
-        case .solid, .glass, .nativeGlass, .outline, .flat:
+        case .standardGlass, .solid, .glass, .nativeGlass, .outline, .flat:
             return Color.clear
         }
 #else
@@ -1403,7 +1439,7 @@ struct FeedButton: View {
         case .nativeProminentGlass: return isHovered || isSelected ? 5 : 3
         case .command: return 3
         case .commandLight: return isHovered || isSelected ? 4 : 2
-        case .solid, .glass, .nativeGlass, .outline, .flat: return 0
+        case .standardGlass, .solid, .glass, .nativeGlass, .outline, .flat: return 0
         }
 #else
         return 0
@@ -1416,7 +1452,7 @@ struct FeedButton: View {
         switch FeedButtonDebugSettings.visualStyle {
         case .halo: return 2
         case .liquid, .nativeProminentGlass, .command, .commandLight: return 1
-        case .solid, .glass, .nativeGlass, .outline, .flat: return 0
+        case .standardGlass, .solid, .glass, .nativeGlass, .outline, .flat: return 0
         }
 #else
         return 0
