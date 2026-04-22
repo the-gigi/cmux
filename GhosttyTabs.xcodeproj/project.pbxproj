@@ -23,6 +23,7 @@
 		FEED0000000000000000F002 /* FeedCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEED0000000000000000F001 /* FeedCoordinator.swift */; };
 		FEED0000000000000000F005 /* FeedPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEED0000000000000000F004 /* FeedPanelView.swift */; };
 		FEED0000000000000000F00B /* FeedPreviewWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEED0000000000000000F00A /* FeedPreviewWindowController.swift */; };
+		FEEDC0DEC0DEC0DEC0DE0001 /* FeedCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEEDC0DEC0DEC0DEC0DE0002 /* FeedCoordinatorTests.swift */; };
 		698944F99A6ADFBA24A7BFB9 /* AuthSettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B1EA8948C5F126FE63CFB4E /* AuthSettingsStore.swift */; };
 		6B524A0BA34FD46A771335AB /* WorkspaceUnitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71F8ED91A4B55D34BE6A0668 /* WorkspaceUnitTests.swift */; };
 		734F49D37E543DD01C2F4FEF /* NotificationAndMenuBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2C075029771815DD5DA1332 /* NotificationAndMenuBarTests.swift */; };
@@ -239,6 +240,7 @@
 		FEED0000000000000000F004 /* FeedPanelView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FeedPanelView.swift; sourceTree = "<group>"; };
 		FEED0000000000000000F00A /* FeedPreviewWindowController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FeedPreviewWindowController.swift; sourceTree = "<group>"; };
 		FEED0000000000000000F006 /* opencode-plugin.js */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.javascript; path = "opencode-plugin.js"; sourceTree = "<group>"; };
+		FEEDC0DEC0DEC0DEC0DE0002 /* FeedCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedCoordinatorTests.swift; sourceTree = "<group>"; };
 		42092CDB2109E250F7F2A76E /* TabManagerUnitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabManagerUnitTests.swift; sourceTree = "<group>"; };
 		43430FA5929121E2EAAB3091 /* AuthEnvironment.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthEnvironment.swift; sourceTree = "<group>"; };
 		491751CE2321474474F27DCF /* TerminalControllerSocketSecurityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalControllerSocketSecurityTests.swift; sourceTree = "<group>"; };
@@ -632,6 +634,7 @@
 				D2C075029771815DD5DA1332 /* NotificationAndMenuBarTests.swift */,
 				42092CDB2109E250F7F2A76E /* TabManagerUnitTests.swift */,
 				14A7DC53B9CA33BE2A421711 /* WorkspacePullRequestSidebarTests.swift */,
+				FEEDC0DEC0DEC0DEC0DE0002 /* FeedCoordinatorTests.swift */,
 				1D301919B10F22B8708E8883 /* WorkspaceManualUnreadTests.swift */,
 				EE0171AF1F49F7547191CEE5 /* SidebarWidthPolicyTests.swift */,
 				491751CE2321474474F27DCF /* TerminalControllerSocketSecurityTests.swift */,
@@ -1024,6 +1027,7 @@
 				734F49D37E543DD01C2F4FEF /* NotificationAndMenuBarTests.swift in Sources */,
 				B6BF3DC98DB1495E57900199 /* TabManagerUnitTests.swift in Sources */,
 				DCC935C5F55C1DCB33E25521 /* WorkspacePullRequestSidebarTests.swift in Sources */,
+				FEEDC0DEC0DEC0DEC0DE0001 /* FeedCoordinatorTests.swift in Sources */,
 				0F2C25F9170130F8DC09DD1B /* WorkspaceManualUnreadTests.swift in Sources */,
 				CA39C0304FE351A21C372429 /* SidebarWidthPolicyTests.swift in Sources */,
 				8C4BBF2DEF6DF93F395A9EE7 /* TerminalControllerSocketSecurityTests.swift in Sources */,
