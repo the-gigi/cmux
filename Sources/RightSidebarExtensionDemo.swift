@@ -7,19 +7,24 @@ import SwiftUI
 
 enum RightSidebarExtensionPoint {
     static let identifier = "com.cmuxterm.app.debug.extkit.right-sidebar-panel"
-    static let productionIdentifier = "com.cmuxterm.app.extkit.right-sidebar-panel"
+    static let productionIdentifier = "com.cmuxterm.app.right-sidebar-panel"
     static let legacyIdentifier = "com.cmuxterm.right-sidebar-panel"
-    static let monitorDiscoveryIdentifiers: [StaticString] = [
-        "com.cmuxterm.app.debug.extkit.right-sidebar-panel",
-        "com.cmuxterm.app.extkit.right-sidebar-panel",
-        "com.cmuxterm.right-sidebar-panel",
-    ]
     static let matchingDiscoveryIdentifiers = [
         identifier,
         productionIdentifier,
         legacyIdentifier,
     ]
     static let sceneID = "cmux-right-sidebar-demo"
+}
+
+@available(macOS 26.0, *)
+extension AppExtensionPoint {
+    @Definition
+    static var cmuxRightSidebarPanel: AppExtensionPoint {
+        Name("right-sidebar-panel")
+        UserInterface(true)
+        Scope(restriction: .none)
+    }
 }
 
 @MainActor
@@ -65,10 +70,7 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
         do {
             if #available(macOS 26.0, *) {
                 let monitor = AppExtensionPoint.Monitor()
-                for identifier in RightSidebarExtensionPoint.monitorDiscoveryIdentifiers {
-                    let point = try AppExtensionPoint(identifier: identifier)
-                    try await monitor.addAppExtensionPoint(point)
-                }
+                try await monitor.addAppExtensionPoint(.cmuxRightSidebarPanel)
                 self.monitor = monitor
                 observeMonitor(monitor)
                 guard generation == reloadGeneration else { return }

@@ -8,7 +8,7 @@ The app installs like any other macOS app. Its embedded `.appex` declares the cm
 com.cmuxterm.app.debug.extkit.right-sidebar-panel
 ```
 
-That is the current dogfood extension point. Production builds also declare `com.cmuxterm.app.extkit.right-sidebar-panel`, and the sample can switch to that identifier when the feature ships.
+That is the current dogfood extension point. Production builds also declare `com.cmuxterm.app.right-sidebar-panel`, and the sample can switch to that identifier when the feature ships.
 
 The extension exposes the scene id that the current cmux host demo loads:
 

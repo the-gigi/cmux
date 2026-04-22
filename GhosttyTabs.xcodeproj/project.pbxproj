@@ -890,7 +890,6 @@
 				A5002000 /* THIRD_PARTY_LICENSES.md in Resources */,
 				DA7A10CA710E000000000003 /* Localizable.xcstrings in Resources */,
 				DA7A10CA710E000000000004 /* InfoPlist.xcstrings in Resources */,
-				E7000007A1B2C3D4E5F60718 /* RightSidebarExtensionPoints.xcappextensionpoints in Resources */,
 				A5001623 /* cmux.sdef in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1246,6 +1245,7 @@
 				CURRENT_PROJECT_VERSION = 79;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
+				EX_ENABLE_EXTENSION_POINT_GENERATION = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1287,6 +1287,7 @@
 				CURRENT_PROJECT_VERSION = 79;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
+				EX_ENABLE_EXTENSION_POINT_GENERATION = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1353,7 +1354,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CMUX_HOST_BUNDLE_IDENTIFIER = com.cmuxterm.app;
-				CMUX_RIGHT_SIDEBAR_EXTENSION_POINT_IDENTIFIER = com.cmuxterm.app.extkit.right-sidebar-panel;
+				CMUX_RIGHT_SIDEBAR_EXTENSION_POINT_IDENTIFIER = com.cmuxterm.app.right-sidebar-panel;
 				CODE_SIGN_ENTITLEMENTS = RightSidebarDemoExtension/RightSidebarDemoExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 79;

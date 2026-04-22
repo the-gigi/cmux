@@ -54,7 +54,7 @@ final class RightSidebarDemoExtension: CmuxRightSidebarExtension {
     @AppExtensionPoint.Bind
     var boundExtensionPoint: AppExtensionPoint {
         #if CMUX_RELEASE_EXTENSION_POINT
-        AppExtensionPoint.Identifier(host: "com.cmuxterm.app.extkit", name: "right-sidebar-panel")
+        AppExtensionPoint.Identifier(host: "com.cmuxterm.app", name: "right-sidebar-panel")
         #else
         AppExtensionPoint.Identifier(host: "com.cmuxterm.app.debug.extkit", name: "right-sidebar-panel")
         #endif
