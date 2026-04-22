@@ -934,6 +934,12 @@ struct FeedButton: View {
             .padding(.vertical, verticalPadding)
             .background(buttonBackground)
             .overlay(buttonBorder)
+            .shadow(
+                color: buttonShadowColor,
+                radius: buttonShadowRadius,
+                x: 0,
+                y: buttonShadowY
+            )
             .opacity(dimmed ? 0.55 : 1.0)
             .contentShape(Rectangle())
         }
@@ -1067,6 +1073,65 @@ struct FeedButton: View {
                         )
                     )
                 )
+        case .liquid:
+            shape
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    shape.fill(
+                        backgroundFill.opacity(
+                            FeedButtonDebugSettings.glassTintOpacity
+                        )
+                    )
+                )
+                .overlay(
+                    shape.fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(isHovered || isSelected ? 0.42 : 0.30),
+                                Color.white.opacity(0.08),
+                                Color.clear,
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .blendMode(.screen)
+                )
+        case .halo:
+            shape
+                .fill(.thinMaterial)
+                .overlay(
+                    shape.fill(
+                        backgroundFill.opacity(
+                            FeedButtonDebugSettings.glassTintOpacity
+                        )
+                    )
+                )
+                .overlay(
+                    shape.fill(
+                        RadialGradient(
+                            colors: [
+                                Color.white.opacity(isHovered || isSelected ? 0.30 : 0.18),
+                                Color.clear,
+                            ],
+                            center: .topLeading,
+                            startRadius: 1,
+                            endRadius: 54
+                        )
+                    )
+                    .blendMode(.screen)
+                )
+        case .command:
+            shape
+                .fill(.regularMaterial)
+                .overlay(shape.fill(Color.black.opacity(0.28)))
+                .overlay(
+                    shape.fill(
+                        backgroundFill.opacity(
+                            FeedButtonDebugSettings.glassTintOpacity
+                        )
+                    )
+                )
         case .outline:
             shape.fill(isHovered || isSelected ? backgroundFill.opacity(0.14) : Color.clear)
         case .flat:
@@ -1087,6 +1152,26 @@ struct FeedButton: View {
             EmptyView()
         case .glass:
             shape.stroke(Color.white.opacity(0.16), lineWidth: 0.75)
+        case .liquid:
+            shape.stroke(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.42),
+                        backgroundFill.opacity(0.28),
+                        Color.white.opacity(0.10),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                lineWidth: FeedButtonDebugSettings.borderWidth
+            )
+        case .halo:
+            shape.stroke(
+                backgroundFill.opacity(isHovered || isSelected ? 0.55 : 0.34),
+                lineWidth: FeedButtonDebugSettings.borderWidth
+            )
+        case .command:
+            shape.stroke(Color.white.opacity(0.12), lineWidth: FeedButtonDebugSettings.borderWidth)
         case .outline:
             shape.stroke(backgroundFill.opacity(0.75), lineWidth: FeedButtonDebugSettings.borderWidth)
         case .flat:
@@ -1094,6 +1179,51 @@ struct FeedButton: View {
         }
 #else
         EmptyView()
+#endif
+    }
+
+    private var buttonShadowColor: Color {
+#if DEBUG
+        _ = debugStyleGeneration
+        switch FeedButtonDebugSettings.visualStyle {
+        case .halo:
+            return backgroundFill.opacity(isHovered || isSelected ? 0.44 : 0.24)
+        case .liquid:
+            return backgroundFill.opacity(isHovered || isSelected ? 0.18 : 0.10)
+        case .command:
+            return Color.black.opacity(0.28)
+        case .solid, .glass, .outline, .flat:
+            return Color.clear
+        }
+#else
+        return Color.clear
+#endif
+    }
+
+    private var buttonShadowRadius: CGFloat {
+#if DEBUG
+        _ = debugStyleGeneration
+        switch FeedButtonDebugSettings.visualStyle {
+        case .halo: return isHovered || isSelected ? 9 : 6
+        case .liquid: return isHovered || isSelected ? 5 : 3
+        case .command: return 3
+        case .solid, .glass, .outline, .flat: return 0
+        }
+#else
+        return 0
+#endif
+    }
+
+    private var buttonShadowY: CGFloat {
+#if DEBUG
+        _ = debugStyleGeneration
+        switch FeedButtonDebugSettings.visualStyle {
+        case .halo: return 2
+        case .liquid, .command: return 1
+        case .solid, .glass, .outline, .flat: return 0
+        }
+#else
+        return 0
 #endif
     }
 }

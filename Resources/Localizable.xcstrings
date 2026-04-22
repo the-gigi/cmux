@@ -92111,6 +92111,27 @@
         "ja": { "stringUnit": { "state": "translated", "value": "Raycast Glass" } }
       }
     },
+    "feed.buttonDebug.style.liquid": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Liquid" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "リキッド" } }
+      }
+    },
+    "feed.buttonDebug.style.halo": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Halo" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ハロー" } }
+      }
+    },
+    "feed.buttonDebug.style.command": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Command" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "コマンド" } }
+      }
+    },
     "feed.buttonDebug.style.outline": {
       "extractionState": "manual",
       "localizations": {
@@ -92130,6 +92151,62 @@
       "localizations": {
         "en": { "stringUnit": { "state": "translated", "value": "Apply Raycast Glass" } },
         "ja": { "stringUnit": { "state": "translated", "value": "Raycast Glassを適用" } }
+      }
+    },
+    "feed.buttonDebug.variations": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Variations" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "バリエーション" } }
+      }
+    },
+    "feed.buttonDebug.preset.solidClassic": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Solid Classic" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ソリッド定番" } }
+      }
+    },
+    "feed.buttonDebug.preset.raycastGlass": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Raycast Glass" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "Raycast Glass" } }
+      }
+    },
+    "feed.buttonDebug.preset.liquidCapsule": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Liquid Capsule" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "リキッドカプセル" } }
+      }
+    },
+    "feed.buttonDebug.preset.frostedOutline": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Frosted Outline" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "フロストアウトライン" } }
+      }
+    },
+    "feed.buttonDebug.preset.haloGlow": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Halo Glow" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ハローグロー" } }
+      }
+    },
+    "feed.buttonDebug.preset.commandDark": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Command Dark" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "コマンドダーク" } }
+      }
+    },
+    "feed.buttonDebug.preset.minimalFlat": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Minimal Flat" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ミニマルフラット" } }
       }
     },
     "feed.buttonDebug.compactRadius": {
