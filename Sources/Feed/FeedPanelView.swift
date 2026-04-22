@@ -1951,6 +1951,7 @@ private struct QuestionActionArea: View {
     // non-empty, wins over preset option selections for that
     // question — mirrors Claude's TUI fallback.
     @State private var freeTexts: [String: String] = [:]
+    @State private var focusedCustomAnswerId: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -2088,21 +2089,7 @@ private struct QuestionActionArea: View {
     ) -> some View {
         let customId = Self.customAnswerSelectionId
         let selected = selections[questionId]?.contains(customId) == true
-        let binding = Binding<String>(
-            get: { freeTexts[questionId] ?? "" },
-            set: { value in
-                freeTexts[questionId] = value
-                var current = selections[questionId] ?? []
-                if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    current.remove(customId)
-                } else if multi {
-                    current.insert(customId)
-                } else {
-                    current = [customId]
-                }
-                selections[questionId] = current
-            }
-        )
+        let focusKey = customAnswerFocusKey(questionId)
         return HStack(alignment: .center, spacing: 10) {
             Text("\(index)")
                 .font(.system(size: 11, weight: .bold).monospacedDigit())
@@ -2112,26 +2099,18 @@ private struct QuestionActionArea: View {
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(selected ? Color(red: 0.24, green: 0.48, blue: 0.88) : Color.primary.opacity(0.08))
                 )
-            TextField(
-                String(localized: "feed.question.typeSomething",
-                       defaultValue: "Type something..."),
-                text: binding,
-                axis: .vertical
-            )
-            .textFieldStyle(.plain)
-            .font(.system(size: 12, weight: .semibold))
-            .lineLimit(1...3)
-            .disabled(!status.isPending)
-            .onTapGesture {
-                guard status.isPending else { return }
-                var current = selections[questionId] ?? []
-                if multi {
-                    current.insert(customId)
-                } else {
-                    current = [customId]
+            FeedInlineTextField(
+                text: customAnswerBinding(questionId: questionId, multi: multi),
+                isFocused: customAnswerFocusBinding(focusKey),
+                placeholder: String(localized: "feed.question.typeSomething",
+                                    defaultValue: "Type something..."),
+                isEnabled: status.isPending,
+                font: .systemFont(ofSize: 12, weight: .semibold),
+                onFocus: {
+                    selectCustomAnswer(questionId: questionId, multi: multi)
                 }
-                selections[questionId] = current
-            }
+            )
+            .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
             Spacer(minLength: 8)
             Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 12, weight: .medium))
@@ -2150,13 +2129,8 @@ private struct QuestionActionArea: View {
         .contentShape(Rectangle())
         .onTapGesture {
             guard status.isPending else { return }
-            var current = selections[questionId] ?? []
-            if multi {
-                current.insert(customId)
-            } else {
-                current = [customId]
-            }
-            selections[questionId] = current
+            selectCustomAnswer(questionId: questionId, multi: multi)
+            focusedCustomAnswerId = focusKey
         }
         .disabled(!status.isPending)
     }
@@ -2215,30 +2189,19 @@ private struct QuestionActionArea: View {
     /// option 4 (custom answer). When non-empty it wins over the
     /// preset option selection for that question on submit.
     private func freeFormField(questionId: String, multi: Bool) -> some View {
-        let binding = Binding<String>(
-            get: { freeTexts[questionId] ?? "" },
-            set: { value in
-                freeTexts[questionId] = value
-                var current = selections[questionId] ?? []
-                if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    current.remove(Self.customAnswerSelectionId)
-                } else if multi {
-                    current.insert(Self.customAnswerSelectionId)
-                } else {
-                    current = [Self.customAnswerSelectionId]
-                }
-                selections[questionId] = current
+        let focusKey = customAnswerFocusKey(questionId)
+        return FeedInlineTextField(
+            text: customAnswerBinding(questionId: questionId, multi: multi),
+            isFocused: customAnswerFocusBinding(focusKey),
+            placeholder: String(localized: "feed.question.typeSomething",
+                                defaultValue: "Type something..."),
+            isEnabled: status.isPending,
+            font: .systemFont(ofSize: 11),
+            onFocus: {
+                selectCustomAnswer(questionId: questionId, multi: multi)
             }
         )
-        return TextField(
-            String(localized: "feed.question.typeSomething",
-                   defaultValue: "Type something..."),
-            text: binding,
-            axis: .vertical
-        )
-        .textFieldStyle(.plain)
-        .font(.system(size: 11))
-        .lineLimit(1...4)
+        .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(
@@ -2257,6 +2220,56 @@ private struct QuestionActionArea: View {
                 NSCursor.pop()
             }
         }
+        .onTapGesture {
+            guard status.isPending else { return }
+            selectCustomAnswer(questionId: questionId, multi: multi)
+            focusedCustomAnswerId = focusKey
+        }
+    }
+
+    private func customAnswerBinding(questionId: String, multi: Bool) -> Binding<String> {
+        Binding<String>(
+            get: { freeTexts[questionId] ?? "" },
+            set: { value in
+                freeTexts[questionId] = value
+                var current = selections[questionId] ?? []
+                if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    current.remove(Self.customAnswerSelectionId)
+                } else if multi {
+                    current.insert(Self.customAnswerSelectionId)
+                } else {
+                    current = [Self.customAnswerSelectionId]
+                }
+                selections[questionId] = current
+            }
+        )
+    }
+
+    private func customAnswerFocusBinding(_ focusKey: String) -> Binding<Bool> {
+        Binding<Bool>(
+            get: { focusedCustomAnswerId == focusKey },
+            set: { focused in
+                if focused {
+                    focusedCustomAnswerId = focusKey
+                } else if focusedCustomAnswerId == focusKey {
+                    focusedCustomAnswerId = nil
+                }
+            }
+        )
+    }
+
+    private func customAnswerFocusKey(_ questionId: String) -> String {
+        "\(questionId)::custom"
+    }
+
+    private func selectCustomAnswer(questionId: String, multi: Bool) {
+        var current = selections[questionId] ?? []
+        if multi {
+            current.insert(Self.customAnswerSelectionId)
+        } else {
+            current = [Self.customAnswerSelectionId]
+        }
+        selections[questionId] = current
     }
 
     private func optionPill(
@@ -2383,6 +2396,175 @@ private struct QuestionActionArea: View {
         ) {
             onReply([Self.skipInterviewAndPlanAnswer])
         }
+    }
+}
+
+private final class FeedInlineNativeTextField: NSTextField {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isBordered = false
+        isBezeled = false
+        drawsBackground = false
+        focusRingType = .none
+        usesSingleLineMode = true
+        lineBreakMode = .byTruncatingTail
+        isEditable = true
+        isSelectable = true
+        setContentHuggingPriority(.defaultLow, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        cell?.wraps = false
+        cell?.isScrollable = true
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: 18)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let didBecomeFirstResponder = super.becomeFirstResponder()
+        configureFieldEditor()
+        return didBecomeFirstResponder
+    }
+
+    func configureFieldEditor() {
+        guard let editor = currentEditor() as? NSTextView else { return }
+        editor.drawsBackground = false
+        editor.backgroundColor = .clear
+        editor.insertionPointColor = .controlAccentColor
+        editor.textColor = textColor
+        editor.font = font
+    }
+}
+
+private struct FeedInlineTextField: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+
+    let placeholder: String
+    let isEnabled: Bool
+    let font: NSFont
+    let onFocus: () -> Void
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: FeedInlineTextField
+        var isProgrammaticMutation = false
+        weak var field: FeedInlineNativeTextField?
+        var pendingFocusRequest: Bool?
+
+        init(parent: FeedInlineTextField) {
+            self.parent = parent
+        }
+
+        func controlTextDidBeginEditing(_ obj: Notification) {
+            guard let field = obj.object as? FeedInlineNativeTextField else { return }
+            field.configureFieldEditor()
+            parent.onFocus()
+            if !parent.isFocused {
+                DispatchQueue.main.async {
+                    self.parent.isFocused = true
+                }
+            }
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard !isProgrammaticMutation else { return }
+            guard let field = obj.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            if parent.isFocused {
+                DispatchQueue.main.async {
+                    self.parent.isFocused = false
+                }
+            }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> FeedInlineNativeTextField {
+        let field = FeedInlineNativeTextField(frame: .zero)
+        field.delegate = context.coordinator
+        field.stringValue = text
+        configure(field)
+        context.coordinator.field = field
+        return field
+    }
+
+    func updateNSView(_ nsView: FeedInlineNativeTextField, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.field = nsView
+        configure(nsView)
+
+        if let editor = nsView.currentEditor() as? NSTextView {
+            nsView.configureFieldEditor()
+            if editor.string != text, !editor.hasMarkedText() {
+                context.coordinator.isProgrammaticMutation = true
+                editor.string = text
+                nsView.stringValue = text
+                context.coordinator.isProgrammaticMutation = false
+            }
+        } else if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+
+        guard let window = nsView.window else { return }
+        let firstResponder = window.firstResponder
+        let isFirstResponder = firstResponder === nsView ||
+            nsView.currentEditor() != nil ||
+            ((firstResponder as? NSTextView)?.delegate as? NSTextField) === nsView
+
+        if isFocused, isEnabled, !isFirstResponder, context.coordinator.pendingFocusRequest != true {
+            context.coordinator.pendingFocusRequest = true
+            DispatchQueue.main.async { [weak nsView, weak coordinator = context.coordinator] in
+                coordinator?.pendingFocusRequest = nil
+                guard let coordinator, coordinator.parent.isFocused, coordinator.parent.isEnabled else { return }
+                guard let nsView, let window = nsView.window else { return }
+                let firstResponder = window.firstResponder
+                let alreadyFocused = firstResponder === nsView ||
+                    nsView.currentEditor() != nil ||
+                    ((firstResponder as? NSTextView)?.delegate as? NSTextField) === nsView
+                guard !alreadyFocused else { return }
+                window.makeFirstResponder(nsView)
+                nsView.configureFieldEditor()
+            }
+        } else if (!isFocused || !isEnabled), isFirstResponder, context.coordinator.pendingFocusRequest != false {
+            context.coordinator.pendingFocusRequest = false
+            DispatchQueue.main.async { [weak nsView, weak coordinator = context.coordinator] in
+                coordinator?.pendingFocusRequest = nil
+                guard let nsView, let window = nsView.window else { return }
+                let firstResponder = window.firstResponder
+                let stillFocused = firstResponder === nsView ||
+                    ((firstResponder as? NSTextView)?.delegate as? NSTextField) === nsView
+                guard stillFocused else { return }
+                window.makeFirstResponder(nil)
+            }
+        }
+    }
+
+    private func configure(_ field: FeedInlineNativeTextField) {
+        field.font = font
+        field.textColor = isEnabled ? .labelColor : .disabledControlTextColor
+        field.placeholderAttributedString = NSAttributedString(
+            string: placeholder,
+            attributes: [
+                .font: font,
+                .foregroundColor: NSColor.placeholderTextColor,
+            ]
+        )
+        field.isEnabled = isEnabled
+        field.isEditable = isEnabled
+        field.isSelectable = isEnabled
+        field.drawsBackground = false
+        field.backgroundColor = .clear
+        field.configureFieldEditor()
     }
 }
 
