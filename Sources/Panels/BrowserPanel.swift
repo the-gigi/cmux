@@ -2265,15 +2265,6 @@ final class BrowserPanel: Panel, ObservableObject {
             return transaction
         }
 
-        var findFieldMountedOrFocused: Bool {
-            switch phase {
-            case .focusing(let transaction), .focused(let transaction):
-                return transaction.fieldMounted || transaction.fieldFocused
-            case .idle, .waitingForWebViewFocus, .restoring:
-                return false
-            }
-        }
-
         @discardableResult
         mutating func beginFindFocus(reason: String, webViewInstanceID: UUID) -> UUID {
             let transaction = FindTransaction(
@@ -2388,7 +2379,7 @@ final class BrowserPanel: Panel, ObservableObject {
     @Published private var subfocusState: BrowserSubfocusState = .webView
     private var findFocusCoordinator = BrowserFindFocusCoordinator()
     private var isPaneFocusedForBrowserRestore = false
-    private var pendingFindOverlayTeardownRestoreRequestId: UUID?
+    private var pendingFindDismissSearchStateClearRequestId: UUID?
 
     var pendingAddressBarFocusRequestId: UUID? {
         subfocusState.pendingAddressBarFocusRequestId
@@ -5254,30 +5245,45 @@ extension BrowserPanel {
             searchState = nil
             return
         }
-        let shouldWaitForFindOverlayTeardown =
-            findFocusCoordinator.findFieldMountedOrFocused ||
-            webView.window.map(windowFirstResponderOwnsFindField) == true
         let pendingRestore = findFocusCoordinator.beginFindDismiss(
             reason: "findDismiss.\(reason)",
             shouldRestoreWebContent: true,
             webViewInstanceID: webViewInstanceID
         )
-        if shouldWaitForFindOverlayTeardown {
-            pendingFindOverlayTeardownRestoreRequestId = pendingRestore?.requestId
-        }
         updateSubfocusState(.webView)
-        searchState = nil
-        if !shouldWaitForFindOverlayTeardown {
-            drivePendingWebContentRestoreIfPossible(trigger: "findDismiss.\(reason)")
+        let dismissingSearchState = searchState
+        pendingFindDismissSearchStateClearRequestId = pendingRestore?.requestId
+        let startedRestore = drivePendingWebContentRestoreIfPossible(
+            trigger: "findDismiss.\(reason)",
+            completion: { [weak self] _ in
+                guard let self, let requestId = pendingRestore?.requestId else { return }
+                self.finishDeferredFindDismissSearchStateClear(
+                    requestId: requestId,
+                    dismissingSearchState: dismissingSearchState
+                )
+            }
+        )
+        if !startedRestore {
+            pendingFindDismissSearchStateClearRequestId = nil
+            searchState = nil
         }
     }
 
     func noteFindOverlayDisappeared(source: String) {
         if searchState != nil, preferredFocusIntent == .findField {
             _ = requestFindFieldFocus(reason: "findOverlayRemount.\(source)")
-        } else if pendingFindOverlayTeardownRestoreRequestId != nil {
-            pendingFindOverlayTeardownRestoreRequestId = nil
+        } else {
             drivePendingWebContentRestoreIfPossible(trigger: "findOverlayDisappear.\(source)")
+            if isPaneFocusedForBrowserRestore,
+               let window = webView.window,
+               !webView.isHiddenOrHasHiddenAncestor,
+               !Self.responderChainContains(window.firstResponder, target: webView) {
+                _ = transitionToWebContentFocus(
+                    reason: "findOverlayDisappear.\(source)",
+                    yieldFindFieldResponder: false,
+                    restoreStoredDOMFocus: false
+                )
+            }
         }
 #if DEBUG
         dlog(
@@ -5800,27 +5806,26 @@ extension BrowserPanel {
     }
 
     private func clearPendingWebContentRestore() {
-        pendingFindOverlayTeardownRestoreRequestId = nil
+        pendingFindDismissSearchStateClearRequestId = nil
         findFocusCoordinator.cancelWebContentRestore()
+    }
+
+    private func finishDeferredFindDismissSearchStateClear(
+        requestId: UUID,
+        dismissingSearchState: BrowserSearchState?
+    ) {
+        guard pendingFindDismissSearchStateClearRequestId == requestId else { return }
+        pendingFindDismissSearchStateClearRequestId = nil
+        guard searchState === dismissingSearchState else { return }
+        searchState = nil
     }
 
     @discardableResult
     private func drivePendingWebContentRestoreIfPossible(
-        trigger: String
+        trigger: String,
+        completion: ((Bool) -> Void)? = nil
     ) -> Bool {
         guard let pendingRestore = findFocusCoordinator.pendingWebContentRestore else { return false }
-
-        guard pendingFindOverlayTeardownRestoreRequestId != pendingRestore.requestId else {
-#if DEBUG
-            dlog(
-                "browser.focus.webContent.pending.skip panel=\(id.uuidString.prefix(5)) " +
-                "request=\(pendingRestore.requestId.uuidString.prefix(8)) " +
-                "reason=\(pendingRestore.reason) source=findDismiss " +
-                "trigger=\(trigger) cause=find_overlay_teardown"
-            )
-#endif
-            return false
-        }
 
         guard isPaneFocusedForBrowserRestore else {
 #if DEBUG
@@ -5859,8 +5864,6 @@ extension BrowserPanel {
         }
 
         guard findFocusCoordinator.markWebContentRestoreApplying(pendingRestore) else { return false }
-        pendingFindOverlayTeardownRestoreRequestId = nil
-        findFocusCoordinator.completeWebContentRestore(pendingRestore)
 #if DEBUG
         let hasWebViewResponder = Self.responderChainContains(window.firstResponder, target: webView)
         let firstResponderDescription = window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
@@ -5880,12 +5883,14 @@ extension BrowserPanel {
             restoreStoredDOMFocus: true,
             completion: { [weak self] restored in
                 guard let self else { return }
+                self.findFocusCoordinator.completeWebContentRestore(pendingRestore)
 #if DEBUG
                 dlog(
                     "browser.focus.webContent.pending.result panel=\(self.id.uuidString.prefix(5)) " +
                     "reason=\(pendingRestore.reason) restored=\(restored ? 1 : 0)"
                 )
 #endif
+                completion?(restored)
             }
         )
 #if DEBUG

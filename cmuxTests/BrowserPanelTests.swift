@@ -21,6 +21,20 @@ private func drainBrowserPanelMainQueue() {
 }
 
 @MainActor
+private func waitForBrowserPanelCondition(
+    timeout: TimeInterval = 1.0,
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    _ condition: () -> Bool
+) {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition(), Date() < deadline {
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+    }
+    XCTAssertTrue(condition(), file: file, line: line)
+}
+
+@MainActor
 private func makeTemporaryBrowserPanelProfile(named prefix: String) throws -> BrowserProfileDefinition {
     try XCTUnwrap(
         BrowserProfileStore.shared.createProfile(
@@ -368,11 +382,9 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
 
         panel.notePanelFocusChanged(true)
 
-        XCTAssertNotNil(panel.pendingWebContentRestoreRequestId)
-        XCTAssertEqual(browserSearchOverlayPanelId(for: window.firstResponder), panel.id)
-
-        panel.noteFindOverlayDisappeared(source: "test")
-
+        waitForBrowserPanelCondition {
+            panel.pendingWebContentRestoreRequestId == nil
+        }
         XCTAssertNil(panel.pendingWebContentRestoreRequestId)
         XCTAssertEqual(panel.captureFocusIntent(in: window), .browser(.webView))
     }
@@ -499,10 +511,13 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
         panel.hideFind(reason: "test")
 
         XCTAssertNotNil(panel.pendingWebContentRestoreRequestId)
+        XCTAssertNotNil(panel.searchState)
 
-        panel.noteFindOverlayDisappeared(source: "test")
-
+        waitForBrowserPanelCondition {
+            panel.pendingWebContentRestoreRequestId == nil && panel.searchState == nil
+        }
         XCTAssertNil(panel.pendingWebContentRestoreRequestId)
+        XCTAssertNil(panel.searchState)
         XCTAssertEqual(panel.captureFocusIntent(in: window), .browser(.webView))
     }
 }

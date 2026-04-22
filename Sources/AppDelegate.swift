@@ -14542,6 +14542,21 @@ private extension NSWindow {
             Self.cmuxOwningWebView(for: $0, in: self, event: event)
         }
         let firstResponderHasMarkedText = browserResponderHasMarkedText(self.firstResponder)
+        let firstResponderSearchOverlayPanelId = self.firstResponder.flatMap {
+            browserSearchOverlayPanelId(for: $0) ??
+                BrowserWindowPortalRegistry.searchOverlayPanelId(for: $0, in: self)
+        }
+        if firstResponderSearchOverlayPanelId != nil,
+           event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
+           AppDelegate.shared?.handleBrowserSurfaceKeyEquivalent(event) == true {
+#if DEBUG
+            dlog(
+                "  → browser search overlay command routed to app " +
+                "panel=\(firstResponderSearchOverlayPanelId?.uuidString.prefix(5) ?? "nil")"
+            )
+#endif
+            return true
+        }
         if let ghosttyView = firstResponderGhosttyView {
             // If the IME is composing and the key has no Cmd modifier, don't intercept —
             // let it flow through normal AppKit event dispatch so the input method can

@@ -303,6 +303,12 @@ private struct BrowserSearchTextFieldRepresentable: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if let event = NSApp.currentEvent,
+               event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
+               AppDelegate.shared?.handleBrowserSurfaceKeyEquivalent(event) == true {
+                return true
+            }
+
             switch commandSelector {
             case #selector(NSResponder.cancelOperation(_:)):
                 if textView.hasMarkedText() { return false }
