@@ -1840,6 +1840,7 @@ private struct QuestionActionArea: View {
     let onReply: ([String]) -> Void
 
     private static let skipInterviewAndPlanAnswer = "Skip interview and plan immediately"
+    private static let customAnswerSelectionId = "__cmux_custom_answer__"
 
     // Per-question selections keyed by question id.
     @State private var selections: [String: Set<String>] = [:]
@@ -1905,7 +1906,11 @@ private struct QuestionActionArea: View {
                 )
             }
             if status.isPending {
-                freeFormField(questionId: question.id)
+                longFormCustomAnswerCard(
+                    questionId: question.id,
+                    multi: question.multiSelect,
+                    index: question.options.count + 1
+                )
             }
         }
     }
@@ -1928,6 +1933,7 @@ private struct QuestionActionArea: View {
                 }
             } else {
                 current = [option.id]
+                freeTexts[questionId] = ""
             }
             selections[questionId] = current
         } label: {
@@ -1972,6 +1978,86 @@ private struct QuestionActionArea: View {
         .disabled(!status.isPending)
     }
 
+    private func longFormCustomAnswerCard(
+        questionId: String,
+        multi: Bool,
+        index: Int
+    ) -> some View {
+        let customId = Self.customAnswerSelectionId
+        let selected = selections[questionId]?.contains(customId) == true
+        let binding = Binding<String>(
+            get: { freeTexts[questionId] ?? "" },
+            set: { value in
+                freeTexts[questionId] = value
+                var current = selections[questionId] ?? []
+                if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    current.remove(customId)
+                } else if multi {
+                    current.insert(customId)
+                } else {
+                    current = [customId]
+                }
+                selections[questionId] = current
+            }
+        )
+        return HStack(alignment: .center, spacing: 10) {
+            Text("\(index)")
+                .font(.system(size: 11, weight: .bold).monospacedDigit())
+                .foregroundColor(selected ? .white : .secondary)
+                .frame(width: 20, height: 20)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(selected ? Color(red: 0.24, green: 0.48, blue: 0.88) : Color.primary.opacity(0.08))
+                )
+            TextField(
+                String(localized: "feed.question.typeSomething",
+                       defaultValue: "Type something..."),
+                text: binding,
+                axis: .vertical
+            )
+            .textFieldStyle(.plain)
+            .font(.system(size: 12, weight: .semibold))
+            .lineLimit(1...3)
+            .disabled(!status.isPending)
+            .onTapGesture {
+                guard status.isPending else { return }
+                var current = selections[questionId] ?? []
+                if multi {
+                    current.insert(customId)
+                } else {
+                    current = [customId]
+                }
+                selections[questionId] = current
+            }
+            Spacer(minLength: 8)
+            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(selected ? Color(red: 0.24, green: 0.48, blue: 0.88) : .secondary.opacity(0.45))
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(selected ? Color(red: 0.24, green: 0.48, blue: 0.88).opacity(0.14) : Color.primary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(selected ? Color(red: 0.24, green: 0.48, blue: 0.88).opacity(0.55) : Color.clear, lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard status.isPending else { return }
+            var current = selections[questionId] ?? []
+            if multi {
+                current.insert(customId)
+            } else {
+                current = [customId]
+            }
+            selections[questionId] = current
+        }
+        .disabled(!status.isPending)
+    }
+
     private func questionBlock(index: Int, question: WorkstreamQuestionPrompt) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .top, spacing: 5) {
@@ -2012,7 +2098,7 @@ private struct QuestionActionArea: View {
                 }
             }
             if status.isPending {
-                freeFormField(questionId: question.id)
+                freeFormField(questionId: question.id, multi: question.multiSelect)
             }
         }
         .padding(10)
@@ -2025,14 +2111,25 @@ private struct QuestionActionArea: View {
     /// "Type something…" free-form text field — mirrors Claude's TUI
     /// option 4 (custom answer). When non-empty it wins over the
     /// preset option selection for that question on submit.
-    private func freeFormField(questionId: String) -> some View {
+    private func freeFormField(questionId: String, multi: Bool) -> some View {
         let binding = Binding<String>(
             get: { freeTexts[questionId] ?? "" },
-            set: { freeTexts[questionId] = $0 }
+            set: { value in
+                freeTexts[questionId] = value
+                var current = selections[questionId] ?? []
+                if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    current.remove(Self.customAnswerSelectionId)
+                } else if multi {
+                    current.insert(Self.customAnswerSelectionId)
+                } else {
+                    current = [Self.customAnswerSelectionId]
+                }
+                selections[questionId] = current
+            }
         )
         return TextField(
             String(localized: "feed.question.typeSomething",
-                   defaultValue: "Type something…"),
+                   defaultValue: "Type something..."),
             text: binding,
             axis: .vertical
         )
@@ -2083,6 +2180,7 @@ private struct QuestionActionArea: View {
                 else { current.insert(option.id) }
             } else {
                 current = [option.id]
+                freeTexts[questionId] = ""
             }
             selections[questionId] = current
         }
@@ -2097,11 +2195,12 @@ private struct QuestionActionArea: View {
         for q in questions {
             let freeText = (freeTexts[q.id] ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !freeText.isEmpty {
+            let ids = selections[q.id] ?? []
+            if !freeText.isEmpty, ids.contains(Self.customAnswerSelectionId) {
                 out.append(freeText)
                 continue
             }
-            guard let ids = selections[q.id], !ids.isEmpty else { continue }
+            guard !ids.isEmpty else { continue }
             let labels = q.options
                 .filter { ids.contains($0.id) }
                 .map(\.label)
