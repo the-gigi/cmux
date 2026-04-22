@@ -189,6 +189,7 @@ private struct FeedListView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            .feedZeroScrollContentMargins()
             .environment(\.defaultMinListRowHeight, 0)
         }
     }
@@ -254,6 +255,17 @@ private struct FeedListView: View {
                 .padding(.horizontal, 16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func feedZeroScrollContentMargins() -> some View {
+        if #available(macOS 14.0, *) {
+            contentMargins(.all, 0, for: .scrollContent)
+        } else {
+            self
+        }
     }
 }
 
