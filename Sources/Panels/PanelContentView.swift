@@ -55,6 +55,13 @@ struct PanelContentView: View {
                     onRequestPanelFocus: onRequestPanelFocus
                 )
             }
+        case .codexAppServer:
+            if let codexPanel = panel as? CodexAppServerPanel {
+                CodexAppServerPanelView(
+                    panel: codexPanel,
+                    isFocused: isFocused
+                )
+            }
         }
     }
 }

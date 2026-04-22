@@ -66,4 +66,28 @@ final class CodexAppServerRequestFactoryTests: XCTestCase {
         XCTAssertEqual(input[0]["text"] as? String, "Summarize this repo")
         XCTAssertNotNil(input[0]["textElements"] as? [Any])
     }
+
+    func testResponseObjectUsesJsonRpcResponseShapeWithoutMethod() throws {
+        let response = CodexAppServerRequestFactory.response(
+            id: 12,
+            result: ["decision": "accept"]
+        )
+
+        XCTAssertEqual(response["id"] as? Int, 12)
+        XCTAssertNil(response["method"])
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["decision"] as? String, "accept")
+    }
+
+    func testErrorResponseCarriesMessage() throws {
+        let response = CodexAppServerRequestFactory.errorResponse(
+            id: 13,
+            message: "unsupported"
+        )
+
+        XCTAssertEqual(response["id"] as? Int, 13)
+        let error = try XCTUnwrap(response["error"] as? [String: Any])
+        XCTAssertEqual(error["message"] as? String, "unsupported")
+        XCTAssertNotNil(error["code"] as? Int)
+    }
 }

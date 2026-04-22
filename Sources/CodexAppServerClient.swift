@@ -53,6 +53,23 @@ enum CodexAppServerRequestFactory {
         return object
     }
 
+    static func response(id: Int, result: [String: Any]) -> [String: Any] {
+        [
+            "id": id,
+            "result": result,
+        ]
+    }
+
+    static func errorResponse(id: Int, message: String) -> [String: Any] {
+        [
+            "id": id,
+            "error": [
+                "code": -32000,
+                "message": message,
+            ],
+        ]
+    }
+
     static func initializeRequest(id: Int) -> [String: Any] {
         request(
             id: id,
@@ -187,6 +204,14 @@ final class CodexAppServerClient: @unchecked Sendable {
         return turnId
     }
 
+    func respondToServerRequest(id: Int, result: [String: Any]) throws {
+        try sendResponseObject(CodexAppServerRequestFactory.response(id: id, result: result))
+    }
+
+    func rejectServerRequest(id: Int, message: String) throws {
+        try sendResponseObject(CodexAppServerRequestFactory.errorResponse(id: id, message: message))
+    }
+
     private func nextId() -> Int {
         stateQueue.sync {
             let id = nextRequestId
@@ -304,6 +329,22 @@ final class CodexAppServerClient: @unchecked Sendable {
     }
 
     private func sendNotificationObject(_ object: [String: Any]) throws {
+        let result: Result<Void, Error> = stateQueue.sync {
+            do {
+                guard process?.isRunning == true,
+                      let stdinPipe else {
+                    throw CodexAppServerClientError.notRunning
+                }
+                try Self.writeJSONObject(object, to: stdinPipe.fileHandleForWriting)
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }
+        try result.get()
+    }
+
+    private func sendResponseObject(_ object: [String: Any]) throws {
         let result: Result<Void, Error> = stateQueue.sync {
             do {
                 guard process?.isRunning == true,

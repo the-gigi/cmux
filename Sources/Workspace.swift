@@ -493,6 +493,10 @@ extension Workspace {
             terminalSnapshot = nil
             browserSnapshot = nil
             markdownSnapshot = SessionMarkdownPanelSnapshot(filePath: markdownPanel.filePath)
+        case .codexAppServer:
+            terminalSnapshot = nil
+            browserSnapshot = nil
+            markdownSnapshot = nil
         }
 
         return SessionPanelSnapshot(
@@ -683,6 +687,16 @@ extension Workspace {
             }
             applySessionPanelMetadata(snapshot, toPanelId: markdownPanel.id)
             return markdownPanel.id
+        case .codexAppServer:
+            guard let codexPanel = newCodexAppServerSurface(
+                inPane: paneId,
+                cwd: snapshot.directory,
+                focus: false
+            ) else {
+                return nil
+            }
+            applySessionPanelMetadata(snapshot, toPanelId: codexPanel.id)
+            return codexPanel.id
         }
     }
 
@@ -6716,6 +6730,7 @@ final class Workspace: Identifiable, ObservableObject {
         static let terminal = "terminal"
         static let browser = "browser"
         static let markdown = "markdown"
+        static let codexAppServer = "codex-app-server"
     }
 
     enum PanelShellActivityState: String {
@@ -7223,6 +7238,18 @@ final class Workspace: Identifiable, ObservableObject {
         panelSubscriptions[markdownPanel.id] = subscription
     }
 
+    private func installCodexAppServerPanelSubscription(_ codexPanel: CodexAppServerPanel) {
+        let subscription = codexPanel.$cwd
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak codexPanel] cwd in
+                guard let self, let codexPanel else { return }
+                self.updatePanelDirectory(panelId: codexPanel.id, directory: cwd)
+            }
+        panelSubscriptions[codexPanel.id] = subscription
+        updatePanelDirectory(panelId: codexPanel.id, directory: codexPanel.cwd)
+    }
+
     private func browserRemoteWorkspaceStatusSnapshot() -> BrowserRemoteWorkspaceStatus? {
         guard let target = remoteDisplayTarget else { return nil }
         return BrowserRemoteWorkspaceStatus(
@@ -7260,6 +7287,10 @@ final class Workspace: Identifiable, ObservableObject {
         panels[panelId] as? MarkdownPanel
     }
 
+    func codexAppServerPanel(for panelId: UUID) -> CodexAppServerPanel? {
+        panels[panelId] as? CodexAppServerPanel
+    }
+
     private func surfaceKind(for panel: any Panel) -> String {
         switch panel.panelType {
         case .terminal:
@@ -7268,6 +7299,8 @@ final class Workspace: Identifiable, ObservableObject {
             return SurfaceKind.browser
         case .markdown:
             return SurfaceKind.markdown
+        case .codexAppServer:
+            return SurfaceKind.codexAppServer
         }
     }
 
@@ -9317,6 +9350,56 @@ final class Workspace: Identifiable, ObservableObject {
 
         installMarkdownPanelSubscription(markdownPanel)
         return markdownPanel
+    }
+
+    @discardableResult
+    func newCodexAppServerSurface(
+        inPane paneId: PaneID,
+        cwd: String? = nil,
+        focus: Bool? = nil
+    ) -> CodexAppServerPanel? {
+        let shouldFocusNewTab = focus ?? (bonsplitController.focusedPaneId == paneId)
+        let previousFocusedPanelId = focusedPanelId
+        let previousHostedView = focusedTerminalPanel?.hostedView
+        let sourcePanelId = effectiveSelectedPanelId(inPane: paneId)
+        let requestedCwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedCwd = (requestedCwd?.isEmpty == false ? requestedCwd : nil)
+            ?? sourcePanelId.flatMap { panelDirectories[$0] }
+            ?? currentDirectory
+
+        let codexPanel = CodexAppServerPanel(workspaceId: id, cwd: resolvedCwd)
+        panels[codexPanel.id] = codexPanel
+        panelTitles[codexPanel.id] = codexPanel.displayTitle
+
+        guard let newTabId = bonsplitController.createTab(
+            title: codexPanel.displayTitle,
+            icon: codexPanel.displayIcon,
+            kind: SurfaceKind.codexAppServer,
+            isDirty: codexPanel.isDirty,
+            isLoading: false,
+            isPinned: false,
+            inPane: paneId
+        ) else {
+            panels.removeValue(forKey: codexPanel.id)
+            panelTitles.removeValue(forKey: codexPanel.id)
+            return nil
+        }
+
+        surfaceIdToPanelId[newTabId] = codexPanel.id
+        if shouldFocusNewTab {
+            bonsplitController.focusPane(paneId)
+            bonsplitController.selectTab(newTabId)
+            applyTabSelection(tabId: newTabId, inPane: paneId)
+        } else {
+            preserveFocusAfterNonFocusSplit(
+                preferredPanelId: previousFocusedPanelId,
+                splitPanelId: codexPanel.id,
+                previousHostedView: previousHostedView
+            )
+        }
+
+        installCodexAppServerPanelSubscription(codexPanel)
+        return codexPanel
     }
 
     /// Tear down all panels in this workspace, freeing their Ghostty surfaces.
