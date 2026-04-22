@@ -27,8 +27,8 @@ enum CodexAppServerClientError: Error, LocalizedError {
 }
 
 enum CodexAppServerEvent {
-    case notification(method: String, params: [String: Any]?)
-    case serverRequest(id: Int, method: String, params: [String: Any]?)
+    case notification(CodexAppServerServerNotification)
+    case serverRequest(CodexAppServerServerRequest)
     case stderr(String)
     case terminated(Int32)
 }
@@ -563,11 +563,11 @@ final class CodexAppServerClient: @unchecked Sendable {
         }
 
         guard let method = object["method"] as? String else { return }
-        let params = object["params"] as? [String: Any]
+        let params = object["params"]
         if let id = Self.integerId(from: object["id"]) {
-            emit(.serverRequest(id: id, method: method, params: params))
+            emit(.serverRequest(CodexAppServerServerRequest(id: id, method: method, params: params)))
         } else {
-            emit(.notification(method: method, params: params))
+            emit(.notification(CodexAppServerServerNotification(method: method, params: params)))
         }
     }
 

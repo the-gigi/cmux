@@ -144,4 +144,68 @@ final class CodexAppServerRequestFactoryTests: XCTestCase {
             "stdio://",
         ])
     }
+
+    func testGeneratedSchemasCoverCodexAppServerProtocolUnions() {
+        XCTAssertEqual(CodexAppServerProtocolSchemas.sourceRemote, "https://github.com/openai/codex.git")
+        XCTAssertEqual(
+            CodexAppServerProtocolSchemas.sourceRevision,
+            "b04ffeee4c806834bc9173455729cf47f874e836"
+        )
+        XCTAssertEqual(CodexAppServerServerNotificationMethod.allCases.count, 56)
+        XCTAssertEqual(CodexAppServerServerRequestMethod.allCases.count, 9)
+        XCTAssertEqual(CodexAppServerClientRequestMethod.allCases.count, 69)
+        XCTAssertEqual(CodexAppServerClientNotificationMethod.allCases.count, 1)
+    }
+
+    func testGeneratedSchemaLookupIncludesKnownEventPayloadSchemas() throws {
+        let agentDelta = try XCTUnwrap(
+            CodexAppServerProtocolSchemas.serverNotificationSchema(for: "item/agentMessage/delta")
+        )
+        XCTAssertEqual(agentDelta.paramsSchemaName, "AgentMessageDeltaNotification")
+
+        let permissionsApproval = try XCTUnwrap(
+            CodexAppServerProtocolSchemas.serverRequestSchema(for: "item/permissions/requestApproval")
+        )
+        XCTAssertEqual(permissionsApproval.paramsSchemaName, "PermissionsRequestApprovalParams")
+
+        let turnStart = try XCTUnwrap(
+            CodexAppServerProtocolSchemas.clientRequestSchema(for: "turn/start")
+        )
+        XCTAssertEqual(turnStart.paramsSchemaName, "TurnStartParams")
+    }
+
+    func testGeneratedRootSchemaJSONRoundTrips() throws {
+        let json = try XCTUnwrap(CodexAppServerProtocolSchemas.rootSchemaJSON(named: "ServerNotification"))
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual((object["oneOf"] as? [Any])?.count, 56)
+
+        let requestJSON = try XCTUnwrap(CodexAppServerProtocolSchemas.rootSchemaJSON(named: "ClientRequest"))
+        let requestObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(requestJSON.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual((requestObject["oneOf"] as? [Any])?.count, 69)
+    }
+
+    func testProtocolEventWrappersPreserveTypedMethodsAndParams() {
+        let notification = CodexAppServerServerNotification(
+            method: "item/agentMessage/delta",
+            params: ["delta": "hello", "index": 2]
+        )
+
+        XCTAssertEqual(notification.method, .itemAgentMessageDelta)
+        XCTAssertEqual(notification.schema?.paramsSchemaName, "AgentMessageDeltaNotification")
+        XCTAssertEqual(notification.paramsObject?["delta"] as? String, "hello")
+        XCTAssertEqual(notification.paramsObject?["index"] as? Double, 2)
+
+        let request = CodexAppServerServerRequest(
+            id: 88,
+            method: "item/permissions/requestApproval",
+            params: ["reason": "test"]
+        )
+        XCTAssertEqual(request.id, 88)
+        XCTAssertEqual(request.method, .itemPermissionsRequestApproval)
+        XCTAssertEqual(request.paramsObject?["reason"] as? String, "test")
+    }
 }

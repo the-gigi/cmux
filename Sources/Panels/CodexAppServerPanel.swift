@@ -239,20 +239,20 @@ final class CodexAppServerPanel: Panel, ObservableObject {
     private func handle(_ event: CodexAppServerEvent) {
         guard !isClosed else { return }
         switch event {
-        case .notification(let method, let params):
-            handleNotification(method: method, params: params)
-        case .serverRequest(let id, let method, let params):
+        case .notification(let notification):
+            handleNotification(notification)
+        case .serverRequest(let request):
             pendingRequests.append(
                 CodexAppServerPendingRequest(
-                    id: id,
-                    method: method,
-                    params: params,
-                    summary: Self.prettyJSON(params)
+                    id: request.id,
+                    method: request.rawMethod,
+                    params: request.paramsObject,
+                    summary: Self.prettyJSON(request.paramsObject)
                 )
             )
             appendEvent(
                 title: String(localized: "codexAppServer.event.request", defaultValue: "Approval requested"),
-                body: method
+                body: request.rawMethod
             )
         case .stderr(let text):
             append(
@@ -274,7 +274,10 @@ final class CodexAppServerPanel: Panel, ObservableObject {
         }
     }
 
-    private func handleNotification(method: String, params: [String: Any]?) {
+    private func handleNotification(_ notification: CodexAppServerServerNotification) {
+        let method = notification.rawMethod
+        let params = notification.paramsObject
+
         switch method {
         case "thread/started":
             if let thread = params?["thread"] as? [String: Any],

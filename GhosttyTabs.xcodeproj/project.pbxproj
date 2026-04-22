@@ -114,6 +114,8 @@
 		C0D3A502A1B2C3D4E5F60718 /* CodexAppServerClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0D3A503A1B2C3D4E5F60718 /* CodexAppServerClientTests.swift */; };
 		C0D3A504A1B2C3D4E5F60718 /* CodexAppServerPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0D3A505A1B2C3D4E5F60718 /* CodexAppServerPanel.swift */; };
 		C0D3A506A1B2C3D4E5F60718 /* CodexAppServerPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0D3A507A1B2C3D4E5F60718 /* CodexAppServerPanelView.swift */; };
+		C0D3A508A1B2C3D4E5F60718 /* CodexAppServerProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0D3A509A1B2C3D4E5F60718 /* CodexAppServerProtocol.swift */; };
+		C0D3A50AA1B2C3D4E5F60718 /* CodexAppServerGeneratedSchemas.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0D3A50BA1B2C3D4E5F60718 /* CodexAppServerGeneratedSchemas.swift */; };
 		C0B4D9B0A1B2C3D4E5F60718 /* UpdatePillUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0B4D9B1A1B2C3D4E5F60718 /* UpdatePillUITests.swift */; };
 		C1A2B3C4D5E6F70800000001 /* CmuxConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A2B3C4D5E6F70800000002 /* CmuxConfigTests.swift */; };
 		C1ADE00002A1B2C3D4E5F719 /* claude in Copy CLI */ = {isa = PBXBuildFile; fileRef = C1ADE00001A1B2C3D4E5F719 /* claude */; };
@@ -334,6 +336,8 @@
 		C0D3A503A1B2C3D4E5F60718 /* CodexAppServerClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexAppServerClientTests.swift; sourceTree = "<group>"; };
 		C0D3A505A1B2C3D4E5F60718 /* CodexAppServerPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/CodexAppServerPanel.swift; sourceTree = "<group>"; };
 		C0D3A507A1B2C3D4E5F60718 /* CodexAppServerPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/CodexAppServerPanelView.swift; sourceTree = "<group>"; };
+		C0D3A509A1B2C3D4E5F60718 /* CodexAppServerProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexAppServerProtocol.swift; sourceTree = "<group>"; };
+		C0D3A50BA1B2C3D4E5F60718 /* CodexAppServerGeneratedSchemas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexAppServerGeneratedSchemas.swift; sourceTree = "<group>"; };
 		C0B4D9B1A1B2C3D4E5F60718 /* UpdatePillUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdatePillUITests.swift; sourceTree = "<group>"; };
 		C1A2B3C4D5E6F70800000002 /* CmuxConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxConfigTests.swift; sourceTree = "<group>"; };
 		C1ADE00001A1B2C3D4E5F719 /* claude */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = Resources/bin/claude; sourceTree = SOURCE_ROOT; };
@@ -557,6 +561,8 @@
 				A5001651 /* CmuxConfig.swift */,
 				A5001653 /* CmuxConfigExecutor.swift */,
 				A5001655 /* CmuxDirectoryTrust.swift */,
+				C0D3A509A1B2C3D4E5F60718 /* CodexAppServerProtocol.swift */,
+				C0D3A50BA1B2C3D4E5F60718 /* CodexAppServerGeneratedSchemas.swift */,
 				C0D3A501A1B2C3D4E5F60718 /* CodexAppServerClient.swift */,
 				FE001001 /* FileExplorerStore.swift */,
 				FE001002 /* FileExplorerView.swift */,
@@ -922,6 +928,8 @@
 				A5001650 /* CmuxConfig.swift in Sources */,
 				A5001652 /* CmuxConfigExecutor.swift in Sources */,
 				A5001654 /* CmuxDirectoryTrust.swift in Sources */,
+				C0D3A508A1B2C3D4E5F60718 /* CodexAppServerProtocol.swift in Sources */,
+				C0D3A50AA1B2C3D4E5F60718 /* CodexAppServerGeneratedSchemas.swift in Sources */,
 				C0D3A500A1B2C3D4E5F60718 /* CodexAppServerClient.swift in Sources */,
 				FE001101 /* FileExplorerStore.swift in Sources */,
 				FE001102 /* FileExplorerView.swift in Sources */,
