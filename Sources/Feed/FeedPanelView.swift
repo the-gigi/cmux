@@ -368,7 +368,7 @@ struct FeedItemRow: View {
     @State private var isHovered = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             chipHeader
             if let context = displayContext {
                 FeedContextBlock(context: context, source: snapshot.source)
@@ -381,6 +381,8 @@ struct FeedItemRow: View {
             }
             actionArea
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(isResolvedOrExpired ? 0.6 : 1.0)
         .contentShape(Rectangle())
