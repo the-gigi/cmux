@@ -14,6 +14,7 @@ struct WorkstreamEventTests {
           "cwd": "/tmp/proj",
           "tool_name": "Write",
           "tool_input": {"file_path": "/etc/passwd", "content": "x"},
+          "context": {"lastUserMessage": "write a file"},
           "_opencode_request_id": "req-1",
           "_ppid": 1234
         }
@@ -23,6 +24,7 @@ struct WorkstreamEventTests {
         #expect(event.hookEventName == .permissionRequest)
         #expect(event.source == "claude")
         #expect(event.toolName == "Write")
+        #expect(event.context?.lastUserMessage == "write a file")
         #expect(event.requestId == "req-1")
         #expect(event.ppid == 1234)
         // `toolInputJSON` round-trips through JSONSerialization which may
@@ -44,6 +46,13 @@ struct WorkstreamEventTests {
             cwd: "/work",
             toolName: "ExitPlanMode",
             toolInputJSON: "{\"plan\":\"step1\\nstep2\"}",
+            context: WorkstreamContext(
+                lastUserMessage: "make a plan",
+                assistantPreamble: "I will make a short plan.",
+                allowedPrompts: [
+                    WorkstreamAllowedPrompt(tool: "Bash", prompt: "run tests")
+                ]
+            ),
             requestId: "plan-1",
             ppid: 999
         )
@@ -57,6 +66,9 @@ struct WorkstreamEventTests {
             try JSONSerialization.jsonObject(with: rawPlan) as? [String: Any]
         )
         #expect((planDict["plan"] as? String)?.contains("step1") == true)
+        #expect(back.context?.lastUserMessage == "make a plan")
+        #expect(back.context?.assistantPreamble == "I will make a short plan.")
+        #expect(back.context?.allowedPrompts.first?.prompt == "run tests")
     }
 
     @Test("Missing optional fields decode as nil")
@@ -68,6 +80,7 @@ struct WorkstreamEventTests {
         #expect(event.cwd == nil)
         #expect(event.toolName == nil)
         #expect(event.toolInputJSON == nil)
+        #expect(event.context == nil)
         #expect(event.requestId == nil)
         #expect(event.ppid == nil)
     }

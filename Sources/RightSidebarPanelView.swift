@@ -111,6 +111,8 @@ private struct ModeBarButton: View {
                     .font(.system(size: 11, weight: .medium))
                 Text(mode.label)
                     .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 if badgeCount > 0 {
                     pendingChip
                 }
@@ -157,6 +159,8 @@ private struct ModeBarButton: View {
         let countText = badgeCount > 9 ? "9+" : String(badgeCount)
         return Text(countText)
             .font(.system(size: 10, weight: .bold).monospacedDigit())
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: true)
             .foregroundColor(.orange)
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
@@ -164,5 +168,7 @@ private struct ModeBarButton: View {
                 Capsule(style: .continuous)
                     .fill(Color.orange.opacity(0.20))
             )
+            .fixedSize(horizontal: true, vertical: true)
+            .layoutPriority(2)
     }
 }

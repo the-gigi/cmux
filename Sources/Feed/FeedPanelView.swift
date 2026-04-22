@@ -254,6 +254,7 @@ struct FeedItemSnapshot: Equatable {
     let createdAt: Date
     let status: WorkstreamStatus
     let payload: WorkstreamPayload
+    let context: WorkstreamContext?
     /// Most recent user-prompt text in the same workstream, attached
     /// by the list view so every card can show a "You: …" echo for
     /// context, even when the agent payload doesn't carry it directly.
@@ -269,6 +270,7 @@ struct FeedItemSnapshot: Equatable {
         self.createdAt = item.createdAt
         self.status = item.status
         self.payload = item.payload
+        self.context = item.context
         self.userPromptEcho = userPromptEcho
     }
 }
@@ -346,10 +348,14 @@ struct FeedItemRow: View {
     let snapshot: FeedItemSnapshot
     let actions: FeedRowActions
 
+    @State private var isHovered = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             chipHeader
-            if let echo = promptEcho, !echo.isEmpty {
+            if let context = displayContext {
+                FeedContextBlock(context: context)
+            } else if let echo = promptEcho, !echo.isEmpty {
                 Text(echo)
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
@@ -363,6 +369,8 @@ struct FeedItemRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(isResolvedOrExpired ? 0.6 : 1.0)
         .contentShape(Rectangle())
+        .background(rowHoverBackground)
+        .animation(.easeOut(duration: 0.12), value: isHovered)
         .help(helpText)
         // Single-tap on the card background focuses the agent's
         // cmux terminal and flashes the terminal's own ring (same
@@ -372,26 +380,42 @@ struct FeedItemRow: View {
         .onTapGesture {
             actions.jump(snapshot.workstreamId)
         }
+        .onHover { hovering in
+            isHovered = hovering
+        }
+    }
+
+    private var rowHoverBackground: some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(isHovered ? hoverFill : Color.clear)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+    }
+
+    private var hoverFill: Color {
+        if snapshot.status.isPending {
+            return kindTint.opacity(0.10)
+        }
+        return Color.primary.opacity(0.055)
     }
 
     private var promptEcho: String? {
         // Prefer the real user prompt attached by the list view (walks
         // the same workstream for the most recent .userPrompt
-        // telemetry). Falls back to the older synthesized text for
-        // permission cards only, so new sessions without a prompt echo
-        // still say something useful in that specific case.
+        // telemetry). Synthetic permission labels are intentionally
+        // avoided here because the Feed should show real context only.
         if let echo = snapshot.userPromptEcho,
            !echo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
             return String(localized: "feed.promptEcho", defaultValue: "You: \(echo)")
         }
-        if case .permissionRequest(_, let toolName, _, _) = snapshot.payload {
-            return String(
-                localized: "feed.promptEcho.permission",
-                defaultValue: "You: \(toolName) request from \(snapshot.source.rawValue.capitalized)"
-            )
-        }
         return nil
+    }
+
+    private var displayContext: WorkstreamContext? {
+        let fallback = WorkstreamContext(lastUserMessage: snapshot.userPromptEcho)
+        let context = snapshot.context?.mergingMissing(from: fallback) ?? fallback
+        return context.isEmpty ? nil : context
     }
 
     private var isResolvedOrExpired: Bool {
@@ -402,9 +426,8 @@ struct FeedItemRow: View {
         }
     }
 
-    /// Vibe-Island-inspired header: kind icon + project/path title on
-    /// the left, chip row on the right (agent, cmux, time, optional
-    /// jump indicator).
+    /// Compact header: kind icon + project/path title on the left,
+    /// agent and age on the right.
     private var chipHeader: some View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: snapshot.kind.symbolName)
@@ -424,17 +447,11 @@ struct FeedItemRow: View {
                     bg: sourceChipBackground
                 )
                 chip(
-                    text: "cmux",
-                    fg: .secondary,
-                    bg: Color.primary.opacity(0.10)
-                )
-                chip(
                     text: relativeTimeChip(snapshot.createdAt),
                     fg: .secondary,
                     bg: Color.primary.opacity(0.10),
                     mono: true
                 )
-                jumpChip
             }
         }
     }
@@ -443,7 +460,8 @@ struct FeedItemRow: View {
         // Prefer the user prompt as the card title — it's the most
         // useful context ("fun · make a plan and ask me for permissions")
         // rather than the raw tool name ("~/fun · AskUserQuestion").
-        let promptLine = snapshot.userPromptEcho?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let promptLine = (displayContext?.lastUserMessage ?? snapshot.userPromptEcho)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !promptLine.isEmpty {
             if let cwd = snapshot.cwd, !cwd.isEmpty {
                 return "\(cwdBasename(cwd)) · \(promptLine)"
@@ -468,26 +486,6 @@ struct FeedItemRow: View {
         let trimmed = path.hasSuffix("/") ? String(path.dropLast()) : path
         let name = (trimmed as NSString).lastPathComponent
         return name.isEmpty ? path : name
-    }
-
-    private var canJump: Bool {
-        return true
-    }
-
-    private var jumpChip: some View {
-        HStack(spacing: 2) {
-            Text("^G")
-                .font(.system(size: 10, weight: .medium).monospaced())
-            Image(systemName: "arrow.up.forward")
-                .font(.system(size: 8, weight: .medium))
-        }
-        .foregroundColor(.blue)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 2)
-        .background(
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(Color.blue.opacity(0.15))
-        )
     }
 
     private func chip(text: String, fg: Color, bg: Color, mono: Bool = false) -> some View {
@@ -673,6 +671,52 @@ struct FeedItemRow: View {
 }
 
 // MARK: - Per-kind action areas
+
+private struct FeedContextBlock: View {
+    let context: WorkstreamContext
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let user = context.lastUserMessage {
+                row(
+                    label: String(localized: "feed.context.you", defaultValue: "You"),
+                    text: user,
+                    color: .secondary
+                )
+            }
+            if let preamble = context.assistantPreamble {
+                row(
+                    label: String(localized: "feed.context.agent", defaultValue: "Agent"),
+                    text: preamble,
+                    color: Color.blue.opacity(0.85)
+                )
+            }
+            if let plan = context.planSummary {
+                row(
+                    label: String(localized: "feed.context.plan", defaultValue: "Plan"),
+                    text: plan,
+                    color: Color.purple.opacity(0.85)
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func row(label: String, text: String, color: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(color)
+                .frame(width: 38, alignment: .leading)
+            Text(text)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
 
 private struct PermissionActionArea: View {
     let toolName: String
@@ -971,10 +1015,19 @@ private struct ExitPlanActionArea: View {
         feedback.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     private var hasFeedback: Bool { !trimmedFeedback.isEmpty }
+    private var preview: WorkstreamExitPlanPreview {
+        WorkstreamExitPlanPreview(rawPlan: plan)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            PlanBodyView(plan: plan)
+            PlanBodyView(plan: preview.planText)
+            if !preview.allowedPrompts.isEmpty {
+                ExitPlanAllowedPromptsView(prompts: preview.allowedPrompts)
+            }
+            if let path = preview.planFilePath {
+                ExitPlanPlanFileView(path: path)
+            }
             if status.isPending {
                 TextField(
                     String(
@@ -1055,6 +1108,71 @@ private struct ExitPlanActionArea: View {
             return "\(submitted) · \(mode.displayLabel)"
         default:
             return submitted
+        }
+    }
+}
+
+private struct ExitPlanAllowedPromptsView: View {
+    let prompts: [WorkstreamAllowedPrompt]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: "checklist")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(Color.purple.opacity(0.85))
+                Text(String(localized: "feed.exitplan.allowedPrompts", defaultValue: "Allowed prompts"))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Color.purple.opacity(0.9))
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(Array(prompts.enumerated()), id: \.offset) { _, prompt in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        if !prompt.tool.isEmpty {
+                            Text(prompt.tool)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(.purple)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        .fill(Color.purple.opacity(0.14))
+                                )
+                        }
+                        Text(prompt.prompt)
+                            .font(.system(size: 11))
+                            .foregroundColor(.primary.opacity(0.86))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.purple.opacity(0.06))
+            )
+        }
+    }
+}
+
+private struct ExitPlanPlanFileView: View {
+    let path: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "doc.text")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.secondary)
+            Text(String(localized: "feed.exitplan.planFile", defaultValue: "Plan file"))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.secondary)
+            Text((path as NSString).lastPathComponent)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.secondary.opacity(0.85))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(path)
         }
     }
 }

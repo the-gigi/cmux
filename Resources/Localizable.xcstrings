@@ -91398,6 +91398,40 @@
         }
       }
     },
+    "feed.exitplan.allowedPrompts": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allowed prompts"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "許可されたプロンプト"
+          }
+        }
+      }
+    },
+    "feed.exitplan.planFile": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plan file"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "計画ファイル"
+          }
+        }
+      }
+    },
     "feed.exitplan.deny": {
       "extractionState": "manual",
       "localizations": {
@@ -91634,6 +91668,27 @@
             "value": "送信済み"
           }
         }
+      }
+    },
+    "feed.context.you": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "You" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "あなた" } }
+      }
+    },
+    "feed.context.agent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Agent" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "エージェント" } }
+      }
+    },
+    "feed.context.plan": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Plan" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "計画" } }
       }
     },
     "feed.promptEcho": {

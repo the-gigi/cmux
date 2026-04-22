@@ -125,6 +125,55 @@ struct WorkstreamStoreTests {
             Issue.record("expected todos payload")
         }
     }
+
+    @Test("Prompt context carries into later permission requests")
+    func promptContextCarriesIntoPermission() {
+        let store = WorkstreamStore(ringCapacity: 10)
+        store.ingest(WorkstreamEvent(
+            sessionId: "s1",
+            hookEventName: .userPromptSubmit,
+            source: "claude",
+            toolInputJSON: #"{"prompt":"demo the permission UI"}"#
+        ))
+        store.ingest(WorkstreamEvent(
+            sessionId: "s1",
+            hookEventName: .permissionRequest,
+            source: "claude",
+            toolName: "Bash",
+            toolInputJSON: #"{"command":"echo hi"}"#,
+            requestId: "r1"
+        ))
+
+        #expect(store.items[1].context?.lastUserMessage == "demo the permission UI")
+    }
+
+    @Test("Exit plan context parses plan JSON")
+    func exitPlanParsesContext() {
+        let store = WorkstreamStore(ringCapacity: 10)
+        store.ingest(WorkstreamEvent(
+            sessionId: "s1",
+            hookEventName: .exitPlanMode,
+            source: "claude",
+            toolName: "ExitPlanMode",
+            toolInputJSON: #"""
+            {
+              "plan": "# Demo Plan\n\n## Context\nShow the new feed UI.",
+              "allowedPrompts": [
+                {"tool": "Bash", "prompt": "run reload.sh --tag feedctx"}
+              ],
+              "planFilePath": "/tmp/demo.md"
+            }
+            """#,
+            context: WorkstreamContext(lastUserMessage: "make a plan"),
+            requestId: "plan-1"
+        ))
+
+        let item = store.items[0]
+        #expect(item.context?.lastUserMessage == "make a plan")
+        #expect(item.context?.planSummary == "Show the new feed UI.")
+        #expect(item.context?.allowedPrompts.first?.tool == "Bash")
+        #expect(item.context?.allowedPrompts.first?.prompt == "run reload.sh --tag feedctx")
+    }
 }
 
 /// Mutable clock wrapper safe to capture by a `@Sendable` closure in tests.

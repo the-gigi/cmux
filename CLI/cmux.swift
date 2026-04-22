@@ -13199,9 +13199,24 @@ struct CMUXCLI {
 
         if let toolInput = object["tool_input"] as? [String: Any] {
             var compactToolInput: [String: Any] = [:]
-            for key in ["file_path", "command", "pattern", "description", "query"] {
+            for key in ["file_path", "command", "pattern", "description", "query", "plan", "planFilePath"] {
                 if let value = compactClaudeHookToolInputValue(toolInput[key], key: key) {
                     compactToolInput[key] = value
+                }
+            }
+            if let allowedPrompts = toolInput["allowedPrompts"] as? [[String: Any]] {
+                let compactPrompts: [[String: String]] = allowedPrompts.compactMap { prompt in
+                    guard let promptText = compactClaudeHookStringValue(prompt["prompt"], maxLength: 220) else {
+                        return nil
+                    }
+                    var out: [String: String] = ["prompt": promptText]
+                    if let tool = compactClaudeHookStringValue(prompt["tool"], maxLength: 80) {
+                        out["tool"] = tool
+                    }
+                    return out
+                }
+                if !compactPrompts.isEmpty {
+                    compactToolInput["allowedPrompts"] = compactPrompts
                 }
             }
             if let questions = toolInput["questions"] as? [[String: Any]] {
@@ -13264,8 +13279,12 @@ struct CMUXCLI {
         switch key {
         case "file_path":
             return compactClaudeHookStringValue(rawValue, maxLength: 240, keepSuffix: true)
+        case "planFilePath":
+            return compactClaudeHookStringValue(rawValue, maxLength: 240, keepSuffix: true)
         case "command":
             return compactClaudeHookStringValue(rawValue, maxLength: 120)
+        case "plan":
+            return compactClaudeHookStringValue(rawValue, maxLength: 4_000)
         case "pattern", "query":
             return compactClaudeHookStringValue(rawValue, maxLength: 120)
         case "description":
@@ -14422,11 +14441,25 @@ struct CMUXCLI {
             "_ppid": ProcessInfo.processInfo.processIdentifier,
         ]
         if let cwd = parsedInput.cwd { event["cwd"] = cwd }
-        if let toolName = parsedInput.object?["tool_name"] as? String, !toolName.isEmpty {
+        let toolName = parsedInput.object?["tool_name"] as? String
+        if let toolName, !toolName.isEmpty {
             event["tool_name"] = toolName
         }
         if let toolInput = parsedInput.object?["tool_input"] {
             event["tool_input"] = toolInput
+        } else if hookEventName == "UserPromptSubmit",
+                  let prompt = feedPromptText(from: parsedInput.object) {
+            event["tool_input"] = ["prompt": prompt]
+        }
+        if let context = feedContextForEvent(
+            source: source,
+            hookEventName: hookEventName,
+            toolName: toolName,
+            toolInput: event["tool_input"],
+            rawObject: parsedInput.object,
+            transcriptPath: parsedInput.transcriptPath
+        ) {
+            event["context"] = context
         }
         event["_opencode_request_id"] = "\(source)-\(sessionId)-\(hookEventName)-\(Int(Date().timeIntervalSince1970 * 1000))"
 
@@ -14442,6 +14475,336 @@ struct CMUXCLI {
               let line = String(data: data, encoding: .utf8)
         else { return }
         _ = try? client.send(command: line)
+    }
+
+    private func feedContextForEvent(
+        source: String,
+        hookEventName: String,
+        toolName: String?,
+        toolInput: Any?,
+        rawObject: [String: Any]?,
+        transcriptPath: String?
+    ) -> [String: Any]? {
+        var context: [String: Any] = [:]
+
+        if let rawContext = rawObject?["context"] as? [String: Any] {
+            mergeFeedContext(&context, feedContext(from: rawContext))
+        }
+
+        if hookEventName == "UserPromptSubmit" {
+            setFeedContext(
+                &context,
+                key: "lastUserMessage",
+                value: feedPromptText(from: rawObject),
+                maxLength: 1_000
+            )
+        }
+
+        if let rawObject {
+            setFeedContext(
+                &context,
+                key: "assistantPreamble",
+                value: firstString(
+                    in: rawObject,
+                    keys: ["assistantPreamble", "assistant_preamble", "last_assistant_message", "lastAssistantMessage"]
+                ),
+                maxLength: 1_000
+            )
+        }
+
+        if source == "claude",
+           let transcriptPath,
+           shouldReadTranscriptForFeedContext(hookEventName: hookEventName),
+           let transcriptContext = readClaudeFeedContext(
+                path: transcriptPath,
+                matchingToolName: toolName
+           ) {
+            mergeFeedContext(&context, transcriptContext)
+        }
+
+        if let planContext = feedPlanContext(from: toolInput) {
+            mergeFeedContext(&context, planContext, preferIncoming: true)
+        }
+        if let toolContext = feedToolContext(toolName: toolName, toolInput: toolInput) {
+            mergeFeedContext(&context, toolContext)
+        }
+
+        return context.isEmpty ? nil : context
+    }
+
+    private func shouldReadTranscriptForFeedContext(hookEventName: String) -> Bool {
+        switch hookEventName {
+        case "PermissionRequest", "ExitPlanMode", "AskUserQuestion", "PreToolUse":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func feedPromptText(from object: [String: Any]?) -> String? {
+        guard let object else { return nil }
+        if let direct = firstString(in: object, keys: ["prompt", "text", "message", "body"]) {
+            return direct
+        }
+        for key in ["notification", "data"] {
+            if let nested = object[key] as? [String: Any],
+               let nestedPrompt = firstString(in: nested, keys: ["prompt", "text", "message", "body"]) {
+                return nestedPrompt
+            }
+        }
+        return nil
+    }
+
+    private func feedContext(from raw: [String: Any]) -> [String: Any] {
+        var context: [String: Any] = [:]
+        setFeedContext(
+            &context,
+            key: "lastUserMessage",
+            value: firstString(in: raw, keys: ["lastUserMessage", "last_user_message", "userPrompt", "prompt"]),
+            maxLength: 1_000
+        )
+        setFeedContext(
+            &context,
+            key: "assistantPreamble",
+            value: firstString(in: raw, keys: ["assistantPreamble", "assistant_preamble", "lastAssistantMessage", "last_assistant_message"]),
+            maxLength: 1_000
+        )
+        setFeedContext(
+            &context,
+            key: "planSummary",
+            value: firstString(in: raw, keys: ["planSummary", "plan_summary"]),
+            maxLength: 600
+        )
+        setFeedContext(
+            &context,
+            key: "toolSummary",
+            value: firstString(in: raw, keys: ["toolSummary", "tool_summary"]),
+            maxLength: 600
+        )
+        let allowed = feedAllowedPrompts(from: raw["allowedPrompts"] ?? raw["allowed_prompts"])
+        if !allowed.isEmpty {
+            context["allowedPrompts"] = allowed
+        }
+        return context
+    }
+
+    private func readClaudeFeedContext(
+        path: String,
+        matchingToolName: String?
+    ) -> [String: Any]? {
+        let expandedPath = NSString(string: path).expandingTildeInPath
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: expandedPath)),
+              let content = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+
+        var lastUserMessage: String?
+        var lastAssistantText: String?
+        var matchedContext: [String: Any]?
+
+        for line in content.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  let lineData = trimmed.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                  let message = obj["message"] as? [String: Any],
+                  let role = message["role"] as? String
+            else {
+                continue
+            }
+
+            if role == "user" {
+                if let text = extractMessageText(from: message) {
+                    lastUserMessage = truncate(normalizedSingleLine(text), maxLength: 1_000)
+                }
+                continue
+            }
+
+            guard role == "assistant" else { continue }
+            var messageText: String?
+            if let text = extractMessageText(from: message) {
+                messageText = truncate(normalizedSingleLine(text), maxLength: 1_000)
+                lastAssistantText = messageText
+            }
+
+            guard let blocks = message["content"] as? [[String: Any]] else { continue }
+            for block in blocks {
+                guard (block["type"] as? String) == "tool_use" else { continue }
+                let blockToolName = block["name"] as? String
+                if let matchingToolName, blockToolName != matchingToolName {
+                    continue
+                }
+
+                var context: [String: Any] = [:]
+                setFeedContext(
+                    &context,
+                    key: "lastUserMessage",
+                    value: lastUserMessage,
+                    maxLength: 1_000
+                )
+                setFeedContext(
+                    &context,
+                    key: "assistantPreamble",
+                    value: messageText ?? lastAssistantText,
+                    maxLength: 1_000
+                )
+                if let input = block["input"], let planContext = feedPlanContext(from: input) {
+                    mergeFeedContext(&context, planContext, preferIncoming: true)
+                }
+                matchedContext = context
+            }
+        }
+
+        if let matchedContext, !matchedContext.isEmpty {
+            return matchedContext
+        }
+
+        var fallback: [String: Any] = [:]
+        setFeedContext(&fallback, key: "lastUserMessage", value: lastUserMessage, maxLength: 1_000)
+        setFeedContext(&fallback, key: "assistantPreamble", value: lastAssistantText, maxLength: 1_000)
+        return fallback.isEmpty ? nil : fallback
+    }
+
+    private func feedPlanContext(from rawToolInput: Any?) -> [String: Any]? {
+        guard let dict = feedToolInputDictionary(rawToolInput),
+              let plan = firstString(in: dict, keys: ["plan"])
+        else {
+            return nil
+        }
+
+        var context: [String: Any] = [:]
+        setFeedContext(
+            &context,
+            key: "planSummary",
+            value: feedPlanSummary(from: plan),
+            maxLength: 600
+        )
+        let allowed = feedAllowedPrompts(from: dict["allowedPrompts"])
+        if !allowed.isEmpty {
+            context["allowedPrompts"] = allowed
+        }
+        return context.isEmpty ? nil : context
+    }
+
+    private func feedToolContext(toolName: String?, toolInput: Any?) -> [String: Any]? {
+        guard let toolName, let dict = feedToolInputDictionary(toolInput) else { return nil }
+        let lower = toolName.lowercased()
+        var summary: String?
+        if lower == "bash" {
+            summary = firstString(in: dict, keys: ["description", "command"])
+        } else if ["write", "edit", "multiedit", "read"].contains(lower) {
+            summary = firstString(in: dict, keys: ["file_path", "path"])
+        } else if lower == "askuserquestion" {
+            if let questions = dict["questions"] as? [[String: Any]],
+               let first = questions.first {
+                summary = firstString(in: first, keys: ["question", "prompt", "header"])
+            } else {
+                summary = firstString(in: dict, keys: ["question", "prompt"])
+            }
+        }
+        guard let summary else { return nil }
+        var context: [String: Any] = [:]
+        setFeedContext(&context, key: "toolSummary", value: summary, maxLength: 600)
+        return context.isEmpty ? nil : context
+    }
+
+    private func feedToolInputDictionary(_ raw: Any?) -> [String: Any]? {
+        if let dict = raw as? [String: Any] {
+            return dict
+        }
+        if let json = raw as? String,
+           let data = json.data(using: .utf8),
+           let dict = try? JSONSerialization.jsonObject(
+                with: data,
+                options: [.fragmentsAllowed]
+           ) as? [String: Any] {
+            return dict
+        }
+        return nil
+    }
+
+    private func feedAllowedPrompts(from raw: Any?) -> [[String: String]] {
+        guard let raw else { return [] }
+        if let rows = raw as? [[String: Any]] {
+            return rows.compactMap { row in
+                guard let prompt = firstString(in: row, keys: ["prompt", "description", "text"]) else {
+                    return nil
+                }
+                var out = ["prompt": truncate(normalizedSingleLine(prompt), maxLength: 260)]
+                if let tool = firstString(in: row, keys: ["tool", "toolName"]) {
+                    out["tool"] = truncate(normalizedSingleLine(tool), maxLength: 80)
+                }
+                return out
+            }
+        }
+        if let rows = raw as? [Any] {
+            return rows.compactMap { row in
+                if let text = row as? String {
+                    let prompt = truncate(normalizedSingleLine(text), maxLength: 260)
+                    return prompt.isEmpty ? nil : ["prompt": prompt]
+                }
+                guard let dict = row as? [String: Any] else { return nil }
+                guard let prompt = firstString(in: dict, keys: ["prompt", "description", "text"]) else {
+                    return nil
+                }
+                var out = ["prompt": truncate(normalizedSingleLine(prompt), maxLength: 260)]
+                if let tool = firstString(in: dict, keys: ["tool", "toolName"]) {
+                    out["tool"] = truncate(normalizedSingleLine(tool), maxLength: 80)
+                }
+                return out
+            }
+        }
+        return []
+    }
+
+    private func feedPlanSummary(from plan: String) -> String? {
+        var firstHeading: String?
+        for rawLine in plan.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            if line.hasPrefix("#") {
+                let heading = line.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+                if firstHeading == nil, !heading.isEmpty {
+                    firstHeading = heading
+                }
+                continue
+            }
+            if line.hasPrefix("- ") || line.hasPrefix("* ") {
+                return String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            }
+            if let dot = line.firstIndex(of: "."),
+               line[..<dot].allSatisfy(\.isNumber) {
+                return String(line[line.index(after: dot)...])
+                    .trimmingCharacters(in: .whitespaces)
+            }
+            return line
+        }
+        return firstHeading
+    }
+
+    private func setFeedContext(
+        _ context: inout [String: Any],
+        key: String,
+        value: String?,
+        maxLength: Int
+    ) {
+        guard let value else { return }
+        let normalized = normalizedSingleLine(value)
+        guard !normalized.isEmpty else { return }
+        context[key] = truncate(normalized, maxLength: maxLength)
+    }
+
+    private func mergeFeedContext(
+        _ target: inout [String: Any],
+        _ incoming: [String: Any],
+        preferIncoming: Bool = false
+    ) {
+        for (key, value) in incoming {
+            if preferIncoming || target[key] == nil {
+                target[key] = value
+            }
+        }
     }
 
     private static func feedEventName(forClaudeSubcommand sub: String) -> String {
@@ -14598,10 +14961,12 @@ struct CMUXCLI {
     /// Usage:
     ///   echo "<hook_json>" | cmux feed-hook --source <claude|codex|...>
     ///
-    /// Designed so agents and wrappers can point a single hook config
-    /// entry at it and have permission/plan/question events surface in
-    /// the Feed sidebar. The existing per-agent hook wrappers (e.g.
-    /// `claude-hook pre-tool-use`) are untouched — callers chain both.
+    /// Designed so agents and wrappers can point a native decision hook
+    /// at it and have permission/plan/question events surface in the
+    /// Feed sidebar. Agent-specific lifecycle/status hooks can be
+    /// chained separately. For Claude, `claude-hook pre-tool-use` is
+    /// async status-only telemetry; blocking decisions come through
+    /// PermissionRequest.
     private func runFeedHook(
         commandArgs: [String],
         client: SocketClient,
@@ -14644,6 +15009,7 @@ struct CMUXCLI {
         // events are forwarded as telemetry (non-blocking) and exit `{}`
         // so the agent proceeds without a decision.
         let (hookEventName, isActionable) = Self.classifyFeedEvent(
+            source: source,
             event: rawEvent,
             toolName: toolName
         )
@@ -14683,8 +15049,19 @@ struct CMUXCLI {
         if let toolInput = stdinObj["tool_input"] {
             eventDict["tool_input"] = toolInput
         }
+        if let context = feedContextForEvent(
+            source: source,
+            hookEventName: hookEventName,
+            toolName: toolName.isEmpty ? nil : toolName,
+            toolInput: eventDict["tool_input"],
+            rawObject: stdinObj,
+            transcriptPath: firstString(in: stdinObj, keys: ["transcript_path", "transcriptPath"])
+        ) {
+            eventDict["context"] = context
+        }
         let requestId = stdinObj["_opencode_request_id"] as? String
-            ?? "\(source)-\(sessionId)-\(rawEvent)-\(Int(Date().timeIntervalSince1970 * 1000))"
+            ?? firstString(in: stdinObj, keys: ["request_id", "tool_use_id", "toolUseID"])
+            ?? "\(source)-\(sessionId)-\(rawEvent)-\(toolName)-\(Int(Date().timeIntervalSince1970 * 1000))"
         eventDict["_opencode_request_id"] = requestId
 
         // Sync. For actionable events we block up to 120s waiting
@@ -14735,6 +15112,9 @@ struct CMUXCLI {
             let out = Self.renderAgentDecision(
                 source: source,
                 hookEventName: hookEventName,
+                toolName: toolName,
+                toolInput: eventDict["tool_input"],
+                rawObject: stdinObj,
                 decision: decision
             )
             print(out)
@@ -14745,13 +15125,42 @@ struct CMUXCLI {
 
     /// Classifies a raw agent hook event into our wire `hook_event_name`
     /// plus an `isActionable` flag that drives whether `feed-hook`
-    /// blocks waiting for a user decision. Mirrors Vibe Island's
-    /// behavior of surfacing every side-effecting tool as a
-    /// permission request, not just explicit Permission events.
+    /// blocks waiting for a user decision. Claude Code owns decisions
+    /// through its native PermissionRequest hook. Its PreToolUse hook is
+    /// telemetry/status only.
     private static func classifyFeedEvent(
+        source: String,
         event: String,
         toolName: String
     ) -> (String, Bool) {
+        if source == "claude" {
+            switch event {
+            case "PermissionRequest":
+                switch toolName {
+                case "ExitPlanMode":
+                    return ("ExitPlanMode", true)
+                case "AskUserQuestion":
+                    return ("AskUserQuestion", true)
+                default:
+                    return ("PermissionRequest", true)
+                }
+            case "PostToolUse":
+                return ("PostToolUse", false)
+            case "UserPromptSubmit":
+                return ("UserPromptSubmit", false)
+            case "SessionStart":
+                return ("SessionStart", false)
+            case "SessionEnd":
+                return ("SessionEnd", false)
+            case "Stop", "SubagentStop":
+                return ("Stop", false)
+            case "Notification":
+                return ("Notification", false)
+            default:
+                return ("PreToolUse", false)
+            }
+        }
+
         switch event {
         case "PreToolUse", "beforeShellExecution":
             switch toolName {
@@ -14809,6 +15218,9 @@ struct CMUXCLI {
     private static func renderAgentDecision(
         source: String,
         hookEventName: String,
+        toolName: String,
+        toolInput: Any?,
+        rawObject: [String: Any],
         decision: [String: Any]
     ) -> String {
         let kind = decision["kind"] as? String ?? ""
@@ -14822,22 +15234,34 @@ struct CMUXCLI {
             return s
         }
 
-        // Build a PreToolUse hook output that Claude Code 2.x honors
-        // directly — no TUI dance, no keystroke injection.
-        //
-        // Fields (from the binary's Zod schema for PreToolUse hooks):
-        //   - hookSpecificOutput.permissionDecision: "allow" | "deny" | "ask"
-        //   - hookSpecificOutput.permissionDecisionReason: string
-        //   - hookSpecificOutput.additionalContext: string (injected
-        //     into the model's context as a meta message)
-        //   - hookSpecificOutput.updatedInput: record (rewrites the
-        //     tool call's input before it runs; only for `allow`)
-        //
-        // Legacy fields mirrored for older Claude versions:
-        //   - decision: "approve" | "block"
-        //   - reason: string
-        //   - systemMessage: string
-        func preToolClaudeDecision(
+        func claudePermissionRequestDecision(
+            behavior: String,
+            message: String? = nil,
+            updatedInput: [String: Any]? = nil,
+            updatedPermissions: [[String: Any]]? = nil
+        ) -> [String: Any] {
+            var inner: [String: Any] = ["behavior": behavior]
+            if behavior == "deny" {
+                inner["message"] = message ?? "User denied permission via cmux Feed."
+            }
+            if let updatedInput, !updatedInput.isEmpty {
+                inner["updatedInput"] = updatedInput
+            }
+            if let updatedPermissions, !updatedPermissions.isEmpty {
+                inner["updatedPermissions"] = updatedPermissions
+            }
+            return [
+                "hookSpecificOutput": [
+                    "hookEventName": "PermissionRequest",
+                    "decision": inner,
+                ]
+            ]
+        }
+
+        // PreToolUse output for non-Claude agents that still use a
+        // PreToolUse-compatible permission bridge. Claude Code does not
+        // use this path.
+        func nonClaudePreToolDecision(
             permission: String,
             reason: String?,
             additionalContext: String? = nil,
@@ -14876,6 +15300,28 @@ struct CMUXCLI {
         switch kind {
         case "permission":
             let mode = decision["mode"] as? String ?? "deny"
+            if source == "claude" {
+                if mode == "deny" {
+                    return encode(claudePermissionRequestDecision(
+                        behavior: "deny",
+                        message: "User denied permission via cmux Feed."
+                    ))
+                }
+                var updatedPermissions: [[String: Any]]?
+                if mode == "always" || mode == "all" {
+                    updatedPermissions = rawObject["permission_suggestions"] as? [[String: Any]]
+                } else if mode == "bypass" {
+                    updatedPermissions = [[
+                        "type": "setMode",
+                        "mode": "bypassPermissions",
+                        "destination": "session",
+                    ]]
+                }
+                return encode(claudePermissionRequestDecision(
+                    behavior: "allow",
+                    updatedPermissions: updatedPermissions
+                ))
+            }
             if source == "codex" {
                 if mode == "deny" {
                     return encode([
@@ -14890,7 +15336,7 @@ struct CMUXCLI {
                 return encode(out)
             }
             if mode == "deny" {
-                return encode(preToolClaudeDecision(
+                return encode(nonClaudePreToolDecision(
                     permission: "deny",
                     reason: "User denied permission via cmux Feed."
                 ))
@@ -14899,32 +15345,58 @@ struct CMUXCLI {
             if mode == "always" || mode == "all" || mode == "bypass" {
                 reasonText = "User granted \(mode) permission via cmux Feed. Reduce subsequent approval prompts for similar calls."
             }
-            return encode(preToolClaudeDecision(
+            return encode(nonClaudePreToolDecision(
                 permission: "allow",
                 reason: reasonText
             ))
 
         case "exit_plan":
-            // ExitPlanMode is interactive: the tool itself shows a
-            // TUI selector for auto-accept / manual / bypass / deny.
-            // A PreToolUse `allow` lets the tool run, which still
-            // opens the TUI. The reliable intercept path is `deny`
-            // + a descriptive reason / additionalContext so Claude
-            // reads the user's choice as context and proceeds
-            // without re-entering plan mode.
             let mode = decision["mode"] as? String ?? "manual"
             let feedback = (decision["feedback"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            if source == "claude" {
+                if let feedback, !feedback.isEmpty {
+                    return encode(claudePermissionRequestDecision(
+                        behavior: "deny",
+                        message: "User rejected the plan via cmux Feed and wants this change: \(feedback)"
+                    ))
+                }
+                if mode == "deny" {
+                    return encode(claudePermissionRequestDecision(
+                        behavior: "deny",
+                        message: "User rejected the plan via cmux Feed."
+                    ))
+                }
+                var updatedPermissions: [[String: Any]]?
+                if mode == "autoAccept" {
+                    updatedPermissions = [[
+                        "type": "setMode",
+                        "mode": "acceptEdits",
+                        "destination": "session",
+                    ]]
+                } else if mode == "bypassPermissions" {
+                    updatedPermissions = [[
+                        "type": "setMode",
+                        "mode": "bypassPermissions",
+                        "destination": "session",
+                    ]]
+                }
+                return encode(claudePermissionRequestDecision(
+                    behavior: "allow",
+                    updatedInput: jsonDictionary(from: toolInput),
+                    updatedPermissions: updatedPermissions
+                ))
+            }
             if let feedback, !feedback.isEmpty {
                 let reason = "User rejected the plan via cmux Feed and wants this change: \(feedback)"
-                return encode(preToolClaudeDecision(
+                return encode(nonClaudePreToolDecision(
                     permission: "deny",
                     reason: reason,
                     additionalContext: reason
                 ))
             }
             if mode == "deny" {
-                return encode(preToolClaudeDecision(
+                return encode(nonClaudePreToolDecision(
                     permission: "deny",
                     reason: "User rejected the plan via cmux Feed."
                 ))
@@ -14939,22 +15411,24 @@ struct CMUXCLI {
                 modeText = "manual-approval mode (approve each edit)"
             }
             let ctx = "User accepted this plan via cmux Feed with \(modeText). Exit plan mode now and proceed to implement without re-entering ExitPlanMode. Do not ask again."
-            return encode(preToolClaudeDecision(
+            return encode(nonClaudePreToolDecision(
                 permission: "deny",
                 reason: ctx,
                 additionalContext: ctx
             ))
 
         case "question":
-            // AskUserQuestion isn't permission-gated, so
-            // `permissionDecision: allow/deny` only controls whether
-            // the tool runs at all. We deny (so the TUI prompt
-            // doesn't appear) and stuff the answer into
-            // `additionalContext`, which Claude Code injects into
-            // the model's context as a meta system message. That's
-            // how Claude "reads" the user's Feed answer without the
-            // tool actually running.
             let selections = decision["selections"] as? [String] ?? []
+            if source == "claude" {
+                let updatedInput = claudeAskUserQuestionInput(
+                    toolInput: toolInput,
+                    selections: selections
+                )
+                return encode(claudePermissionRequestDecision(
+                    behavior: "allow",
+                    updatedInput: updatedInput
+                ))
+            }
             let body: String
             if selections.isEmpty {
                 body = "The user submitted an empty answer."
@@ -14968,7 +15442,7 @@ struct CMUXCLI {
                 body = "The user answered:\n\(lines)"
             }
             let ctx = "[cmux Feed] \(body). Treat these as the user's response to your AskUserQuestion prompt; do not call AskUserQuestion again for the same question."
-            return encode(preToolClaudeDecision(
+            return encode(nonClaudePreToolDecision(
                 permission: "deny",
                 reason: ctx,
                 additionalContext: ctx
@@ -14976,8 +15450,41 @@ struct CMUXCLI {
 
         default:
             _ = hookEventName
+            _ = toolName
             return "{}"
         }
+    }
+
+    private static func jsonDictionary(from raw: Any?) -> [String: Any]? {
+        if let dict = raw as? [String: Any] { return dict }
+        if let str = raw as? String,
+           let data = str.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return obj
+        }
+        return nil
+    }
+
+    private static func claudeAskUserQuestionInput(
+        toolInput: Any?,
+        selections: [String]
+    ) -> [String: Any] {
+        var input = jsonDictionary(from: toolInput) ?? [:]
+        let questions = input["questions"] as? [[String: Any]] ?? []
+        var answers: [String: String] = [:]
+        for (idx, selection) in selections.enumerated() {
+            let key: String
+            if idx < questions.count,
+               let question = questions[idx]["question"] as? String,
+               !question.isEmpty {
+                key = question
+            } else {
+                key = "Answer \(idx + 1)"
+            }
+            answers[key] = selection
+        }
+        input["answers"] = answers
+        return input
     }
 
     // MARK: Convenience wrappers

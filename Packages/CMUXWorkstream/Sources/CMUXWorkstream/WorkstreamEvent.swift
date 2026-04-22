@@ -6,7 +6,7 @@ import Foundation
 /// Field names mirror Vibe Island's hook payload format exactly so existing
 /// agent payloads pass through untouched: `session_id`, `hook_event_name`,
 /// `cwd`, `tool_name`, `tool_input`, `_source`, `_ppid`,
-/// `_opencode_request_id`.
+/// `_opencode_request_id`. `context` is cmux-specific and optional.
 public struct WorkstreamEvent: Codable, Sendable, Equatable {
     public let sessionId: String
     public let hookEventName: HookEventName
@@ -14,6 +14,7 @@ public struct WorkstreamEvent: Codable, Sendable, Equatable {
     public let cwd: String?
     public let toolName: String?
     public let toolInputJSON: String?
+    public let context: WorkstreamContext?
     public let requestId: String?
     public let ppid: Int?
     public let receivedAt: Date
@@ -25,6 +26,7 @@ public struct WorkstreamEvent: Codable, Sendable, Equatable {
         cwd: String? = nil,
         toolName: String? = nil,
         toolInputJSON: String? = nil,
+        context: WorkstreamContext? = nil,
         requestId: String? = nil,
         ppid: Int? = nil,
         receivedAt: Date = Date()
@@ -35,6 +37,7 @@ public struct WorkstreamEvent: Codable, Sendable, Equatable {
         self.cwd = cwd
         self.toolName = toolName
         self.toolInputJSON = toolInputJSON
+        self.context = context
         self.requestId = requestId
         self.ppid = ppid
         self.receivedAt = receivedAt
@@ -65,6 +68,7 @@ public struct WorkstreamEvent: Codable, Sendable, Equatable {
         case cwd
         case toolName = "tool_name"
         case toolInputJSON = "tool_input"
+        case context
         case requestId = "_opencode_request_id"
         case ppid = "_ppid"
         case receivedAt = "_received_at"
@@ -77,6 +81,7 @@ public struct WorkstreamEvent: Codable, Sendable, Equatable {
         self.source = try c.decode(String.self, forKey: .source)
         self.cwd = try c.decodeIfPresent(String.self, forKey: .cwd)
         self.toolName = try c.decodeIfPresent(String.self, forKey: .toolName)
+        self.context = try c.decodeIfPresent(WorkstreamContext.self, forKey: .context)
         self.requestId = try c.decodeIfPresent(String.self, forKey: .requestId)
         self.ppid = try c.decodeIfPresent(Int.self, forKey: .ppid)
         self.receivedAt = try c.decodeIfPresent(Date.self, forKey: .receivedAt) ?? Date()
@@ -98,6 +103,7 @@ public struct WorkstreamEvent: Codable, Sendable, Equatable {
         try c.encode(source, forKey: .source)
         try c.encodeIfPresent(cwd, forKey: .cwd)
         try c.encodeIfPresent(toolName, forKey: .toolName)
+        try c.encodeIfPresent(context, forKey: .context)
         try c.encodeIfPresent(requestId, forKey: .requestId)
         try c.encodeIfPresent(ppid, forKey: .ppid)
         try c.encode(receivedAt, forKey: .receivedAt)

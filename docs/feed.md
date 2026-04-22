@@ -57,7 +57,7 @@ Installs Feed-relevant hooks for every supported CLI whose binary is on `PATH`:
 
 | Agent        | Config                                    | Feed trigger             |
 |--------------|-------------------------------------------|--------------------------|
-| Claude Code  | wrapper-injected                          | PreToolUse               |
+| Claude Code  | wrapper-injected                          | PermissionRequest        |
 | Codex        | `~/.codex/hooks.json`                     | PreToolUse               |
 | Cursor CLI   | `~/.cursor/hooks.json`                    | beforeShellExecution     |
 | Gemini       | `~/.gemini/settings.json`                 | PreToolUse               |
@@ -84,24 +84,24 @@ Agents without a binary on `PATH` are skipped at install time — `cmux setup-ho
 
 | Mode   | What cmux sends back to the agent                                             |
 |--------|--------------------------------------------------------------------------------|
-| Once   | `{"decision": "approve"}` — agent runs the tool once and keeps prompting.     |
-| Always | `"approve"` + `systemMessage` hinting the agent to stop asking for similar ops.|
-| All tools | `"approve"` + `systemMessage` hinting global auto-approval.                 |
-| Bypass | `"approve"` + `systemMessage` / Codex `remember: always`.                      |
-| Deny   | `{"decision": "block", "reason": "User denied permission."}`                   |
+| Once   | Allow once through the agent's native permission hook.                         |
+| Always | Allow and apply the agent's suggested persistent permission rule when present. |
+| All tools | Allow and apply the agent's suggested persistent permission rule when present. |
+| Bypass | Allow and request session-level bypass mode when the agent supports it.        |
+| Deny   | Deny through the agent's native permission hook.                               |
 
 **Plan-mode decisions**
 
-| Mode              | `systemMessage`                                           |
+| Mode              | Behavior                                                  |
 |-------------------|-----------------------------------------------------------|
-| Bypass Permissions| "User chose bypass-permissions mode."                     |
-| Auto-accept Edits | "User chose auto-accept edits."                           |
-| Manual            | "User accepted the plan; continue per-edit approval."     |
-| Deny              | `{"decision": "block", "reason": "User rejected the plan."}` |
+| Bypass Permissions| Allow the plan and request session-level bypass mode.     |
+| Auto-accept Edits | Allow the plan and request session-level accept-edits mode. |
+| Manual            | Allow the plan.                                           |
+| Deny              | Deny with the user's rejection or feedback message.       |
 
 **AskUserQuestion**
 
-Replies carry `toolResult: { selections: [...] }` with the chosen option ids. Multi-select questions accept an array; single-select returns a single-element array.
+For Claude Code, AskUserQuestion is answered by allowing the PermissionRequest with an updated tool input containing the selected answers. Other agents use their native question reply shape where available.
 
 ## Timeout behavior
 

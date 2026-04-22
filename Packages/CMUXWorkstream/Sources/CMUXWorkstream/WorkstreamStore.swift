@@ -47,6 +47,11 @@ public final class WorkstreamStore {
     /// correct blocking hook.
     private var itemIdToRequestId: [UUID: String] = [:]
 
+    /// Last known conversational context for each workstream. Tool hooks
+    /// usually arrive without the surrounding user prompt, so the store
+    /// carries forward prompt/preamble context from nearby telemetry rows.
+    private var lastContextByWorkstream: [String: WorkstreamContext] = [:]
+
     public init(
         transport: any WorkstreamTransport = NullWorkstreamTransport(),
         persistence: WorkstreamPersistence? = nil,
@@ -67,6 +72,7 @@ public final class WorkstreamStore {
             if let recent = try? await persistence.loadRecent(limit: ringCapacity) {
                 items = recent
                 rebuildRequestIdIndex()
+                rebuildContextIndex()
             }
         }
         do {
@@ -94,6 +100,7 @@ public final class WorkstreamStore {
             requestIdToItemId[requestId] = item.id
             itemIdToRequestId[item.id] = requestId
         }
+        updateContextIndex(with: item)
         if let persistence {
             Task { [persistence, item] in
                 try? await persistence.append(item)
@@ -204,6 +211,7 @@ public final class WorkstreamStore {
             title: defaultTitle(for: event),
             status: status,
             payload: payload,
+            context: context(for: event, payload: payload),
             ppid: event.ppid
         )
     }
@@ -297,7 +305,11 @@ public final class WorkstreamStore {
                 .toolResult(toolName: event.toolName ?? "", resultJSON: toolInput, isError: false)
             )
         case .userPromptSubmit:
-            return (.userPrompt, .userPrompt(text: Self.promptText(from: event.toolInputJSON)))
+            let prompt = Self.promptText(from: event.toolInputJSON)
+            return (
+                .userPrompt,
+                .userPrompt(text: prompt.isEmpty ? (event.context?.lastUserMessage ?? "") : prompt)
+            )
         case .sessionStart:
             return (.sessionStart, .sessionStart)
         case .sessionEnd:
@@ -382,6 +394,66 @@ public final class WorkstreamStore {
                 ?? ""
         }
         return json ?? ""
+    }
+
+    private func rebuildContextIndex() {
+        lastContextByWorkstream.removeAll(keepingCapacity: true)
+        for item in items.sorted(by: { $0.createdAt < $1.createdAt }) {
+            updateContextIndex(with: item)
+        }
+    }
+
+    private func context(for event: WorkstreamEvent, payload: WorkstreamPayload) -> WorkstreamContext? {
+        let fallback = lastContextByWorkstream[event.sessionId]
+        var context = event.context?.mergingMissing(from: fallback) ?? fallback
+
+        switch payload {
+        case .userPrompt(let text):
+            context = WorkstreamContext(lastUserMessage: text).mergingMissing(from: context)
+        case .assistantMessage(let text):
+            context = WorkstreamContext(assistantPreamble: text).mergingMissing(from: context)
+        case .exitPlan(_, let plan, _):
+            let preview = WorkstreamExitPlanPreview(rawPlan: plan)
+            context = WorkstreamContext(
+                planSummary: preview.summary,
+                allowedPrompts: preview.allowedPrompts
+            )
+            .mergingMissing(from: context)
+        default:
+            break
+        }
+
+        guard let context, !context.isEmpty else { return nil }
+        return context
+    }
+
+    private func updateContextIndex(with item: WorkstreamItem) {
+        let current = lastContextByWorkstream[item.workstreamId]
+        var next: WorkstreamContext?
+
+        if let context = item.context {
+            next = Self.carriedContext(from: context)?.mergingMissing(from: current)
+        }
+
+        switch item.payload {
+        case .userPrompt(let text):
+            next = WorkstreamContext(lastUserMessage: text).mergingMissing(from: current)
+        case .assistantMessage(let text):
+            next = WorkstreamContext(assistantPreamble: text).mergingMissing(from: current)
+        default:
+            break
+        }
+
+        guard let next, !next.isEmpty else { return }
+        lastContextByWorkstream[item.workstreamId] = next
+    }
+
+    private static func carriedContext(from context: WorkstreamContext) -> WorkstreamContext? {
+        let carried = WorkstreamContext(
+            lastUserMessage: context.lastUserMessage,
+            assistantPreamble: context.assistantPreamble
+        )
+        return carried.isEmpty ? nil : carried
     }
 
     private static func stopReason(from json: String?) -> String? {

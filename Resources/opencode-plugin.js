@@ -14,6 +14,35 @@ export const CMUXFeed = async (ctx) => {
   let client = null;
   let buffered = "";
   const pending = new Map();
+  const messageRoles = new Map();
+  const sessions = new Map();
+
+  const normalizeText = (value, max = 1000) => {
+    if (typeof value !== "string") return null;
+    const normalized = value.replace(/\s+/g, " ").trim();
+    if (!normalized) return null;
+    return normalized.length > max ? `${normalized.slice(0, max - 1)}…` : normalized;
+  };
+
+  const sessionState = (sessionId) => {
+    const key = sessionId || "unknown";
+    if (!sessions.has(key)) {
+      sessions.set(key, {
+        lastUserMessage: null,
+        assistantPreamble: null,
+        cwd: null,
+      });
+    }
+    return sessions.get(key);
+  };
+
+  const contextForSession = (sessionId) => {
+    const state = sessionState(sessionId);
+    const context = {};
+    if (state.lastUserMessage) context.lastUserMessage = state.lastUserMessage;
+    if (state.assistantPreamble) context.assistantPreamble = state.assistantPreamble;
+    return Object.keys(context).length > 0 ? context : undefined;
+  };
 
   const resolvePending = (requestId, value) => {
     if (!requestId || !pending.has(requestId)) return;
@@ -83,13 +112,57 @@ export const CMUXFeed = async (ctx) => {
     }
   };
 
-  const base = (sessionId, extra) => ({
-    session_id: `opencode-${sessionId}`,
-    _source: "opencode",
-    _ppid: process.pid,
-    cwd: ctx?.directory,
-    ...extra,
-  });
+  const base = (sessionId, extra) => {
+    const state = sessionState(sessionId);
+    const context = extra?.context || contextForSession(sessionId);
+    const event = {
+      session_id: `opencode-${sessionId}`,
+      _source: "opencode",
+      _ppid: process.pid,
+      cwd: extra?.cwd || state.cwd || ctx?.directory,
+      ...extra,
+    };
+    if (context) event.context = context;
+    return event;
+  };
+
+  const trackMessage = (event) => {
+    const props = event.properties || {};
+    if (event.type === "message.updated") {
+      const info = props.info || props.message || {};
+      const messageId = info.id || props.messageID;
+      const sessionId = info.sessionID || props.sessionID;
+      const role = info.role || props.role;
+      if (messageId && sessionId && role) {
+        messageRoles.set(messageId, { sessionId, role });
+        if (messageRoles.size > 300) {
+          messageRoles.delete(messageRoles.keys().next().value);
+        }
+      }
+      return null;
+    }
+
+    if (event.type !== "message.part.updated") return null;
+    const part = props.part || {};
+    if (part.type !== "text" || !part.messageID) return null;
+    const meta = messageRoles.get(part.messageID);
+    if (!meta) return null;
+    const text = normalizeText(part.text || part.textDelta || part.content);
+    if (!text) return null;
+    const state = sessionState(meta.sessionId);
+    if (meta.role === "user") {
+      state.lastUserMessage = text;
+      return base(meta.sessionId, {
+        hook_event_name: "UserPromptSubmit",
+        tool_input: { prompt: text },
+        context: { lastUserMessage: text },
+      });
+    }
+    if (meta.role === "assistant") {
+      state.assistantPreamble = text;
+    }
+    return null;
+  };
 
   const pushBlocking = (event, requestId) => {
     const reply = new Promise((resolve) => {
@@ -122,11 +195,19 @@ export const CMUXFeed = async (ctx) => {
 
   return {
     event: async ({ event }) => {
+      const tracked = trackMessage(event);
+      if (tracked) {
+        pushTelemetry(tracked);
+        return;
+      }
       switch (event.type) {
         case "session.created": {
           const info = event.properties?.info || {};
+          const state = sessionState(info.id || "unknown");
+          state.cwd = info.directory || ctx?.directory || state.cwd;
           pushTelemetry(base(info.id || "unknown", {
             hook_event_name: "SessionStart",
+            cwd: state.cwd,
           }));
           break;
         }
@@ -141,6 +222,7 @@ export const CMUXFeed = async (ctx) => {
         case "session.deleted": {
           const sid = event.properties?.info?.id;
           if (!sid) break;
+          sessions.delete(sid);
           pushTelemetry(base(sid, {
             hook_event_name: "SessionEnd",
           }));
@@ -178,6 +260,31 @@ export const CMUXFeed = async (ctx) => {
               });
             } catch (e) { /* ignore — opencode already moved on */ }
           }
+          break;
+        }
+        case "question.asked": {
+          const props = event.properties || {};
+          const requestId = props.id;
+          const sid = props.sessionID || "unknown";
+          if (!requestId) break;
+          const questions = (props.questions || []).map((q, idx) => ({
+            id: q.id || `q${idx}`,
+            header: q.header || q.title,
+            question: q.question || q.prompt || "",
+            multiSelect: q.multiSelect || q.multiple || false,
+            options: (q.options || []).map((o, optionIdx) => ({
+              id: o.id || `opt${optionIdx}`,
+              label: o.label || o.title || String(o),
+              description: o.description || o.detail,
+            })),
+          }));
+          const frame = base(sid, {
+            hook_event_name: "AskUserQuestion",
+            _opencode_request_id: requestId,
+            tool_name: "AskUserQuestion",
+            tool_input: { questions },
+          });
+          await pushBlocking(frame, requestId);
           break;
         }
         default:

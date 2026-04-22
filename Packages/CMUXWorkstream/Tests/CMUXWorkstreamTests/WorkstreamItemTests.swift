@@ -39,7 +39,8 @@ struct WorkstreamItemTests {
                 toolName: "shell",
                 toolInputJSON: "{\"cmd\":\"rm -rf /\"}",
                 pattern: "dangerous"
-            )
+            ),
+            context: WorkstreamContext(lastUserMessage: "please clean up")
         )
         let encoded = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(WorkstreamItem.self, from: encoded)
