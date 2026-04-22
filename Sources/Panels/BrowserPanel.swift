@@ -2058,7 +2058,6 @@ final class BrowserPanel: Panel, ObservableObject {
 
         const snapshot = (el) => {
           if (!isEditable(el)) {
-            syncState(null);
             return;
           }
           const state = {
@@ -2910,12 +2909,13 @@ final class BrowserPanel: Panel, ObservableObject {
         )
         // Track the last editable focused element continuously so browser chrome
         // exit can restore page input focus after native first-responder handoff.
-        // Main frame only — same CAPTCHA interference concern as telemetry hooks.
+        // Main frame only so CAPTCHA frames do not observe cmux focus globals.
         configuration.userContentController.addUserScript(
             WKUserScript(
                 source: Self.webContentFocusTrackingBootstrapScript,
                 injectionTime: .atDocumentStart,
-                forMainFrameOnly: true
+                forMainFrameOnly: true,
+                in: .page
             )
         )
         // WebAuthn can originate from same-origin child frames. The native
