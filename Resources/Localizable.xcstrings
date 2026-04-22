@@ -92090,6 +92090,76 @@
         "ja": { "stringUnit": { "state": "translated", "value": "リセット" } }
       }
     },
+    "feed.buttonDebug.palette": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Palette" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "パレット" } }
+      }
+    },
+    "feed.buttonDebug.palette.system": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "System" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "システム" } }
+      }
+    },
+    "feed.buttonDebug.palette.glassNeutral": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Glass Neutral" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "Glassニュートラル" } }
+      }
+    },
+    "feed.buttonDebug.palette.graphite": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Graphite" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "グラファイト" } }
+      }
+    },
+    "feed.buttonDebug.palette.aqua": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Aqua" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "アクア" } }
+      }
+    },
+    "feed.buttonDebug.palette.orchard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Orchard" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "オーチャード" } }
+      }
+    },
+    "feed.buttonDebug.palette.ember": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Ember" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "エンバー" } }
+      }
+    },
+    "feed.buttonDebug.palette.contrast": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Contrast" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "コントラスト" } }
+      }
+    },
+    "feed.buttonDebug.palette.light": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Light" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ライト" } }
+      }
+    },
+    "feed.buttonDebug.palette.dark": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Dark" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ダーク" } }
+      }
+    },
     "feed.buttonDebug.style": {
       "extractionState": "manual",
       "localizations": {

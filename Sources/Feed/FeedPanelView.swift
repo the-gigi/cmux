@@ -915,6 +915,7 @@ struct FeedButton: View {
     var dimmed: Bool = false
     let action: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isHovered: Bool = false
 #if DEBUG
     @AppStorage(FeedButtonDebugSettings.generationKey) private var debugStyleGeneration = 0
@@ -1048,7 +1049,11 @@ struct FeedButton: View {
     }
 
     private var systemGlassForeground: Color {
-        if let color = FeedButtonDebugSettings.color(for: kind, role: .foreground) {
+        if let color = FeedButtonDebugSettings.color(
+            for: kind,
+            role: .foreground,
+            colorScheme: colorScheme
+        ) {
             return color
         }
 
@@ -1102,7 +1107,11 @@ struct FeedButton: View {
     private var foreground: Color {
 #if DEBUG
         _ = debugStyleGeneration
-        if let color = FeedButtonDebugSettings.color(for: kind, role: .foreground) {
+        if let color = FeedButtonDebugSettings.color(
+            for: kind,
+            role: .foreground,
+            colorScheme: colorScheme
+        ) {
             return color
         }
 #endif
@@ -1124,7 +1133,8 @@ struct FeedButton: View {
         _ = debugStyleGeneration
         if let color = FeedButtonDebugSettings.color(
             for: kind,
-            role: isHovered ? .hoverBackground : .background
+            role: isHovered ? .hoverBackground : .background,
+            colorScheme: colorScheme
         ) {
             return color
         }
@@ -1164,7 +1174,8 @@ struct FeedButton: View {
         _ = debugStyleGeneration
         if let color = FeedButtonDebugSettings.color(
             for: kind,
-            role: isHovered ? .hoverBackground : .background
+            role: isHovered ? .hoverBackground : .background,
+            colorScheme: colorScheme
         ) {
             return color
         }
