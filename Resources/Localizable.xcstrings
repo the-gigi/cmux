@@ -91449,6 +91449,23 @@
         }
       }
     },
+    "rightSidebar.extensionDemo.registrationSettlingStatus": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bundled demo extension is installed. Waiting for macOS registration."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バンドル済みのデモ拡張機能はインストールされています。macOSの登録を待機しています。"
+          }
+        }
+      }
+    },
     "rightSidebar.extensionDemo.refresh": {
       "extractionState": "manual",
       "localizations": {
@@ -91530,6 +91547,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "拡張機能は登録されていますが、まだ利用できません。"
+          }
+        }
+      }
+    },
+    "rightSidebar.extensionDemo.waitingForBundledDemo": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bundled demo extension is installed. Waiting for macOS to finish registration."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バンドル済みのデモ拡張機能はインストールされています。macOSの登録完了を待機しています。"
           }
         }
       }

@@ -1,4 +1,4 @@
-#if compiler(>=6.3)
+#if compiler(>=6.3) && canImport(ExtensionFoundation) && canImport(ExtensionKit)
 import AppKit
 import ExtensionFoundation
 import ExtensionKit
@@ -14,7 +14,7 @@ enum RightSidebarExtensionPoint {
         "com.cmuxterm.app.extkit.right-sidebar-panel",
         "com.cmuxterm.right-sidebar-panel",
     ]
-    static let legacyDiscoveryIdentifiers: [String] = [
+    static let matchingDiscoveryIdentifiers: [String] = [
         identifier,
         productionIdentifier,
         legacyIdentifier,
@@ -31,6 +31,7 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
         defaultValue: "Ready"
     )
     @Published var isLoading: Bool = false
+    @Published var isBundledDemoExtensionPresent: Bool = RightSidebarExtensionDemoStore.bundledDemoExtensionExists()
 
     private var monitor: Any?
     private var reloadGeneration = 0
@@ -49,6 +50,7 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
         reloadGeneration += 1
         let generation = reloadGeneration
         isLoading = true
+        isBundledDemoExtensionPresent = Self.bundledDemoExtensionExists()
         statusMessage = String(
             localized: "rightSidebar.extensionDemo.loading",
             defaultValue: "Looking for demo extensions..."
@@ -61,7 +63,7 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
 
     private func loadIdentities(generation: Int) async {
         do {
-            await registerBundledDemoExtensionIfNeeded()
+            startBundledDemoRegistrationIfNeeded(generation: generation)
 
             if #available(macOS 26.0, *) {
                 let monitor = AppExtensionPoint.Monitor()
@@ -72,10 +74,25 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
                 self.monitor = monitor
                 observeMonitor(monitor)
                 guard generation == reloadGeneration else { return }
-                applyMonitorState(monitor.state)
+                let monitorState = monitor.state
+                if monitorState.identities.isEmpty {
+                    let matchingIdentities = (try? await loadMatchingIdentities()) ?? []
+                    guard generation == reloadGeneration else { return }
+                    if matchingIdentities.isEmpty {
+                        applyMonitorState(monitorState)
+                    } else {
+                        applyDiscoveredIdentities(
+                            matchingIdentities,
+                            disabledCount: monitorState.disabledCount,
+                            unapprovedCount: monitorState.unapprovedCount
+                        )
+                    }
+                } else {
+                    applyMonitorState(monitorState)
+                }
             } else {
                 self.monitor = nil
-                let discoveredIdentities = try await loadLegacyIdentities()
+                let discoveredIdentities = try await loadMatchingIdentities()
                 guard generation == reloadGeneration else { return }
                 applyDiscoveredIdentities(discoveredIdentities)
             }
@@ -107,6 +124,7 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
         disabledCount: Int = 0,
         unapprovedCount: Int = 0
     ) {
+        isBundledDemoExtensionPresent = Self.bundledDemoExtensionExists()
         let sortedIdentities = uniqueIdentities(discoveredIdentities).sorted {
             $0.localizedName.localizedCaseInsensitiveCompare($1.localizedName) == .orderedAscending
         }
@@ -135,7 +153,12 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
         }
 
         if sortedIdentities.isEmpty {
-            if disabledCount > 0 || unapprovedCount > 0 {
+            if isBundledDemoExtensionPresent {
+                statusMessage = String(
+                    localized: "rightSidebar.extensionDemo.registrationSettlingStatus",
+                    defaultValue: "Bundled demo extension is installed. Waiting for macOS registration."
+                )
+            } else if disabledCount > 0 || unapprovedCount > 0 {
                 statusMessage = String(
                     localized: "rightSidebar.extensionDemo.unavailableStatus",
                     defaultValue: "Extension is registered but not available yet."
@@ -192,9 +215,9 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
     }
 
     @available(macOS, introduced: 13.0, deprecated: 26.0, message: "Use AppExtensionPoint.Monitor")
-    private func loadLegacyIdentities() async throws -> [AppExtensionIdentity] {
+    private func loadMatchingIdentities() async throws -> [AppExtensionIdentity] {
         var discoveredIdentities: [AppExtensionIdentity] = []
-        for identifier in RightSidebarExtensionPoint.legacyDiscoveryIdentifiers {
+        for identifier in RightSidebarExtensionPoint.matchingDiscoveryIdentifiers {
             let identities = try AppExtensionIdentity.matching(appExtensionPointIDs: identifier)
             var iterator = identities.makeAsyncIterator()
             discoveredIdentities.append(contentsOf: await iterator.next() ?? [])
@@ -202,10 +225,10 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
         return uniqueIdentities(discoveredIdentities)
     }
 
-    private func registerBundledDemoExtensionIfNeeded() async {
+    private func startBundledDemoRegistrationIfNeeded(generation: Int) {
         #if DEBUG
         // Tagged dev builds are copied under DerivedData, so make OS registration idempotent
-        // before asking ExtensionKit for the monitor snapshot.
+        // without blocking ExtensionKit monitor setup on Launch Services or pluginkit.
         let appURL = Bundle.main.bundleURL
         let extensionURL = Self.bundledDemoExtensionURL
 
@@ -213,7 +236,7 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
             return
         }
 
-        await Task.detached(priority: .utility) {
+        Task.detached(priority: .utility) {
             _ = Self.runProcess(
                 executablePath: "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
                 arguments: ["-f", appURL.path]
@@ -222,7 +245,21 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
                 executablePath: "/usr/bin/pluginkit",
                 arguments: ["-a", extensionURL.path]
             )
-        }.value
+            Task { @MainActor [weak self] in
+                guard let self, generation == self.reloadGeneration else {
+                    return
+                }
+
+                let matchingIdentities = (try? await self.loadMatchingIdentities()) ?? []
+                guard generation == self.reloadGeneration else {
+                    return
+                }
+
+                if self.identities.isEmpty || !matchingIdentities.isEmpty {
+                    self.applyDiscoveredIdentities(matchingIdentities)
+                }
+            }
+        }
         #endif
     }
 
@@ -230,6 +267,8 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
 
         do {
             try process.run()
@@ -318,60 +357,76 @@ struct RightSidebarExtensionDemoPanelView: View {
 
             if store.identities.isEmpty {
                 Spacer(minLength: 0)
-                VStack(spacing: 9) {
-                    Image(systemName: "exclamationmark.magnifyingglass")
-                        .font(.system(size: 21))
-                        .foregroundStyle(.secondary)
-                    Text(String(
-                        localized: "rightSidebar.extensionDemo.noExtensions",
-                        defaultValue: "No ExtensionKit demo extension is registered yet."
-                    ))
-                    .font(.system(size: 12))
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
-                    Text(String(
-                        localized: "rightSidebar.extensionDemo.copyPromptHint",
-                        defaultValue: "Copy a starter prompt and paste it into your AI agent to generate a sidebar extension."
-                    ))
-                    .font(.system(size: 11))
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                    HStack(spacing: 8) {
-                        Button {
-                            copyStarterPrompt()
-                        } label: {
-                            Label(
-                                String(localized: "rightSidebar.extensionDemo.copyPrompt", defaultValue: "Copy extension prompt"),
-                                systemImage: "doc.on.clipboard"
-                            )
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-
-                        Button {
-                            isPromptInfoPresented.toggle()
-                        } label: {
-                            Image(systemName: "info.circle")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        .buttonStyle(.plain)
-                        .controlSize(.small)
-                        .help(String(
-                            localized: "rightSidebar.extensionDemo.promptInfo",
-                            defaultValue: "About this prompt"
+                if store.isBundledDemoExtensionPresent {
+                    VStack(spacing: 9) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(String(
+                            localized: "rightSidebar.extensionDemo.waitingForBundledDemo",
+                            defaultValue: "Bundled demo extension is installed. Waiting for macOS to finish registration."
                         ))
-                        .popover(isPresented: $isPromptInfoPresented, arrowEdge: .trailing) {
-                            ExtensionPromptInfoPopover(
-                                prompt: Self.starterPrompt,
-                                copyAction: copyStarterPrompt
-                            )
+                        .font(.system(size: 12))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 6)
+                    .frame(maxWidth: .infinity)
+                } else {
+                    VStack(spacing: 9) {
+                        Image(systemName: "exclamationmark.magnifyingglass")
+                            .font(.system(size: 21))
+                            .foregroundStyle(.secondary)
+                        Text(String(
+                            localized: "rightSidebar.extensionDemo.noExtensions",
+                            defaultValue: "No ExtensionKit demo extension is registered yet."
+                        ))
+                        .font(.system(size: 12))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                        Text(String(
+                            localized: "rightSidebar.extensionDemo.copyPromptHint",
+                            defaultValue: "Copy a starter prompt and paste it into your AI agent to generate a sidebar extension."
+                        ))
+                        .font(.system(size: 11))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                        HStack(spacing: 8) {
+                            Button {
+                                copyStarterPrompt()
+                            } label: {
+                                Label(
+                                    String(localized: "rightSidebar.extensionDemo.copyPrompt", defaultValue: "Copy extension prompt"),
+                                    systemImage: "doc.on.clipboard"
+                                )
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                            Button {
+                                isPromptInfoPresented.toggle()
+                            } label: {
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .buttonStyle(.plain)
+                            .controlSize(.small)
+                            .help(String(
+                                localized: "rightSidebar.extensionDemo.promptInfo",
+                                defaultValue: "About this prompt"
+                            ))
+                            .popover(isPresented: $isPromptInfoPresented, arrowEdge: .trailing) {
+                                ExtensionPromptInfoPopover(
+                                    prompt: Self.starterPrompt,
+                                    copyAction: copyStarterPrompt
+                                )
+                            }
                         }
                     }
+                    .padding(.horizontal, 6)
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 6)
-                .frame(maxWidth: .infinity)
                 Spacer(minLength: 0)
             } else {
                 Picker(

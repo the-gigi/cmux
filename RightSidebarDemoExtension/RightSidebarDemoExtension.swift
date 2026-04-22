@@ -1,4 +1,4 @@
-#if compiler(>=6.3)
+#if compiler(>=6.3) && canImport(ExtensionFoundation) && canImport(ExtensionKit)
 import ExtensionFoundation
 import ExtensionKit
 import Foundation
