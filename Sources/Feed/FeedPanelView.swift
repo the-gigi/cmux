@@ -38,8 +38,8 @@ private extension WorkstreamExitPlanMode {
 
 /// Right-sidebar Feed view. Matches the Sessions page visual language:
 /// compact rows with SF Symbol + 13pt title + secondary metadata,
-/// rounded-rect hover backgrounds with 6px inset, and control-bar
-/// pill buttons styled like `GroupingButton` in `SessionIndexView`.
+/// full-width hover backgrounds, and control-bar pill buttons styled
+/// like `GroupingButton` in `SessionIndexView`.
 ///
 /// Pending items float above resolved; telemetry is hidden unless the
 /// user flips the Actionable / All filter. Rows receive immutable
@@ -368,7 +368,7 @@ struct FeedItemRow: View {
     @State private var isHovered = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 6) {
             chipHeader
             if let context = displayContext {
                 FeedContextBlock(context: context, source: snapshot.source)
@@ -381,8 +381,6 @@ struct FeedItemRow: View {
             }
             actionArea
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(isResolvedOrExpired ? 0.6 : 1.0)
         .contentShape(Rectangle())
@@ -403,10 +401,8 @@ struct FeedItemRow: View {
     }
 
     private var rowHoverBackground: some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        Rectangle()
             .fill(isHovered ? hoverFill : Color.clear)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
     }
 
     private var hoverFill: Color {
