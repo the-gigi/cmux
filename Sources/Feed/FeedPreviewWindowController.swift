@@ -125,7 +125,9 @@ private struct FeedPreviewCardHost: View {
                 item: item,
                 userPromptEcho: "make a plan and ask me for permissions requests…"
             ),
-            actions: FeedPreviewActions.make()
+            actions: FeedPreviewActions.make(),
+            onSelect: {},
+            onActivate: {}
         )
     }
 }

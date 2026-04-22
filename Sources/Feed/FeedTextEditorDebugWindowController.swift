@@ -159,7 +159,8 @@ private struct FeedTextEditorDebugView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .lineSpacing(0)
                 .padding(.horizontal, 9)
-                .padding(.vertical, 7)
+                .padding(.top, 9)
+                .padding(.bottom, 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .opacity(0)
                 .background(
@@ -171,7 +172,8 @@ private struct FeedTextEditorDebugView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .scrollContentBackground(.hidden)
                 .padding(.horizontal, 4)
-                .padding(.vertical, 3)
+                .padding(.top, 5)
+                .padding(.bottom, 3)
                 .frame(height: max(34, mirrorHeight))
         }
         .background(editorBackground)

@@ -156,10 +156,12 @@ private struct FeedListView: View {
     let items: [WorkstreamItem]
 
     @State private var hoveredItemId: UUID?
+    @State private var selectedItemId: UUID?
 
     var body: some View {
         let visible = filtered(items)
         let lastPromptByWorkstream = Self.lastPromptByWorkstream(items)
+        let rowActions = FeedRowActions.bound()
         if visible.isEmpty {
             emptyState
         } else {
@@ -174,10 +176,18 @@ private struct FeedListView: View {
                         userPromptEcho: lastPromptByWorkstream[item.workstreamId]
                     )
                     let isHovered = hoveredItemId == item.id
+                    let isSelected = selectedItemId == item.id
                     VStack(spacing: 0) {
                         FeedItemRow(
                             snapshot: snapshot,
-                            actions: FeedRowActions.bound()
+                            actions: rowActions,
+                            onSelect: {
+                                selectedItemId = item.id
+                            },
+                            onActivate: {
+                                selectedItemId = item.id
+                                rowActions.jump(item.workstreamId)
+                            }
                         )
                         if idx < visible.count - 1 {
                             Rectangle()
@@ -199,9 +209,15 @@ private struct FeedListView: View {
                     .listRowSeparator(.hidden)
                     .listRowBackground(
                         Rectangle()
-                            .fill(rowHoverFill(for: snapshot))
-                            .opacity(isHovered ? 1 : 0)
+                            .fill(
+                                rowBackgroundFill(
+                                    for: snapshot,
+                                    isHovered: isHovered,
+                                    isSelected: isSelected
+                                )
+                            )
                             .animation(.easeOut(duration: 0.14), value: isHovered)
+                            .animation(.easeOut(duration: 0.14), value: isSelected)
                     )
                 }
             }
@@ -253,11 +269,24 @@ private struct FeedListView: View {
         return base.sorted { $0.createdAt > $1.createdAt }
     }
 
-    private func rowHoverFill(for snapshot: FeedItemSnapshot) -> Color {
-        if snapshot.status.isPending {
-            return tint(for: snapshot).opacity(0.10)
+    private func rowBackgroundFill(
+        for snapshot: FeedItemSnapshot,
+        isHovered: Bool,
+        isSelected: Bool
+    ) -> Color {
+        if isSelected {
+            if snapshot.status.isPending {
+                return tint(for: snapshot).opacity(0.14)
+            }
+            return Color.primary.opacity(0.075)
         }
-        return Color.primary.opacity(0.055)
+        if isHovered {
+            if snapshot.status.isPending {
+                return tint(for: snapshot).opacity(0.10)
+            }
+            return Color.primary.opacity(0.055)
+        }
+        return .clear
     }
 
     private func tint(for snapshot: FeedItemSnapshot) -> Color {
@@ -410,6 +439,8 @@ struct FeedRowActions {
 struct FeedItemRow: View {
     let snapshot: FeedItemSnapshot
     let actions: FeedRowActions
+    let onSelect: () -> Void
+    let onActivate: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -431,14 +462,11 @@ struct FeedItemRow: View {
         .opacity(isResolvedOrExpired ? 0.6 : 1.0)
         .contentShape(Rectangle())
         .help(helpText)
-        // Single-tap on the card background focuses the agent's
-        // cmux terminal and flashes the terminal's own ring (same
-        // visual as cmd+shift+H). The flash happens on the terminal
-        // surface, not on this card — so the user's eye is pulled
-        // to the terminal contents they're jumping to.
-        .onTapGesture {
-            actions.jump(snapshot.workstreamId)
-        }
+        .simultaneousGesture(
+            TapGesture()
+                .onEnded(onSelect)
+        )
+        .onTapGesture(count: 2, perform: onActivate)
     }
 
     private var promptEcho: String? {
@@ -2460,8 +2488,6 @@ private final class FeedInlineTextEditorView: NSView {
         setContentHuggingPriority(.defaultLow, for: .horizontal)
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        textView.frame = bounds
-        textView.autoresizingMask = [.width]
         textView.isEditable = true
         textView.isSelectable = true
         textView.isRichText = false
@@ -2481,24 +2507,10 @@ private final class FeedInlineTextEditorView: NSView {
         )
         addSubview(textView)
 
-        placeholderField.translatesAutoresizingMaskIntoConstraints = false
         placeholderField.textColor = .placeholderTextColor
         placeholderField.lineBreakMode = .byWordWrapping
         placeholderField.maximumNumberOfLines = 0
         addSubview(placeholderField)
-
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(textDidChange(_:)),
-            name: NSText.didChangeNotification,
-            object: textView
-        )
-
-        NSLayoutConstraint.activate([
-            placeholderField.topAnchor.constraint(equalTo: topAnchor, constant: Self.textInset.height),
-            placeholderField.leadingAnchor.constraint(equalTo: leadingAnchor),
-            placeholderField.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-        ])
 
         apply(font: currentFont, isEnabled: true)
         updatePlaceholderVisibility()
@@ -2506,10 +2518,6 @@ private final class FeedInlineTextEditorView: NSView {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    deinit {
-        NotificationCenter.default.removeObserver(self)
     }
 
     override var intrinsicContentSize: NSSize {
@@ -2523,7 +2531,15 @@ private final class FeedInlineTextEditorView: NSView {
 
     override func layout() {
         super.layout()
-        updateTextViewLayout()
+        let availableWidth = max(bounds.width, 1)
+        let height = fittingHeight(for: availableWidth)
+        textView.frame = NSRect(x: 0, y: 0, width: availableWidth, height: height)
+        placeholderField.frame = NSRect(
+            x: Self.textInset.width,
+            y: Self.textInset.height,
+            width: max(bounds.width - Self.textInset.width * 2, 1),
+            height: Self.minimumHeight(for: currentFont)
+        )
     }
 
     func apply(font: NSFont, isEnabled: Bool) {
@@ -2555,8 +2571,9 @@ private final class FeedInlineTextEditorView: NSView {
               let textContainer = textView.textContainer else {
             return Self.minimumHeight(for: currentFont)
         }
+        let availableWidth = max(width - Self.textInset.width * 2, 1)
         textContainer.containerSize = NSSize(
-            width: max(width, 1),
+            width: availableWidth,
             height: CGFloat.greatestFiniteMagnitude
         )
         layoutManager.ensureLayout(for: textContainer)
@@ -2578,11 +2595,6 @@ private final class FeedInlineTextEditorView: NSView {
     private func fittingHeight() -> CGFloat {
         let availableWidth = max(bounds.width, 1)
         return fittingHeight(for: availableWidth)
-    }
-
-    @objc
-    private func textDidChange(_ notification: Notification) {
-        refreshMetrics()
     }
 
     private func updatePlaceholderVisibility() {
@@ -2712,94 +2724,42 @@ private struct FeedInlineTextField: NSViewRepresentable {
     }
 }
 
-private struct FeedIBeamCursorRegion: NSViewRepresentable {
+private struct FeedHoverCursorModifier: ViewModifier {
     let enabled: Bool
+    let cursor: NSCursor
 
-    func makeNSView(context: Context) -> FeedCursorRectView {
-        let view = FeedCursorRectView()
-        view.cursor = enabled ? .iBeam : nil
-        return view
+    @State private var cursorPushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                if hovering, enabled {
+                    pushIfNeeded()
+                } else {
+                    popIfNeeded()
+                }
+            }
+            .onDisappear {
+                popIfNeeded()
+            }
     }
 
-    func updateNSView(_ nsView: FeedCursorRectView, context: Context) {
-        nsView.cursor = enabled ? .iBeam : nil
-    }
-}
-
-private final class FeedCursorRectView: NSView {
-    private var trackingArea: NSTrackingArea?
-
-    var cursor: NSCursor? {
-        didSet {
-            window?.invalidateCursorRects(for: self)
-            updateTrackingAreas()
-        }
+    private func pushIfNeeded() {
+        guard !cursorPushed else { return }
+        cursor.push()
+        cursorPushed = true
     }
 
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        guard let cursor, bounds.width > 0, bounds.height > 0 else { return }
-        addCursorRect(bounds, cursor: cursor)
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        nil
-    }
-
-    override func updateTrackingAreas() {
-        if let trackingArea {
-            removeTrackingArea(trackingArea)
-            self.trackingArea = nil
-        }
-        if cursor != nil {
-            let options: NSTrackingArea.Options = [
-                .activeAlways,
-                .cursorUpdate,
-                .inVisibleRect,
-                .mouseEnteredAndExited,
-                .mouseMoved,
-            ]
-            let next = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
-            addTrackingArea(next)
-            trackingArea = next
-        }
-        super.updateTrackingAreas()
-    }
-
-    override func cursorUpdate(with event: NSEvent) {
-        cursor?.set()
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        cursor?.set()
-    }
-
-    override func mouseMoved(with event: NSEvent) {
-        cursor?.set()
-    }
-
-    override func setFrameSize(_ newSize: NSSize) {
-        super.setFrameSize(newSize)
-        window?.invalidateCursorRects(for: self)
-    }
-
-    override func setFrameOrigin(_ newOrigin: NSPoint) {
-        super.setFrameOrigin(newOrigin)
-        window?.invalidateCursorRects(for: self)
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        window?.invalidateCursorRects(for: self)
+    private func popIfNeeded() {
+        guard cursorPushed else { return }
+        NSCursor.pop()
+        cursorPushed = false
     }
 }
 
 private extension View {
     func feedIBeamCursorOnHover(enabled: Bool) -> some View {
-        overlay {
-            FeedIBeamCursorRegion(enabled: enabled)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+        modifier(FeedHoverCursorModifier(enabled: enabled, cursor: .iBeam))
     }
 }
 
