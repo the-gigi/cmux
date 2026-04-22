@@ -1952,7 +1952,6 @@ private struct QuestionActionArea: View {
     // question — mirrors Claude's TUI fallback.
     @State private var freeTexts: [String: String] = [:]
     @State private var focusedCustomAnswerId: String?
-    @State private var customAnswerHeights: [String: CGFloat] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -2092,7 +2091,6 @@ private struct QuestionActionArea: View {
         let selected = selections[questionId]?.contains(customId) == true
         let focusKey = customAnswerFocusKey(questionId)
         let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        let measuredHeight = customAnswerHeight(questionId: questionId, font: font)
         return HStack(alignment: .top, spacing: 10) {
             Text("\(index)")
                 .font(.system(size: 11, weight: .bold).monospacedDigit())
@@ -2105,7 +2103,6 @@ private struct QuestionActionArea: View {
             FeedInlineTextField(
                 text: customAnswerBinding(questionId: questionId, multi: multi),
                 isFocused: customAnswerFocusBinding(focusKey),
-                measuredHeight: customAnswerHeightBinding(questionId: questionId, font: font),
                 placeholder: String(localized: "feed.question.typeSomething",
                                     defaultValue: "Type something..."),
                 isEnabled: status.isPending,
@@ -2114,7 +2111,7 @@ private struct QuestionActionArea: View {
                     selectCustomAnswer(questionId: questionId, multi: multi)
                 }
             )
-            .frame(maxWidth: .infinity, minHeight: measuredHeight, maxHeight: measuredHeight, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: FeedInlineTextEditorView.minimumHeight(for: font), alignment: .leading)
             Spacer(minLength: 8)
             Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 12, weight: .medium))
@@ -2197,11 +2194,9 @@ private struct QuestionActionArea: View {
     private func freeFormField(questionId: String, multi: Bool) -> some View {
         let focusKey = customAnswerFocusKey(questionId)
         let font = NSFont.systemFont(ofSize: 11)
-        let measuredHeight = customAnswerHeight(questionId: questionId, font: font)
         return FeedInlineTextField(
             text: customAnswerBinding(questionId: questionId, multi: multi),
             isFocused: customAnswerFocusBinding(focusKey),
-            measuredHeight: customAnswerHeightBinding(questionId: questionId, font: font),
             placeholder: String(localized: "feed.question.typeSomething",
                                 defaultValue: "Type something..."),
             isEnabled: status.isPending,
@@ -2210,7 +2205,7 @@ private struct QuestionActionArea: View {
                 selectCustomAnswer(questionId: questionId, multi: multi)
             }
         )
-        .frame(maxWidth: .infinity, minHeight: measuredHeight, maxHeight: measuredHeight, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: FeedInlineTextEditorView.minimumHeight(for: font), alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(
@@ -2259,22 +2254,6 @@ private struct QuestionActionArea: View {
                 }
             }
         )
-    }
-
-    private func customAnswerHeightBinding(questionId: String, font: NSFont) -> Binding<CGFloat> {
-        Binding<CGFloat>(
-            get: { customAnswerHeight(questionId: questionId, font: font) },
-            set: { value in
-                customAnswerHeights[questionId] = max(
-                    FeedInlineTextEditorView.minimumHeight(for: font),
-                    value
-                )
-            }
-        )
-    }
-
-    private func customAnswerHeight(questionId: String, font: NSFont) -> CGFloat {
-        customAnswerHeights[questionId] ?? FeedInlineTextEditorView.minimumHeight(for: font)
     }
 
     private func customAnswerFocusKey(_ questionId: String) -> String {
@@ -2426,17 +2405,6 @@ private final class FeedInlinePassthroughLabel: NSTextField {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-private final class FeedInlineTextScrollView: NSScrollView {
-    weak var focusTextView: NSTextView?
-
-    override func mouseDown(with event: NSEvent) {
-        if let focusTextView {
-            _ = window?.makeFirstResponder(focusTextView)
-        }
-        super.mouseDown(with: event)
-    }
-}
-
 private final class FeedInlineNativeTextView: NSTextView {
     var onActivate: (() -> Void)?
 
@@ -2462,11 +2430,8 @@ private final class FeedInlineNativeTextView: NSTextView {
 private final class FeedInlineTextEditorView: NSView {
     private static let textInset = NSSize(width: 0, height: 1)
 
-    private let scrollView = FeedInlineTextScrollView(frame: .zero)
     let textView = FeedInlineNativeTextView(frame: .zero)
     private let placeholderField = FeedInlinePassthroughLabel(labelWithString: "")
-    var onMeasuredHeightChange: ((CGFloat) -> Void)?
-    private var lastReportedHeight: CGFloat?
     private var currentFont = NSFont.systemFont(ofSize: 11)
 
     static func minimumHeight(for font: NSFont) -> CGFloat {
@@ -2488,21 +2453,15 @@ private final class FeedInlineTextEditorView: NSView {
         }
     }
 
+    override var isFlipped: Bool { true }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setContentHuggingPriority(.defaultLow, for: .horizontal)
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.borderType = .noBorder
-        scrollView.drawsBackground = false
-        scrollView.hasVerticalScroller = false
-        scrollView.hasHorizontalScroller = false
-        scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.focusTextView = textView
-        addSubview(scrollView)
-
-        textView.translatesAutoresizingMaskIntoConstraints = false
+        textView.frame = bounds
+        textView.autoresizingMask = [.width]
         textView.isEditable = true
         textView.isSelectable = true
         textView.isRichText = false
@@ -2520,7 +2479,7 @@ private final class FeedInlineTextEditorView: NSView {
             width: CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude
         )
-        scrollView.documentView = textView
+        addSubview(textView)
 
         placeholderField.translatesAutoresizingMaskIntoConstraints = false
         placeholderField.textColor = .placeholderTextColor
@@ -2536,11 +2495,6 @@ private final class FeedInlineTextEditorView: NSView {
         )
 
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
-
             placeholderField.topAnchor.constraint(equalTo: topAnchor, constant: Self.textInset.height),
             placeholderField.leadingAnchor.constraint(equalTo: leadingAnchor),
             placeholderField.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
@@ -2562,10 +2516,14 @@ private final class FeedInlineTextEditorView: NSView {
         NSSize(width: NSView.noIntrinsicMetric, height: fittingHeight())
     }
 
+    override func mouseDown(with event: NSEvent) {
+        _ = window?.makeFirstResponder(textView)
+        super.mouseDown(with: event)
+    }
+
     override func layout() {
         super.layout()
         updateTextViewLayout()
-        reportMeasuredHeightIfNeeded()
     }
 
     func apply(font: NSFont, isEnabled: Bool) {
@@ -2583,7 +2541,6 @@ private final class FeedInlineTextEditorView: NSView {
         needsLayout = true
         invalidateIntrinsicContentSize()
         layoutSubtreeIfNeeded()
-        reportMeasuredHeightIfNeeded()
     }
 
     func focusIfNeeded() {
@@ -2593,7 +2550,7 @@ private final class FeedInlineTextEditorView: NSView {
         textView.setSelectedRange(NSRange(location: length, length: 0))
     }
 
-    private func naturalHeight(for width: CGFloat) -> CGFloat {
+    func fittingHeight(for width: CGFloat) -> CGFloat {
         guard let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer else {
             return Self.minimumHeight(for: currentFont)
@@ -2613,21 +2570,14 @@ private final class FeedInlineTextEditorView: NSView {
     }
 
     private func updateTextViewLayout() {
-        let availableWidth = max(scrollView.contentSize.width, bounds.width, 1)
-        let height = naturalHeight(for: availableWidth)
+        let availableWidth = max(bounds.width, 1)
+        let height = fittingHeight(for: availableWidth)
         textView.frame = NSRect(x: 0, y: 0, width: availableWidth, height: height)
     }
 
     private func fittingHeight() -> CGFloat {
-        let availableWidth = max(scrollView.contentSize.width, bounds.width, 1)
-        return naturalHeight(for: availableWidth)
-    }
-
-    private func reportMeasuredHeightIfNeeded() {
-        let height = fittingHeight()
-        guard lastReportedHeight == nil || abs((lastReportedHeight ?? height) - height) > 0.5 else { return }
-        lastReportedHeight = height
-        onMeasuredHeightChange?(height)
+        let availableWidth = max(bounds.width, 1)
+        return fittingHeight(for: availableWidth)
     }
 
     @objc
@@ -2643,7 +2593,6 @@ private final class FeedInlineTextEditorView: NSView {
 private struct FeedInlineTextField: NSViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
-    @Binding var measuredHeight: CGFloat
 
     let placeholder: String
     let isEnabled: Bool
@@ -2687,12 +2636,6 @@ private struct FeedInlineTextField: NSViewRepresentable {
             }
         }
 
-        func handleMeasuredHeight(_ height: CGFloat) {
-            guard abs(parent.measuredHeight - height) > 0.5 else { return }
-            DispatchQueue.main.async {
-                self.parent.measuredHeight = height
-            }
-        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -2706,9 +2649,6 @@ private struct FeedInlineTextField: NSViewRepresentable {
         view.textView.onActivate = { [weak coordinator = context.coordinator] in
             coordinator?.activateField()
         }
-        view.onMeasuredHeightChange = { [weak coordinator = context.coordinator] height in
-            coordinator?.handleMeasuredHeight(height)
-        }
         configure(view)
         context.coordinator.view = view
         return view
@@ -2719,9 +2659,6 @@ private struct FeedInlineTextField: NSViewRepresentable {
         context.coordinator.view = nsView
         nsView.textView.onActivate = { [weak coordinator = context.coordinator] in
             coordinator?.activateField()
-        }
-        nsView.onMeasuredHeightChange = { [weak coordinator = context.coordinator] height in
-            coordinator?.handleMeasuredHeight(height)
         }
         configure(nsView)
 
@@ -2760,10 +2697,18 @@ private struct FeedInlineTextField: NSViewRepresentable {
         view.apply(font: font, isEnabled: isEnabled)
     }
 
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView: FeedInlineTextEditorView,
+        context: Context
+    ) -> CGSize? {
+        guard let width = proposal.width else { return nil }
+        return CGSize(width: width, height: nsView.fittingHeight(for: width))
+    }
+
     static func dismantleNSView(_ nsView: FeedInlineTextEditorView, coordinator: Coordinator) {
         nsView.textView.delegate = nil
         nsView.textView.onActivate = nil
-        nsView.onMeasuredHeightChange = nil
     }
 }
 
