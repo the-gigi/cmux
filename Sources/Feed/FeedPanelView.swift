@@ -711,24 +711,27 @@ private struct FeedContextBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let user = context.lastUserMessage {
-                row(
+                FeedLabeledTextRow(
                     label: String(localized: "feed.context.you", defaultValue: "You:"),
                     text: user,
-                    color: .secondary
+                    labelColor: .secondary,
+                    textColor: .secondary
                 )
             }
             if let preamble = context.assistantPreamble {
-                row(
+                FeedLabeledTextRow(
                     label: agentLabel,
                     text: preamble,
-                    color: Color.blue.opacity(0.85)
+                    labelColor: .secondary,
+                    textColor: .secondary
                 )
             }
             if let plan = context.planSummary {
-                row(
+                FeedLabeledTextRow(
                     label: String(localized: "feed.context.plan", defaultValue: "Plan:"),
                     text: plan,
-                    color: Color.purple.opacity(0.85)
+                    labelColor: Color.purple.opacity(0.85),
+                    textColor: .secondary
                 )
             }
         }
@@ -738,16 +741,23 @@ private struct FeedContextBlock: View {
     private var agentLabel: String {
         "\(source.rawValue.capitalized):"
     }
+}
 
-    private func row(label: String, text: String, color: Color) -> some View {
+private struct FeedLabeledTextRow: View {
+    let label: String
+    let text: String
+    let labelColor: Color
+    let textColor: Color
+
+    var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(label)
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(color)
+                .foregroundColor(labelColor)
                 .frame(width: 48, alignment: .leading)
             Text(text)
                 .font(.system(size: 11))
-                .foregroundColor(.secondary)
+                .foregroundColor(textColor)
                 .lineLimit(2)
                 .truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1840,18 +1850,18 @@ private struct QuestionActionArea: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            headerLine
             if shouldRenderLongForm, let q = questions.first {
                 longFormBlock(question: q)
             } else {
+                headerLine
                 ForEach(Array(questions.enumerated()), id: \.offset) { idx, q in
                     questionBlock(index: idx + 1, question: q)
                 }
             }
             if shouldShowSkipInterviewCTA {
                 HStack(spacing: 8) {
-                    submitCTA
                     skipInterviewCTA
+                    submitCTA
                 }
             } else {
                 submitCTA
@@ -1869,22 +1879,15 @@ private struct QuestionActionArea: View {
     }
 
     private var headerLine: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "bubble.left.and.bubble.right.fill")
-                .font(.system(size: 10))
-                .foregroundColor(.blue)
-            Text(agentLabel)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.blue)
-            if questions.count > 1 {
-                Text(String(
-                    localized: "feed.question.count",
-                    defaultValue: "(\(questions.count) questions)"
-                ))
-                    .font(.system(size: 10))
-                    .foregroundColor(.blue.opacity(0.7))
-            }
-        }
+        FeedLabeledTextRow(
+            label: agentLabel,
+            text: questions.count > 1
+                ? String(localized: "feed.question.count",
+                         defaultValue: "(\(questions.count) questions)")
+                : "",
+            labelColor: .secondary,
+            textColor: .secondary
+        )
     }
 
     private var agentLabel: String {
@@ -1898,15 +1901,13 @@ private struct QuestionActionArea: View {
     @ViewBuilder
     private func longFormBlock(question: WorkstreamQuestionPrompt) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let header = question.header, !header.isEmpty {
-                Text("[\(header)] ")
-                    .foregroundColor(.blue)
-                + Text(question.prompt)
-                    .foregroundColor(.primary.opacity(0.95))
-            } else if !question.prompt.isEmpty {
-                Text(question.prompt)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.primary.opacity(0.95))
+            if !question.prompt.isEmpty {
+                FeedLabeledTextRow(
+                    label: agentLabel,
+                    text: question.prompt,
+                    labelColor: .secondary,
+                    textColor: .primary.opacity(0.95)
+                )
             }
             ForEach(Array(question.options.enumerated()), id: \.offset) { idx, option in
                 longFormOptionCard(
@@ -2048,6 +2049,14 @@ private struct QuestionActionArea: View {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .stroke(Color.primary.opacity(0.10), lineWidth: 1)
         )
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            if hovering {
+                NSCursor.iBeam.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
     }
 
     private func optionPill(
