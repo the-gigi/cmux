@@ -2155,6 +2155,40 @@ class TerminalController {
                     "public_key_fingerprint": ep.publicKeyFingerprint ?? NSNull(),
                 ]
             }
+        case "vm.attach_info":
+            guard let vmId = params["id"] as? String else {
+                return v2Error(id: id, code: "invalid_params", message: "vm.attach_info requires `id`")
+            }
+            return v2VmCall(id: id) {
+                let endpoint = try await VMClient.shared.openAttach(id: vmId)
+                switch endpoint {
+                case .ssh(let ep):
+                    var credPayload: [String: Any] = [:]
+                    switch ep.credential {
+                    case .password(let value):
+                        credPayload = ["kind": "password", "value": value]
+                    case .authorizedKey(let pem):
+                        credPayload = ["kind": "authorizedKey", "private_key_pem": pem]
+                    }
+                    return [
+                        "transport": "ssh",
+                        "host": ep.host,
+                        "port": ep.port,
+                        "username": ep.username,
+                        "credential": credPayload,
+                        "public_key_fingerprint": ep.publicKeyFingerprint ?? NSNull(),
+                    ]
+                case .websocket(let ep):
+                    return [
+                        "transport": "websocket",
+                        "url": ep.url,
+                        "headers": ep.headers,
+                        "token": ep.token,
+                        "session_id": ep.sessionId,
+                        "expires_at_unix": ep.expiresAtUnix,
+                    ]
+                }
+            }
 
         // Windows
         case "window.list":
@@ -2563,6 +2597,7 @@ class TerminalController {
             "vm.create",
             "vm.destroy",
             "vm.exec",
+            "vm.attach_info",
             "vm.ssh_info",
             "window.list",
             "window.current",

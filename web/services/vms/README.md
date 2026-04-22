@@ -1,6 +1,6 @@
 # Cloud VMs service
 
-Backend for `cmux vm new/ls/rm/exec/attach` and the upcoming sidebar Cloud button. Stack Auth gated, manaflow-owned provider keys (no BYO). **Default provider is Freestyle** for all interactive work (shell attach, workspace attach). E2B stays available for scratch `vm exec` use via `--provider e2b --detach`; E2B sandboxes don't expose raw TCP so they can't be attached to interactively.
+Backend for `cmux vm new/ls/rm/exec/attach` and the upcoming sidebar Cloud button. Stack Auth gated, manaflow-owned provider keys (no BYO). Freestyle attaches over its SSH gateway. E2B attaches over `cmuxd-remote` WebSocket PTY with a short-lived one-use lease because E2B sandboxes do not expose raw TCP.
 
 ## Layout
 
@@ -38,24 +38,26 @@ See `web/.env.example`. The VM-specific vars:
 
 - `E2B_API_KEY` — manaflow's key, used by E2BProvider.
 - `FREESTYLE_API_KEY` — manaflow's key, used by FreestyleProvider.
-- `E2B_SANDBOX_TEMPLATE` — E2B template name for `vm exec` scratch sandboxes. Produced by
-  `scratch/vm-experiments/images/build-e2b.ts`.
+- `E2B_CMUXD_WS_TEMPLATE` — E2B template alias/name for interactive WebSocket PTY sandboxes.
+  Produced by `web/scripts/build-cloud-vm-images.ts`.
+- `E2B_SANDBOX_TEMPLATE` — legacy scratch template. Pass explicitly with `--image` if needed.
 - `FREESTYLE_SANDBOX_SNAPSHOT` — Freestyle snapshot id for `vm new` / `vm attach`. Produced by
   `scratch/vm-experiments/images/build-freestyle.ts`.
-- `CMUX_VM_DEFAULT_PROVIDER` — `freestyle` (default, interactive) or `e2b` (scratch-only).
+- `CMUX_VM_DEFAULT_PROVIDER` — `freestyle` (default) or `e2b`.
 
 ## Provider matrix
 
 | Verb                        | Freestyle | E2B            |
 |-----------------------------|-----------|----------------|
-| `cmux vm new` (shell)       | ✓         | error          |
-| `cmux vm new --workspace`   | ✓         | error          |
+| `cmux vm new` (shell)       | ✓         | ✓              |
+| `cmux vm new --workspace`   | ✓         | ✓              |
 | `cmux vm new --detach`      | ✓         | ✓              |
-| `cmux vm attach <id>`       | ✓         | error          |
+| `cmux vm attach <id>`       | ✓         | ✓              |
 | `cmux vm exec <id> -- ...`  | ✓         | ✓              |
 | `cmux vm ls / rm`           | ✓         | ✓              |
 
-E2B interactive paths return a user-facing error explaining the limitation. See `drivers/e2b.ts`.
+E2B interactive paths require a cmuxd WebSocket PTY image. The backend writes only a hash of the
+attach token into `/tmp/cmux/attach-lease.json`; the raw token is returned once to the Mac client.
 
 ## Lifecycle
 
@@ -74,9 +76,8 @@ E2B interactive paths return a user-facing error explaining the limitation. See 
 
 - Finish the Freestyle driver (today stubbed) and ship the baked snapshot. Unblocks
   `cmux vm new` shell + workspace modes.
-- Add `POST /api/vm/:id/ssh-endpoint` that mints short-lived ssh keys per attach session and
-  returns `{ host, port, username, privateKeyPem, fingerprint }`. Mac client hands those to the
-  existing `cmux ssh` transport — no Next.js tunneling in the data plane.
+- Keep Freestyle SSH and E2B WebSocket attach paths sharing the same `POST /api/vm/:id/attach-endpoint`
+  contract.
 - Add `/api/vm/:id/pause`, `/api/vm/:id/resume`, `/api/vm/:id/snapshot` REST wrappers once Swift
   client wants them.
 

@@ -18,6 +18,7 @@ export type CreateOptions = {
 };
 
 export type SSHEndpoint = {
+  transport: "ssh";
   host: string;
   port: number;
   username: string;
@@ -33,6 +34,17 @@ export type SSHEndpoint = {
    */
   identityHandle: string;
 };
+
+export type WebSocketPtyEndpoint = {
+  transport: "websocket";
+  url: string;
+  headers: Record<string, string>;
+  token: string;
+  sessionId: string;
+  expiresAtUnix: number;
+};
+
+export type AttachEndpoint = SSHEndpoint | WebSocketPtyEndpoint;
 
 export type ExecResult = {
   exitCode: number;
@@ -59,6 +71,10 @@ export interface VMProvider {
 
   snapshot(vmId: string, name?: string): Promise<SnapshotRef>;
   restore(snapshotId: string): Promise<VMHandle>;
+
+  // Returns a live attach endpoint the client can dial into. Freestyle uses SSH, E2B uses a
+  // cmuxd-remote WebSocket PTY with a short-lived one-use lease.
+  openAttach(vmId: string): Promise<AttachEndpoint>;
 
   // Returns a live SSH endpoint the client can dial into. Drivers are responsible for ensuring
   // sshd is running (some providers need an explicit start step).

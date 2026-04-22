@@ -3,6 +3,7 @@ import {
   ProviderError,
   type CreateOptions,
   type ExecResult,
+  type AttachEndpoint,
   type SSHEndpoint,
   type SnapshotRef,
   type VMHandle,
@@ -270,6 +271,10 @@ export class FreestyleProvider implements VMProvider {
    * client will dial. Freestyle's gateway terminates at `vm-ssh.freestyle.sh:22`, username is
    * `<vmId>+<linuxUser>`, password is the access token we just minted.
    */
+  async openAttach(vmId: string): Promise<AttachEndpoint> {
+    return await this.openSSH(vmId);
+  }
+
   async openSSH(vmId: string): Promise<SSHEndpoint> {
     return withVmSpan(
       "cmux.vm.provider.open_ssh",
@@ -298,6 +303,7 @@ export class FreestyleProvider implements VMProvider {
           });
           const { token } = await identity.tokens.create();
           return {
+            transport: "ssh",
             host: SSH_HOST,
             port: SSH_PORT,
             username: `${vmId}+${CMUX_LINUX_USER}`,

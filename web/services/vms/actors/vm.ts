@@ -171,6 +171,28 @@ export const vmActor = actor({
       );
     },
 
+    openAttach: async (c) => {
+      return withVmActorSpan(
+        c,
+        "openAttach",
+        { "cmux.ssh.identity_count": c.state.sshIdentityHandles.length },
+        async (span) => {
+          await revokeAllIdentities(c.state);
+          c.state.sshIdentityHandles = [];
+          const endpoint = await getProvider(c.state.provider).openAttach(c.state.providerVmId);
+          if (endpoint.transport === "ssh" && endpoint.identityHandle) {
+            c.state.sshIdentityHandles = [endpoint.identityHandle];
+          }
+          setSpanAttributes(span, {
+            "cmux.vm.attach.transport": endpoint.transport,
+            "cmux.ssh.identity_created": endpoint.transport === "ssh" && !!endpoint.identityHandle,
+            "cmux.ssh.credential_kind": endpoint.transport === "ssh" ? endpoint.credential.kind : "none",
+          });
+          return endpoint;
+        },
+      );
+    },
+
     status: async (c) => {
       return withVmActorSpan(c, "status", {}, () => c.state);
     },

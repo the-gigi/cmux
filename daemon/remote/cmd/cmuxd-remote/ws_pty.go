@@ -196,9 +196,11 @@ func handleWebSocketPTY(w http.ResponseWriter, r *http.Request, cfg wsPTYServerC
 		return
 	}
 
+	sessionCtx, cancelSession := context.WithCancel(r.Context())
+	defer cancelSession()
 	done := make(chan struct{})
-	go pumpPTYToWebSocket(r.Context(), conn, writeMu, ptyFile, done)
-	pumpWebSocketToPTY(r.Context(), conn, ptyFile, done)
+	go pumpPTYToWebSocket(sessionCtx, cancelSession, conn, writeMu, ptyFile, done)
+	pumpWebSocketToPTY(sessionCtx, conn, ptyFile, done)
 	_ = conn.Close(websocket.StatusNormalClosure, "closed")
 }
 
@@ -254,8 +256,14 @@ func writeWSJSON(ctx context.Context, conn *websocket.Conn, writeMu *sync.Mutex,
 	return conn.Write(ctx, websocket.MessageText, data)
 }
 
-func pumpPTYToWebSocket(ctx context.Context, conn *websocket.Conn, writeMu *sync.Mutex, ptyFile *os.File, done chan<- struct{}) {
+func pumpPTYToWebSocket(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, writeMu *sync.Mutex, ptyFile *os.File, done chan<- struct{}) {
 	defer close(done)
+	defer func() {
+		writeMu.Lock()
+		_ = conn.Close(websocket.StatusNormalClosure, "pty closed")
+		writeMu.Unlock()
+		cancel()
+	}()
 	buffer := make([]byte, 32768)
 	for {
 		n, err := ptyFile.Read(buffer)

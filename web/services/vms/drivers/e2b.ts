@@ -1,20 +1,28 @@
 import { Sandbox } from "e2b";
+import { createHash, randomBytes } from "node:crypto";
 import {
   ProviderError,
+  type AttachEndpoint,
   type CreateOptions,
   type ExecResult,
   type SSHEndpoint,
+  type WebSocketPtyEndpoint,
   type SnapshotRef,
   type VMHandle,
   type VMProvider,
 } from "./types";
 import { withVmSpan } from "../telemetry";
 
-// Default cmux-sandbox template. Built from scratch/vm-experiments/images/build-e2b.ts and
-// kept in sync via the E2B_SANDBOX_TEMPLATE env var. The template already bakes sshd, mutagen-agent,
-// git, and the `cmux` user; sshd is started on demand by openSSH (not as the E2B start command,
-// because E2B sandboxes run unprivileged and can't bind port 22).
-const DEFAULT_TEMPLATE = process.env.E2B_SANDBOX_TEMPLATE ?? "cmux-sandbox:v0-71a954b8e53b";
+const DEFAULT_WS_TEMPLATE = "cmuxd-ws:ws-3046d";
+const CMUXD_WS_PORT = 7777;
+const CMUXD_WS_LEASE_PATH = "/tmp/cmux/attach-lease.json";
+const CMUXD_WS_LEASE_TTL_SECONDS = 5 * 60;
+
+// Default cmuxd WebSocket PTY template. Built by web/scripts/build-cloud-vm-images.ts.
+// E2B does not expose raw TCP, so interactive attach requires the cmuxd-remote WS image.
+const DEFAULT_TEMPLATE =
+  process.env.E2B_CMUXD_WS_TEMPLATE ??
+  DEFAULT_WS_TEMPLATE;
 
 export class E2BProvider implements VMProvider {
   readonly id = "e2b" as const;
@@ -30,7 +38,9 @@ export class E2BProvider implements VMProvider {
       },
       async (span) => {
         try {
-          const sandbox = await Sandbox.create(image);
+          const sandbox = await Sandbox.create(image, {
+            network: { allowPublicTraffic: false },
+          });
           span.setAttribute("cmux.vm.id", sandbox.sandboxId);
           return {
             provider: "e2b",
@@ -165,9 +175,64 @@ export class E2BProvider implements VMProvider {
     );
   }
 
+  async openAttach(vmId: string): Promise<AttachEndpoint> {
+    return await this.openWebSocketPty(vmId);
+  }
+
+  async openWebSocketPty(vmId: string): Promise<WebSocketPtyEndpoint> {
+    return withVmSpan(
+      "cmux.vm.provider.open_websocket_pty",
+      { "cmux.vm.provider": "e2b", "cmux.vm.operation": "open_websocket_pty", "cmux.vm.id": vmId },
+      async (span) => {
+        try {
+          const sandbox = await Sandbox.connect(vmId);
+          const trafficAccessToken = sandbox.trafficAccessToken?.trim();
+          if (!trafficAccessToken) {
+            throw new Error("sandbox is missing a traffic access token; recreate it with the cmuxd WebSocket image");
+          }
+          const token = `cmux-e2b-${randomBytes(32).toString("hex")}`;
+          const sessionId = randomBytes(16).toString("hex");
+          const expiresAtUnix = Math.floor(Date.now() / 1000) + CMUXD_WS_LEASE_TTL_SECONDS;
+          const lease = {
+            version: 1,
+            token_sha256: createHash("sha256").update(token).digest("hex"),
+            expires_at_unix: expiresAtUnix,
+            session_id: sessionId,
+            single_use: true,
+          };
+          const encoded = Buffer.from(JSON.stringify(lease)).toString("base64");
+          await sandbox.commands.run(
+            [
+              "install -d -m 0700 /tmp/cmux",
+              `printf '%s' '${encoded}' | base64 -d > ${shellQuote(CMUXD_WS_LEASE_PATH)}`,
+              `chmod 600 ${shellQuote(CMUXD_WS_LEASE_PATH)}`,
+            ].join(" && "),
+            { timeoutMs: 30_000 },
+          );
+          span.setAttribute("cmux.vm.attach.transport", "websocket");
+          span.setAttribute("cmux.vm.attach.expires_at_unix", expiresAtUnix);
+          return {
+            transport: "websocket",
+            url: `wss://${sandbox.getHost(CMUXD_WS_PORT)}/terminal`,
+            headers: { "e2b-traffic-access-token": trafficAccessToken },
+            token,
+            sessionId,
+            expiresAtUnix,
+          };
+        } catch (err) {
+          throw new ProviderError("e2b", `openWebSocketPty(${vmId}) failed`, err);
+        }
+      },
+    );
+  }
+
   async revokeSSHIdentity(identityHandle: string): Promise<void> {
     void identityHandle;
     // E2B doesn't mint per-session credentials — openSSH always throws — so there's
     // nothing to revoke. Defined to satisfy VMProvider; never called against this driver.
   }
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

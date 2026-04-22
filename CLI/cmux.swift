@@ -1599,6 +1599,18 @@ struct CMUXCLI {
         return "image=\(normalizedImage)\u{1f}provider=\(normalizedProvider)"
     }
 
+    private static func normalizedVMProvider(_ provider: String?) throws -> String? {
+        guard let trimmed = provider?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        let normalized = trimmed.lowercased()
+        guard normalized == "e2b" || normalized == "freestyle" else {
+            throw CLIError(message: "vm new: unsupported provider '\(trimmed)'. Expected e2b or freestyle.")
+        }
+        return normalized
+    }
+
     private static func vmCreateIdempotencyStoreURL() -> URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cmuxterm", isDirectory: true)
@@ -1790,6 +1802,11 @@ struct CMUXCLI {
 
         if command == "remote-daemon-status" {
             try runRemoteDaemonStatus(commandArgs: commandArgs, jsonOutput: jsonOutput)
+            return
+        }
+
+        if command == "vm-pty-connect" {
+            try runVMPtyConnect(commandArgs: commandArgs)
             return
         }
 
@@ -2123,19 +2140,11 @@ struct CMUXCLI {
                         message: "vm new: unexpected argument '\(extra)'. vm new takes no positional args; use --image / --provider / --detach."
                     )
                 }
-                // Fail fast before provisioning when the combination can't succeed. E2B
-                // sandboxes don't expose raw TCP, so the shell-attach step will always 500
-                // from the driver — without this guard the user pays for a VM that gets
-                // stranded (no --detach rollback path yet).
-                if providerOpt?.lowercased() == "e2b" && !detach {
-                    throw CLIError(
-                        message: "vm new --provider e2b requires --detach (E2B sandboxes don't support interactive SSH). Use `cmux vm exec <id> -- <cmd>` after create."
-                    )
-                }
+                let normalizedProvider = try Self.normalizedVMProvider(providerOpt)
                 var params: [String: Any] = [:]
                 if let imageOpt { params["image"] = imageOpt }
-                if let providerOpt { params["provider"] = providerOpt }
-                let idempotency = try Self.activeVMCreateIdempotency(image: imageOpt, provider: providerOpt)
+                if let normalizedProvider { params["provider"] = normalizedProvider }
+                let idempotency = try Self.activeVMCreateIdempotency(image: imageOpt, provider: normalizedProvider)
                 params["idempotency_key"] = idempotency.key
                 let response = try client.sendV2(method: "vm.create", params: params)
                 if jsonOutput {
@@ -2153,18 +2162,8 @@ struct CMUXCLI {
                     print("  image:    \(image)")
                     break
                 }
-                let resolvedProvider = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                if resolvedProvider == "e2b" {
-                    Self.clearVMCreateIdempotency(idempotency)
-                    print("OK \(id)")
-                    print("  provider: \(provider)")
-                    print("  image:    \(image)")
-                    print("  shell:    unavailable for E2B; use `cmux vm exec \(id) -- <cmd>`")
-                    break
-                }
-                // Default: create the VM then drop the user into a cmux-managed workspace on
-                // it. Reuses the `cmux ssh` bootstrap (cmuxd-remote upload, reverse socket
-                // forward, `cmux` wrapper on the remote $PATH).
+                // Create the VM then drop the user into a cmux-managed workspace. Freestyle
+                // attaches over SSH; E2B attaches over cmuxd-remote WebSocket PTY.
                 let shortId = String(id.prefix(8))
                 print("Created \(id)  [\(provider)]  \(image)")
                 try vmOpenShell(
@@ -4431,6 +4430,26 @@ struct CMUXCLI {
         }
     }
 
+    private struct VMPtyWebSocketEndpoint {
+        let url: String
+        let headers: [String: String]
+        let token: String
+        let sessionId: String
+        let expiresAtUnix: Int64
+    }
+
+    private struct VMPtyWebSocketConfig: Codable {
+        let url: String
+        let headers: [String: String]
+        let token: String
+        let sessionId: String
+    }
+
+    private struct TerminalSize {
+        let cols: Int
+        let rows: Int
+    }
+
     private struct RemoteDaemonManifest: Decodable {
         struct Entry: Decodable {
             let goOS: String
@@ -5433,29 +5452,39 @@ struct CMUXCLI {
         ].joined(separator: " ")
     }
 
-    /// Open an interactive cmux-managed shell on a cloud VM. Reuses `cmux ssh`'s bootstrap
-    /// (cmuxd-remote upload, socket reverse-forward, shell init that puts `cmux` on the remote
-    /// `$PATH`) by building an `SSHCommandOptions` from `vm.ssh_info` and dispatching to
-    /// `runSSHWithOptions`. No second implementation of the remote bootstrap.
-    ///
-    /// Freestyle's SSH gateway takes the identity token as a colon-suffix on the SSH username
-    /// (`<vmId>+<user>:<token>`). OpenSSH passes the whole username through to the server, so
-    /// no sshpass / password prompt is needed. Keep that credential-bearing destination only
-    /// inside the SSH command text; workspace state, logs, and status output use `user@host`.
+    /// Open an interactive cmux-managed shell on a cloud VM. Freestyle uses the existing SSH
+    /// workspace path. E2B uses the cmuxd-remote WebSocket PTY path because E2B does not expose
+    /// raw TCP/22.
     private func vmOpenShell(id: String, workspaceName: String?, client: SocketClient, jsonOutput: Bool, idFormat: CLIIDFormat) throws {
-        let response = try client.sendV2(method: "vm.ssh_info", params: ["id": id])
-        guard let host = response["host"] as? String,
+        let response = try client.sendV2(method: "vm.attach_info", params: ["id": id])
+        let transport = (response["transport"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? "ssh"
+        if transport == "websocket" {
+            let endpoint = try parseVMPtyWebSocketEndpoint(response)
+            try runVMPtyWebSocketWorkspace(
+                id: id,
+                endpoint: endpoint,
+                workspaceName: workspaceName,
+                client: client,
+                jsonOutput: jsonOutput,
+                idFormat: idFormat
+            )
+            return
+        }
+        guard transport == "ssh",
+              let host = response["host"] as? String,
               let port = (response["port"] as? Int),
               let username = response["username"] as? String,
               let cred = response["credential"] as? [String: Any],
               let kind = cred["kind"] as? String
         else {
-            throw CLIError(message: "vm.ssh_info returned malformed payload: \(response)")
+            throw CLIError(message: "vm.attach_info returned malformed payload: \(response)")
         }
         switch kind {
         case "password":
             guard let token = cred["value"] as? String else {
-                throw CLIError(message: "vm.ssh_info password credential missing `value`")
+                throw CLIError(message: "vm.attach_info password credential missing `value`")
             }
             // Freestyle gateway has a fresh host key per session and we re-mint per attach,
             // so skip the StrictHostKeyChecking y/n prompt and known_hosts caching.
@@ -5511,7 +5540,355 @@ struct CMUXCLI {
                 message: "authorizedKey credentials aren't supported by `cmux vm shell` yet; received from server."
             )
         default:
-            throw CLIError(message: "vm.ssh_info returned unknown credential kind: \(kind)")
+            throw CLIError(message: "vm.attach_info returned unknown credential kind: \(kind)")
+        }
+    }
+
+    private func parseVMPtyWebSocketEndpoint(_ response: [String: Any]) throws -> VMPtyWebSocketEndpoint {
+        guard let url = response["url"] as? String,
+              let token = response["token"] as? String,
+              let sessionId = response["session_id"] as? String else {
+            throw CLIError(message: "vm.attach_info websocket endpoint missing url/token/session_id: \(response)")
+        }
+        let headers = response["headers"] as? [String: String] ?? [:]
+        let expiresAtUnix = (response["expires_at_unix"] as? Int64)
+            ?? Int64((response["expires_at_unix"] as? Double) ?? 0)
+        return VMPtyWebSocketEndpoint(
+            url: url,
+            headers: headers,
+            token: token,
+            sessionId: sessionId,
+            expiresAtUnix: expiresAtUnix
+        )
+    }
+
+    private func runVMPtyWebSocketWorkspace(
+        id: String,
+        endpoint: VMPtyWebSocketEndpoint,
+        workspaceName: String?,
+        client: SocketClient,
+        jsonOutput: Bool,
+        idFormat: CLIIDFormat
+    ) throws {
+        let configURL = try writeVMPtyWebSocketConfig(endpoint)
+        let executablePath = resolvedExecutableURL()?.path ?? (args.first ?? "cmux")
+        let startupCommand = "\(shellQuote(executablePath)) vm-pty-connect --config \(shellQuote(configURL.path))"
+        var params: [String: Any] = [
+            "initial_command": startupCommand,
+            "description": "E2B WebSocket PTY",
+        ]
+        if let workspaceName = workspaceName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !workspaceName.isEmpty {
+            params["title"] = workspaceName
+        }
+        let workspaceCreate = try client.sendV2(method: "workspace.create", params: params)
+        guard let workspaceId = workspaceCreate["workspace_id"] as? String, !workspaceId.isEmpty else {
+            throw CLIError(message: "workspace.create did not return workspace_id")
+        }
+
+        var payload = workspaceCreate
+        payload["vm_id"] = id
+        payload["transport"] = "websocket"
+        if let host = URL(string: endpoint.url)?.host {
+            payload["target"] = host
+        }
+        payload["expires_at_unix"] = endpoint.expiresAtUnix
+
+        if jsonOutput {
+            print(jsonString(formatIDs(payload, mode: idFormat)))
+        } else {
+            let workspaceHandle = formatHandle(payload, kind: "workspace", idFormat: idFormat) ?? workspaceId
+            let target = (payload["target"] as? String) ?? "websocket"
+            print("OK workspace=\(workspaceHandle) target=\(target) transport=websocket")
+        }
+    }
+
+    private func writeVMPtyWebSocketConfig(_ endpoint: VMPtyWebSocketEndpoint) throws -> URL {
+        let config = VMPtyWebSocketConfig(
+            url: endpoint.url,
+            headers: endpoint.headers,
+            token: endpoint.token,
+            sessionId: endpoint.sessionId
+        )
+        let data = try JSONEncoder().encode(config)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-vm-pty-\(UUID().uuidString.lowercased()).json")
+        try data.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        return url
+    }
+
+    private func runVMPtyConnect(commandArgs: [String]) throws {
+        let (configPath, remaining) = parseOption(commandArgs, name: "--config")
+        if let unknown = remaining.first(where: { $0.hasPrefix("--") }) {
+            throw CLIError(message: "vm-pty-connect: unknown flag '\(unknown)'")
+        }
+        guard let configPath else {
+            throw CLIError(message: "Usage: cmux vm-pty-connect --config <path>")
+        }
+        let configURL = URL(fileURLWithPath: (configPath as NSString).expandingTildeInPath)
+        let data = try Data(contentsOf: configURL)
+        try? FileManager.default.removeItem(at: configURL)
+        let config = try JSONDecoder().decode(VMPtyWebSocketConfig.self, from: data)
+        try VMPtyWebSocketBridge(config: config).run()
+    }
+
+    private final class VMPtyWebSocketBridgeDelegate: NSObject, URLSessionWebSocketDelegate {
+        private let openSemaphore = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var opened = false
+        private var closed = false
+
+        func urlSession(
+            _ session: URLSession,
+            webSocketTask: URLSessionWebSocketTask,
+            didOpenWithProtocol protocol: String?
+        ) {
+            lock.lock()
+            opened = true
+            lock.unlock()
+            openSemaphore.signal()
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            webSocketTask: URLSessionWebSocketTask,
+            didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
+            reason: Data?
+        ) {
+            lock.lock()
+            closed = true
+            lock.unlock()
+            openSemaphore.signal()
+        }
+
+        func waitForOpen(timeout: TimeInterval) -> Bool {
+            if openSemaphore.wait(timeout: .now() + timeout) != .success {
+                return false
+            }
+            lock.lock()
+            defer { lock.unlock() }
+            return opened && !closed
+        }
+
+        var isClosed: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return closed
+        }
+    }
+
+    private final class VMPtyWebSocketBridge {
+        private let config: VMPtyWebSocketConfig
+        private let sendQueue = DispatchQueue(label: "com.cmux.vm-pty.websocket.send")
+        private let stopLock = NSLock()
+        private var stopped = false
+        private var task: URLSessionWebSocketTask?
+
+        init(config: VMPtyWebSocketConfig) {
+            self.config = config
+        }
+
+        func run() throws {
+            guard let url = URL(string: config.url),
+                  url.scheme == "wss" || url.scheme == "ws" else {
+                throw CLIError(message: "vm-pty-connect: invalid websocket url")
+            }
+            var request = URLRequest(url: url)
+            for (key, value) in config.headers {
+                request.setValue(value, forHTTPHeaderField: key)
+            }
+
+            let delegate = VMPtyWebSocketBridgeDelegate()
+            let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+            let task = session.webSocketTask(with: request)
+            self.task = task
+            defer {
+                markStopped()
+                task.cancel(with: .normalClosure, reason: nil)
+                session.invalidateAndCancel()
+            }
+            task.resume()
+            guard delegate.waitForOpen(timeout: 15) else {
+                throw CLIError(message: "vm-pty-connect: timed out opening websocket")
+            }
+
+            try sendAuthFrame()
+            try waitForReady(delegate: delegate)
+
+            let rawMode = TerminalRawMode()
+            defer { rawMode?.restore() }
+            let resizeSource = startResizeSource()
+            defer { resizeSource.cancel() }
+            startInputPump()
+            try receiveOutputLoop(delegate: delegate)
+        }
+
+        private func sendAuthFrame() throws {
+            let size = Self.currentTerminalSize()
+            let auth: [String: Any] = [
+                "type": "auth",
+                "token": config.token,
+                "session_id": config.sessionId,
+                "cols": size.cols,
+                "rows": size.rows,
+            ]
+            let data = try JSONSerialization.data(withJSONObject: auth, options: [])
+            let text = String(data: data, encoding: .utf8) ?? "{}"
+            try sendSync(.string(text))
+        }
+
+        private func waitForReady(delegate: VMPtyWebSocketBridgeDelegate) throws {
+            while true {
+                guard let message = try receiveSync(delegate: delegate) else {
+                    throw CLIError(message: "vm-pty-connect: websocket closed before ready")
+                }
+                if case .string(let text) = message, text.contains("\"ready\"") {
+                    return
+                }
+            }
+        }
+
+        private func startResizeSource() -> DispatchSourceSignal {
+            signal(SIGWINCH, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(
+                signal: SIGWINCH,
+                queue: DispatchQueue(label: "com.cmux.vm-pty.resize")
+            )
+            source.setEventHandler { [weak self] in
+                guard let self else { return }
+                let size = Self.currentTerminalSize()
+                let payload: [String: Any] = ["type": "resize", "cols": size.cols, "rows": size.rows]
+                guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+                      let text = String(data: data, encoding: .utf8) else {
+                    return
+                }
+                self.sendAsync(.string(text))
+            }
+            source.resume()
+            return source
+        }
+
+        private static func currentTerminalSize() -> TerminalSize {
+            var size = winsize()
+            if ioctl(STDIN_FILENO, TIOCGWINSZ, &size) == 0,
+               size.ws_col > 0,
+               size.ws_row > 0 {
+                return TerminalSize(cols: Int(size.ws_col), rows: Int(size.ws_row))
+            }
+            return TerminalSize(cols: 80, rows: 24)
+        }
+
+        private func startInputPump() {
+            DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+                guard let self else { return }
+                var buffer = [UInt8](repeating: 0, count: 8192)
+                while !self.isStopped {
+                    let count = Darwin.read(STDIN_FILENO, &buffer, buffer.count)
+                    if count > 0 {
+                        self.sendAsync(.data(Data(buffer.prefix(count))))
+                    } else if count == 0 {
+                        self.task?.cancel(with: .normalClosure, reason: nil)
+                        return
+                    } else if errno != EINTR {
+                        self.task?.cancel(with: .goingAway, reason: nil)
+                        return
+                    }
+                }
+            }
+        }
+
+        private func receiveOutputLoop(delegate: VMPtyWebSocketBridgeDelegate) throws {
+            while let message = try receiveSync(delegate: delegate) {
+                switch message {
+                case .data(let data):
+                    FileHandle.standardOutput.write(data)
+                case .string:
+                    continue
+                @unknown default:
+                    continue
+                }
+            }
+        }
+
+        private func receiveSync(delegate: VMPtyWebSocketBridgeDelegate) throws -> URLSessionWebSocketTask.Message? {
+            guard let task else { throw CLIError(message: "vm-pty-connect: websocket task missing") }
+            let semaphore = DispatchSemaphore(value: 0)
+            var received: Result<URLSessionWebSocketTask.Message, Error>?
+            task.receive { result in
+                received = result
+                semaphore.signal()
+            }
+            semaphore.wait()
+            switch received {
+            case .success(let message):
+                return message
+            case .failure(let error):
+                if delegate.isClosed || isStopped {
+                    return nil
+                }
+                throw error
+            case nil:
+                return nil
+            }
+        }
+
+        private func sendAsync(_ message: URLSessionWebSocketTask.Message) {
+            sendQueue.async { [weak self] in
+                try? self?.sendSync(message)
+            }
+        }
+
+        private func sendSync(_ message: URLSessionWebSocketTask.Message) throws {
+            guard let task else { throw CLIError(message: "vm-pty-connect: websocket task missing") }
+            let semaphore = DispatchSemaphore(value: 0)
+            var sendError: Error?
+            task.send(message) { error in
+                sendError = error
+                semaphore.signal()
+            }
+            semaphore.wait()
+            if let sendError {
+                throw sendError
+            }
+        }
+
+        private var isStopped: Bool {
+            stopLock.lock()
+            defer { stopLock.unlock() }
+            return stopped
+        }
+
+        private func markStopped() {
+            stopLock.lock()
+            stopped = true
+            stopLock.unlock()
+        }
+    }
+
+    private final class TerminalRawMode {
+        private var original = termios()
+        private var restored = false
+
+        init?() {
+            guard tcgetattr(STDIN_FILENO, &original) == 0 else {
+                return nil
+            }
+            var raw = original
+            cfmakeraw(&raw)
+            guard tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0 else {
+                return nil
+            }
+        }
+
+        deinit {
+            restore()
+        }
+
+        func restore() {
+            guard !restored else { return }
+            tcsetattr(STDIN_FILENO, TCSANOW, &original)
+            restored = true
         }
     }
 
@@ -7318,7 +7695,7 @@ struct CMUXCLI {
             """
         case "vm", "cloud":
             return """
-            Usage: cmux \(command) <new|ls|rm|exec> [args...]
+            Usage: cmux \(command) <new|ls|rm|exec|shell|attach|ssh> [args...]
 
             Manage cloud VMs. `cloud` is an alias for `vm`. Requires `cmux auth login`.
 
@@ -7332,8 +7709,8 @@ struct CMUXCLI {
                                         Alias: `attach <id>`.
               rm <id>                   Destroy a VM.
               exec <id> -- <command...> Run a shell command inside the VM and print stdout.
-              ssh <id>                  Print a ready-to-paste `ssh user:token@host -p port`
-                                        one-liner (if you want to copy it manually).
+              ssh <id>                  Print a ready-to-paste SSH one-liner when the VM
+                                        provider exposes SSH.
 
             Env:
               CMUX_VM_API_BASE_URL       Override the backend origin (default: the cmux website).
