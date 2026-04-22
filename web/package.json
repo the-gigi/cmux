@@ -4,7 +4,7 @@
   "license": "GPL-3.0-or-later",
   "private": true,
   "scripts": {
-    "dev": "next dev --port ${CMUX_PORT:-${PORT:-3777}}",
+    "dev": "CMUX_VM_API_BASE_URL=http://localhost:${CMUX_PORT:-${PORT:-3777}} next dev --port ${CMUX_PORT:-${PORT:-3777}}",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

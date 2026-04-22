@@ -7326,8 +7326,8 @@ struct CMUXCLI {
 
             Env:
               CMUX_VM_API_BASE_URL       Override the backend origin (default: the cmux website).
-                                         Set to http://localhost:3777 when testing a local
-                                         `next dev` from the web worktree.
+                                         `bun run dev` derives this from CMUX_PORT/PORT for
+                                         local testing from the web worktree.
 
             Example:
               cmux vm new

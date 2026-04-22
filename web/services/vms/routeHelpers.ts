@@ -73,22 +73,58 @@ export function assertRivetInternal(request: Request): boolean {
 }
 
 /**
- * Authoritative base URL for the Rivet gateway. On Vercel we trust VERCEL_URL (deployment
- * only, set by the platform). Local dev reads `CMUX_VM_API_BASE_URL`, then the cmux-assigned
- * `CMUX_PORT`, then `PORT`. Deriving this from `request.url.origin` is unsafe because a
- * misconfigured reverse proxy could rewrite Host and redirect Stack Auth tokens to an
+ * Authoritative base URL for the Rivet gateway. Explicit non-loopback
+ * `CMUX_VM_API_BASE_URL` values win, and Vercel previews use `VERCEL_URL`. Local dev prefers
+ * the active cmux-assigned port so stale `.env.local` values like `localhost:9910` don't send
+ * RivetKit metadata fetches to a dead process. Deriving this from `request.url.origin` is unsafe
+ * because a misconfigured reverse proxy could rewrite Host and redirect Stack Auth tokens to an
  * attacker-controlled endpoint.
  */
+function validPort(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed && /^\d+$/.test(trimmed) ? trimmed : null;
+}
+
+function activeLocalOriginFromEnv(): { origin: string; port: string } | null {
+  const port = validPort(process.env.CMUX_PORT) ?? validPort(process.env.PORT);
+  return port ? { origin: `http://localhost:${port}`, port } : null;
+}
+
+function loopbackURLPort(value: string): string | null {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    const isLoopback =
+      host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1";
+    if (!isLoopback) return null;
+    if (url.port) return url.port;
+    if (url.protocol === "https:") return "443";
+    if (url.protocol === "http:") return "80";
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function rivetBaseURL(): string {
   const explicit = process.env.CMUX_VM_API_BASE_URL?.trim();
-  if (explicit) return explicit.replace(/\/$/, "");
+  const local = activeLocalOriginFromEnv();
+  if (explicit) {
+    const normalized = explicit.replace(/\/$/, "");
+    const explicitLoopbackPort = loopbackURLPort(normalized);
+    if (
+      process.env.NODE_ENV !== "production" &&
+      local &&
+      explicitLoopbackPort &&
+      explicitLoopbackPort !== local.port
+    ) {
+      return local.origin;
+    }
+    return normalized;
+  }
   const vercel = process.env.VERCEL_URL?.trim();
   if (vercel) return `https://${vercel}`;
-  // `bun run dev` prefers the cmux-assigned terminal port, with 3777 as the plain-shell fallback.
-  const cmuxPort = process.env.CMUX_PORT?.trim();
-  if (cmuxPort && /^\d+$/.test(cmuxPort)) return `http://localhost:${cmuxPort}`;
-  const port = process.env.PORT?.trim();
-  return `http://localhost:${port && /^\d+$/.test(port) ? port : "3777"}`;
+  return local?.origin ?? "http://localhost:3777";
 }
 
 export function parseBearer(request: Request): StackBearer | null {
