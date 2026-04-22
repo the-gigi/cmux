@@ -921,25 +921,22 @@ struct FeedButton: View {
 #endif
 
     var body: some View {
+#if DEBUG
+        if #available(macOS 26.0, *), usesSystemGlassButtonStyle {
+            systemGlassButton
+        } else {
+            plainFeedButton
+        }
+#else
+        plainFeedButton
+#endif
+    }
+
+    private var plainFeedButton: some View {
         Button {
-            // `dimmed` doubles as the disabled signal — swallow the
-            // click at the primitive so upstream action closures don't
-            // have to re-check.
-            guard !dimmed else { return }
-            action()
+            performAction()
         } label: {
-            HStack(spacing: iconSpacing) {
-                if let leadingIcon {
-                    Image(systemName: leadingIcon)
-                        .font(.system(size: iconSize, weight: .medium))
-                }
-                Text(label)
-                    .font(.system(size: labelSize, weight: .medium))
-                if let trailingIcon {
-                    Image(systemName: trailingIcon)
-                        .font(.system(size: iconSize, weight: .medium))
-                }
-            }
+            labelContent
             .foregroundColor(foreground)
             .frame(maxWidth: fullWidth ? .infinity : nil)
             .padding(.horizontal, horizontalPadding)
@@ -957,19 +954,114 @@ struct FeedButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            isHovered = hovering
-            // Only swap the cursor when the button is disabled —
-            // enabled buttons keep the default arrow so the Feed
-            // feels like the rest of the app. Pop on mouseout so a
-            // stale "not allowed" cursor doesn't stick.
-            if dimmed, hovering {
-                NSCursor.operationNotAllowed.push()
-            } else if dimmed, !hovering {
-                NSCursor.pop()
-            }
+            handleHover(hovering)
         }
         .help(label)
     }
+
+    private var labelContent: some View {
+        HStack(spacing: iconSpacing) {
+            if let leadingIcon {
+                Image(systemName: leadingIcon)
+                    .font(.system(size: iconSize, weight: .medium))
+            }
+            Text(label)
+                .font(.system(size: labelSize, weight: .medium))
+            if let trailingIcon {
+                Image(systemName: trailingIcon)
+                    .font(.system(size: iconSize, weight: .medium))
+            }
+        }
+    }
+
+    private func performAction() {
+        // `dimmed` doubles as the disabled signal — swallow the
+        // click at the primitive so upstream action closures don't
+        // have to re-check.
+        guard !dimmed else { return }
+        action()
+    }
+
+    private func handleHover(_ hovering: Bool) {
+        isHovered = hovering
+        // Only swap the cursor when the button is disabled —
+        // enabled buttons keep the default arrow so the Feed
+        // feels like the rest of the app. Pop on mouseout so a
+        // stale "not allowed" cursor doesn't stick.
+        if dimmed, hovering {
+            NSCursor.operationNotAllowed.push()
+        } else if dimmed, !hovering {
+            NSCursor.pop()
+        }
+    }
+
+#if DEBUG
+    private var usesSystemGlassButtonStyle: Bool {
+        _ = debugStyleGeneration
+        switch FeedButtonDebugSettings.visualStyle {
+        case .nativeGlass, .nativeProminentGlass:
+            return true
+        case .solid, .glass, .liquid, .halo, .command, .outline, .flat:
+            return false
+        }
+    }
+
+    @available(macOS 26.0, *)
+    @ViewBuilder
+    private var systemGlassButton: some View {
+        if FeedButtonDebugSettings.visualStyle == .nativeProminentGlass {
+            systemGlassButtonBase
+                .buttonStyle(.glassProminent)
+        } else {
+            systemGlassButtonBase
+                .buttonStyle(.glass)
+        }
+    }
+
+    @available(macOS 26.0, *)
+    private var systemGlassButtonBase: some View {
+        Button {
+            performAction()
+        } label: {
+            labelContent
+                .foregroundStyle(systemGlassForeground)
+                .frame(maxWidth: fullWidth ? .infinity : nil)
+                .padding(.horizontal, max(CGFloat(0), horizontalPadding - 2))
+                .padding(.vertical, max(CGFloat(0), verticalPadding - 1))
+                .contentShape(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                )
+        }
+        .buttonBorderShape(.roundedRectangle(radius: cornerRadius))
+        .controlSize(size == .compact ? .small : .regular)
+        .tint(systemGlassTint)
+        .disabled(dimmed)
+        .opacity(dimmed ? 0.55 : 1.0)
+        .onHover { hovering in
+            handleHover(hovering)
+        }
+        .help(label)
+    }
+
+    private var systemGlassTint: Color {
+        glassEffectTint.opacity(FeedButtonDebugSettings.glassTintOpacity)
+    }
+
+    private var systemGlassForeground: Color {
+        if let color = FeedButtonDebugSettings.color(for: kind, role: .foreground) {
+            return color
+        }
+
+        switch FeedButtonDebugSettings.visualStyle {
+        case .nativeProminentGlass:
+            return kind == .light ? .black : .white
+        case .nativeGlass:
+            return .primary
+        case .solid, .glass, .liquid, .halo, .command, .outline, .flat:
+            return foreground
+        }
+    }
+#endif
 
     // MARK: - Style resolution
 
