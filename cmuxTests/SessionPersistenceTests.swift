@@ -544,6 +544,49 @@ final class SessionPersistenceTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testSessionAutosaveFingerprintIncludesRestorableAgentMetadata() throws {
+        let tabManager = TabManager()
+        let workspace = try XCTUnwrap(tabManager.tabs.first)
+        let panelId = try XCTUnwrap(workspace.focusedPanelId)
+        let baselineFingerprint = tabManager.sessionAutosaveFingerprint()
+
+        let firstIndex = try makeRestorableAgentIndex(
+            workspaceId: workspace.id,
+            panelId: panelId,
+            sessionId: "codex-session-1",
+            arguments: [
+                "/usr/local/bin/codex",
+                "--model",
+                "gpt-5.4",
+                "resume",
+                "codex-session-1",
+            ]
+        )
+        let firstFingerprint = tabManager.sessionAutosaveFingerprint(
+            restorableAgentIndex: firstIndex
+        )
+
+        let secondIndex = try makeRestorableAgentIndex(
+            workspaceId: workspace.id,
+            panelId: panelId,
+            sessionId: "codex-session-2",
+            arguments: [
+                "/usr/local/bin/codex",
+                "--model",
+                "gpt-5.4-mini",
+                "resume",
+                "codex-session-2",
+            ]
+        )
+        let secondFingerprint = tabManager.sessionAutosaveFingerprint(
+            restorableAgentIndex: secondIndex
+        )
+
+        XCTAssertNotEqual(baselineFingerprint, firstFingerprint)
+        XCTAssertNotEqual(firstFingerprint, secondFingerprint)
+    }
+
     func testResolvedWindowFramePrefersSavedDisplayIdentity() {
         let savedFrame = SessionRectSnapshot(x: 1_200, y: 100, width: 600, height: 400)
         let savedDisplay = SessionDisplaySnapshot(
@@ -870,6 +913,50 @@ final class SessionPersistenceTests: XCTestCase {
         )
 
         XCTAssertNil(resolved)
+    }
+
+    private func makeRestorableAgentIndex(
+        workspaceId: UUID,
+        panelId: UUID,
+        sessionId: String,
+        arguments: [String]
+    ) throws -> RestorableAgentSessionIndex {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-agent-hook-store-\(UUID().uuidString)", isDirectory: true)
+        let storeURL = RestorableAgentKind.codex.hookStoreFileURL(homeDirectory: home.path)
+        try FileManager.default.createDirectory(
+            at: storeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let jsonObject: [String: Any] = [
+            "version": 1,
+            "sessions": [
+                sessionId: [
+                    "sessionId": sessionId,
+                    "workspaceId": workspaceId.uuidString,
+                    "surfaceId": panelId.uuidString,
+                    "cwd": "/tmp/repo",
+                    "updatedAt": Date().timeIntervalSince1970,
+                    "launchCommand": [
+                        "launcher": "codex",
+                        "executablePath": "/usr/local/bin/codex",
+                        "arguments": arguments,
+                        "workingDirectory": "/tmp/repo",
+                        "environment": [
+                            "CODEX_HOME": "/tmp/codex",
+                        ],
+                        "capturedAt": Date().timeIntervalSince1970,
+                        "source": "process",
+                    ],
+                ],
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: jsonObject, options: [.prettyPrinted])
+        try data.write(to: storeURL, options: .atomic)
+
+        return RestorableAgentSessionIndex.load(homeDirectory: home.path)
     }
 
     private func makeSnapshot(version: Int) -> AppSessionSnapshot {
@@ -1516,6 +1603,7 @@ final class SocketListenerAcceptPolicyTests: XCTestCase {
             "cd '/tmp/repo' && 'env' 'CODEX_HOME=/tmp/codex' '/usr/local/bin/codex' 'resume' '--model' 'gpt-5.4' '--search' 'codex-session-123'"
         )
     }
+
 }
 
 final class SidebarDragFailsafePolicyTests: XCTestCase {

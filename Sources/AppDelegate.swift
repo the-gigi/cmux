@@ -4615,7 +4615,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         didDisableSuddenTermination = false
     }
 
-    private func sessionAutosaveFingerprint(includeScrollback: Bool) -> Int? {
+    private func sessionAutosaveFingerprint(
+        includeScrollback: Bool,
+        restorableAgentIndex: RestorableAgentSessionIndex
+    ) -> Int? {
         guard !includeScrollback else { return nil }
 
         var hasher = Hasher()
@@ -4626,7 +4629,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         for context in contexts.prefix(SessionPersistencePolicy.maxWindowsPerSnapshot) {
             hasher.combine(context.windowId)
-            hasher.combine(context.tabManager.sessionAutosaveFingerprint())
+            hasher.combine(
+                context.tabManager.sessionAutosaveFingerprint(
+                    restorableAgentIndex: restorableAgentIndex
+                )
+            )
             hasher.combine(context.sidebarState.isVisible)
             hasher.combine(
                 Int(SessionPersistencePolicy.sanitizedSidebarWidth(Double(context.sidebarState.persistedWidth)).rounded())
@@ -4650,7 +4657,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @discardableResult
-    private func saveSessionSnapshot(includeScrollback: Bool, removeWhenEmpty: Bool = false) -> Bool {
+    private func saveSessionSnapshot(
+        includeScrollback: Bool,
+        removeWhenEmpty: Bool = false,
+        restorableAgentIndex: RestorableAgentSessionIndex? = nil
+    ) -> Bool {
         if Self.shouldSkipSessionSaveDuringRestore(
             isApplyingSessionRestore: isApplyingSessionRestore,
             includeScrollback: includeScrollback
@@ -4676,7 +4687,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 #endif
 
-        guard let snapshot = buildSessionSnapshot(includeScrollback: includeScrollback) else {
+        guard let snapshot = buildSessionSnapshot(
+            includeScrollback: includeScrollback,
+            restorableAgentIndex: restorableAgentIndex
+        ) else {
             persistSessionSnapshot(
                 nil,
                 removeWhenEmpty: removeWhenEmpty,
@@ -4805,7 +4819,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #if DEBUG
         let fingerprintStart = ProcessInfo.processInfo.systemUptime
 #endif
-        let autosaveFingerprint = sessionAutosaveFingerprint(includeScrollback: false)
+        let restorableAgentIndex = RestorableAgentSessionIndex.load()
+        let autosaveFingerprint = sessionAutosaveFingerprint(
+            includeScrollback: false,
+            restorableAgentIndex: restorableAgentIndex
+        )
 #if DEBUG
         fingerprintMs = (ProcessInfo.processInfo.systemUptime - fingerprintStart) * 1000.0
 #endif
@@ -4828,7 +4846,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #if DEBUG
         let saveStart = ProcessInfo.processInfo.systemUptime
 #endif
-        _ = saveSessionSnapshot(includeScrollback: false)
+        _ = saveSessionSnapshot(
+            includeScrollback: false,
+            restorableAgentIndex: restorableAgentIndex
+        )
 #if DEBUG
         saveMs = (ProcessInfo.processInfo.systemUptime - saveStart) * 1000.0
 #endif
@@ -4934,11 +4955,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    private func buildSessionSnapshot(includeScrollback: Bool) -> AppSessionSnapshot? {
+    private func buildSessionSnapshot(
+        includeScrollback: Bool,
+        restorableAgentIndex suppliedRestorableAgentIndex: RestorableAgentSessionIndex? = nil
+    ) -> AppSessionSnapshot? {
         let contexts = sortedMainWindowContextsForSessionSnapshot()
 
         guard !contexts.isEmpty else { return nil }
-        let restorableAgentIndex = RestorableAgentSessionIndex.load()
+        let restorableAgentIndex = suppliedRestorableAgentIndex ?? RestorableAgentSessionIndex.load()
 
         let windows: [SessionWindowSnapshot] = contexts
             .prefix(SessionPersistencePolicy.maxWindowsPerSnapshot)

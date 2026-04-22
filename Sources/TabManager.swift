@@ -7064,7 +7064,9 @@ class TabManager: ObservableObject {
 }
 
 extension TabManager {
-    func sessionAutosaveFingerprint() -> Int {
+    func sessionAutosaveFingerprint(
+        restorableAgentIndex: RestorableAgentSessionIndex = .empty
+    ) -> Int {
         var hasher = Hasher()
         hasher.combine(selectedTabId)
         hasher.combine(tabs.count)
@@ -7088,6 +7090,19 @@ extension TabManager {
             hasher.combine(workspace.panelGitBranches.count)
             hasher.combine(workspace.surfaceListeningPorts.count)
 
+            let panelIds = workspace.panels.keys.sorted { $0.uuidString < $1.uuidString }
+            hasher.combine(panelIds.count)
+            for panelId in panelIds {
+                hasher.combine(panelId)
+                hashRestorableAgentSnapshot(
+                    restorableAgentIndex.snapshot(
+                        workspaceId: workspace.id,
+                        panelId: panelId
+                    ),
+                    into: &hasher
+                )
+            }
+
             if let progress = workspace.progress {
                 hasher.combine(Int((progress.value * 1000).rounded()))
                 hasher.combine(progress.label)
@@ -7105,6 +7120,68 @@ extension TabManager {
         }
 
         return hasher.finalize()
+    }
+
+    private func hashRestorableAgentSnapshot(
+        _ snapshot: SessionRestorableAgentSnapshot?,
+        into hasher: inout Hasher
+    ) {
+        guard let snapshot else {
+            hasher.combine(false)
+            return
+        }
+
+        hasher.combine(true)
+        hasher.combine(snapshot.kind.rawValue)
+        hasher.combine(snapshot.sessionId)
+        hashOptionalString(snapshot.workingDirectory, into: &hasher)
+        hashAgentLaunchCommand(snapshot.launchCommand, into: &hasher)
+    }
+
+    private func hashAgentLaunchCommand(
+        _ launchCommand: AgentLaunchCommandSnapshot?,
+        into hasher: inout Hasher
+    ) {
+        guard let launchCommand else {
+            hasher.combine(false)
+            return
+        }
+
+        hasher.combine(true)
+        hashOptionalString(launchCommand.launcher, into: &hasher)
+        hashOptionalString(launchCommand.executablePath, into: &hasher)
+        hasher.combine(launchCommand.arguments)
+        hashOptionalString(launchCommand.workingDirectory, into: &hasher)
+        if let environment = launchCommand.environment {
+            hasher.combine(true)
+            hasher.combine(environment.count)
+            for key in environment.keys.sorted() {
+                hasher.combine(key)
+                hasher.combine(environment[key])
+            }
+        } else {
+            hasher.combine(false)
+        }
+        hashOptionalDouble(launchCommand.capturedAt, into: &hasher)
+        hashOptionalString(launchCommand.source, into: &hasher)
+    }
+
+    private func hashOptionalString(_ value: String?, into hasher: inout Hasher) {
+        if let value {
+            hasher.combine(true)
+            hasher.combine(value)
+        } else {
+            hasher.combine(false)
+        }
+    }
+
+    private func hashOptionalDouble(_ value: Double?, into hasher: inout Hasher) {
+        if let value {
+            hasher.combine(true)
+            hasher.combine(value)
+        } else {
+            hasher.combine(false)
+        }
     }
 
     func sessionSnapshot(
