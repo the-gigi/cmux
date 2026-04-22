@@ -4,6 +4,21 @@ import Foundation
 
 struct CmuxConfigFile: Codable, Sendable {
     var commands: [CmuxCommandDefinition]
+
+    /// Parse cmux.json data, tolerating per-command decode failures.
+    /// Returns the config (nil if the top-level JSON shape is unusable) and a list of
+    /// human-readable warnings describing any entries that were skipped. Callers should
+    /// surface the warnings via logging so misconfigured commands are visible to users
+    /// instead of silently nuking the entire file.
+    static func parseLenient(_ data: Data) -> (file: CmuxConfigFile?, warnings: [String]) {
+        // Strict-pass-through implementation; made tolerant in the follow-up fix commit.
+        do {
+            let file = try JSONDecoder().decode(CmuxConfigFile.self, from: data)
+            return (file, [])
+        } catch {
+            return (nil, [String(describing: error)])
+        }
+    }
 }
 
 struct CmuxCommandDefinition: Codable, Sendable, Identifiable {
