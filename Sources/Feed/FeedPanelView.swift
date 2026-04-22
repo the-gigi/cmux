@@ -2133,6 +2133,7 @@ private struct QuestionActionArea: View {
             selectCustomAnswer(questionId: questionId, multi: multi)
             focusedCustomAnswerId = focusKey
         }
+        .feedIBeamCursorOnHover(enabled: status.isPending)
         .disabled(!status.isPending)
     }
 
@@ -2214,13 +2215,7 @@ private struct QuestionActionArea: View {
                 .stroke(Color.primary.opacity(0.10), lineWidth: 1)
         )
         .contentShape(Rectangle())
-        .onHover { hovering in
-            if hovering {
-                NSCursor.iBeam.push()
-            } else {
-                NSCursor.pop()
-            }
-        }
+        .feedIBeamCursorOnHover(enabled: status.isPending)
         .onTapGesture {
             guard status.isPending else { return }
             selectCustomAnswer(questionId: questionId, multi: multi)
@@ -2438,6 +2433,11 @@ private final class FeedInlineNativeTextField: NSTextField {
         configureFieldEditor()
     }
 
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .iBeam)
+    }
+
     override func becomeFirstResponder() -> Bool {
         let didBecomeFirstResponder = super.becomeFirstResponder()
         if didBecomeFirstResponder {
@@ -2588,6 +2588,59 @@ private struct FeedInlineTextField: NSViewRepresentable {
         field.drawsBackground = false
         field.backgroundColor = .clear
         field.configureFieldEditor()
+    }
+}
+
+private struct FeedIBeamCursorRegion: NSViewRepresentable {
+    let enabled: Bool
+
+    func makeNSView(context: Context) -> FeedCursorRectView {
+        let view = FeedCursorRectView()
+        view.cursor = enabled ? .iBeam : nil
+        return view
+    }
+
+    func updateNSView(_ nsView: FeedCursorRectView, context: Context) {
+        nsView.cursor = enabled ? .iBeam : nil
+    }
+}
+
+private final class FeedCursorRectView: NSView {
+    var cursor: NSCursor? {
+        didSet {
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard let cursor, bounds.width > 0, bounds.height > 0 else { return }
+        addCursorRect(bounds, cursor: cursor)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func setFrameOrigin(_ newOrigin: NSPoint) {
+        super.setFrameOrigin(newOrigin)
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.invalidateCursorRects(for: self)
+    }
+}
+
+private extension View {
+    func feedIBeamCursorOnHover(enabled: Bool) -> some View {
+        overlay(FeedIBeamCursorRegion(enabled: enabled))
     }
 }
 
