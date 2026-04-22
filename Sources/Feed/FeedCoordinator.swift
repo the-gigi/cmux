@@ -136,8 +136,10 @@ final class FeedCoordinator: @unchecked Sendable {
             if let decision = w?.decision {
                 return .resolved(itemId: itemIdSlot.value, decision: decision)
             }
+            expireTimedOutItem(itemIdSlot.value)
             return .timedOut(itemId: itemIdSlot.value)
         case .timedOut:
+            expireTimedOutItem(itemIdSlot.value)
             return .timedOut(itemId: itemIdSlot.value)
         }
     }
@@ -187,6 +189,20 @@ final class FeedCoordinator: @unchecked Sendable {
             }
         }
         return nil
+    }
+
+    private func expireTimedOutItem(_ itemId: UUID?) {
+        guard let itemId else { return }
+        let expire: @Sendable () -> Void = { [itemId] in
+            MainActor.assumeIsolated {
+                FeedCoordinator.shared.store?.markExpired(itemId)
+            }
+        }
+        if Thread.isMainThread {
+            expire()
+        } else {
+            DispatchQueue.main.sync(execute: expire)
+        }
     }
 
     enum IngestBlockingResult {

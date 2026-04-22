@@ -115,8 +115,19 @@ public final class WorkstreamStore {
     /// resolution event).
     public func markResolved(_ itemId: UUID, decision: WorkstreamDecision) {
         guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
-        items[idx].status = .resolved(decision, at: clock())
-        items[idx].updatedAt = clock()
+        guard items[idx].status.isPending else { return }
+        let now = clock()
+        items[idx].status = .resolved(decision, at: now)
+        items[idx].updatedAt = now
+    }
+
+    /// Marks one still-pending item expired.
+    public func markExpired(_ itemId: UUID) {
+        guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
+        guard items[idx].status.isPending else { return }
+        let now = clock()
+        items[idx].status = .expired(at: now)
+        items[idx].updatedAt = now
     }
 
     /// Marks every still-pending item created before `threshold` as
