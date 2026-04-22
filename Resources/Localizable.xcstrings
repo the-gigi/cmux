@@ -92146,6 +92146,13 @@
         "ja": { "stringUnit": { "state": "translated", "value": "コマンド" } }
       }
     },
+    "feed.buttonDebug.style.commandLight": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Command Light" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "コマンドライト" } }
+      }
+    },
     "feed.buttonDebug.style.outline": {
       "extractionState": "manual",
       "localizations": {
@@ -92172,6 +92179,34 @@
       "localizations": {
         "en": { "stringUnit": { "state": "translated", "value": "Variations" } },
         "ja": { "stringUnit": { "state": "translated", "value": "バリエーション" } }
+      }
+    },
+    "feed.buttonDebug.section.base": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Base" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ベース" } }
+      }
+    },
+    "feed.buttonDebug.section.nativeGlass": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Native Glass" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ネイティブGlass" } }
+      }
+    },
+    "feed.buttonDebug.section.command": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Command" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "コマンド" } }
+      }
+    },
+    "feed.buttonDebug.section.material": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Material" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "マテリアル" } }
       }
     },
     "feed.buttonDebug.preset.solidClassic": {
@@ -92228,6 +92263,48 @@
       "localizations": {
         "en": { "stringUnit": { "state": "translated", "value": "Command Dark" } },
         "ja": { "stringUnit": { "state": "translated", "value": "コマンドダーク" } }
+      }
+    },
+    "feed.buttonDebug.preset.commandLight": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Command Light" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "コマンドライト" } }
+      }
+    },
+    "feed.buttonDebug.preset.clearGlass": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Clear Glass" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "クリアGlass" } }
+      }
+    },
+    "feed.buttonDebug.preset.nativeBlue": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Native Blue" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ネイティブブルー" } }
+      }
+    },
+    "feed.buttonDebug.preset.liquidMono": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Liquid Mono" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "リキッドモノ" } }
+      }
+    },
+    "feed.buttonDebug.preset.softHalo": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Soft Halo" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ソフトハロー" } }
+      }
+    },
+    "feed.buttonDebug.preset.hairlineGlass": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Hairline Glass" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ヘアラインGlass" } }
       }
     },
     "feed.buttonDebug.preset.minimalFlat": {

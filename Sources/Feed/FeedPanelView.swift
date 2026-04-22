@@ -999,7 +999,7 @@ struct FeedButton: View {
     private var usesSystemGlassButtonStyle: Bool {
         _ = debugStyleGeneration
         switch FeedButtonDebugSettings.visualStyle {
-        case .nativeGlass, .nativeProminentGlass:
+        case .nativeGlass, .nativeProminentGlass, .commandLight:
             return true
         case .solid, .glass, .liquid, .halo, .command, .outline, .flat:
             return false
@@ -1057,7 +1057,7 @@ struct FeedButton: View {
             return kind == .light ? .black : .white
         case .nativeGlass:
             return .primary
-        case .solid, .glass, .liquid, .halo, .command, .outline, .flat:
+        case .solid, .glass, .liquid, .halo, .command, .commandLight, .outline, .flat:
             return foreground
         }
     }
@@ -1294,6 +1294,17 @@ struct FeedButton: View {
                         )
                     )
                 )
+        case .commandLight:
+            shape
+                .fill(.regularMaterial)
+                .overlay(shape.fill(Color.white.opacity(0.22)))
+                .overlay(
+                    shape.fill(
+                        backgroundFill.opacity(
+                            FeedButtonDebugSettings.glassTintOpacity
+                        )
+                    )
+                )
         case .outline:
             shape.fill(isHovered || isSelected ? backgroundFill.opacity(0.14) : Color.clear)
         case .flat:
@@ -1338,6 +1349,8 @@ struct FeedButton: View {
             )
         case .command:
             shape.stroke(Color.white.opacity(0.12), lineWidth: FeedButtonDebugSettings.borderWidth)
+        case .commandLight:
+            shape.stroke(Color.black.opacity(0.12), lineWidth: FeedButtonDebugSettings.borderWidth)
         case .outline:
             shape.stroke(backgroundFill.opacity(0.75), lineWidth: FeedButtonDebugSettings.borderWidth)
         case .flat:
@@ -1358,6 +1371,8 @@ struct FeedButton: View {
             return backgroundFill.opacity(isHovered || isSelected ? 0.18 : 0.10)
         case .command:
             return Color.black.opacity(0.28)
+        case .commandLight:
+            return Color.black.opacity(isHovered || isSelected ? 0.16 : 0.08)
         case .nativeProminentGlass:
             return backgroundFill.opacity(isHovered || isSelected ? 0.18 : 0.10)
         case .solid, .glass, .nativeGlass, .outline, .flat:
@@ -1376,6 +1391,7 @@ struct FeedButton: View {
         case .liquid: return isHovered || isSelected ? 5 : 3
         case .nativeProminentGlass: return isHovered || isSelected ? 5 : 3
         case .command: return 3
+        case .commandLight: return isHovered || isSelected ? 4 : 2
         case .solid, .glass, .nativeGlass, .outline, .flat: return 0
         }
 #else
@@ -1388,7 +1404,7 @@ struct FeedButton: View {
         _ = debugStyleGeneration
         switch FeedButtonDebugSettings.visualStyle {
         case .halo: return 2
-        case .liquid, .nativeProminentGlass, .command: return 1
+        case .liquid, .nativeProminentGlass, .command, .commandLight: return 1
         case .solid, .glass, .nativeGlass, .outline, .flat: return 0
         }
 #else

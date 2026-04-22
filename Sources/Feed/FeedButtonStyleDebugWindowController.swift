@@ -10,6 +10,7 @@ enum FeedButtonDebugVisualStyle: String, CaseIterable, Identifiable {
     case liquid
     case halo
     case command
+    case commandLight
     case outline
     case flat
 
@@ -31,6 +32,8 @@ enum FeedButtonDebugVisualStyle: String, CaseIterable, Identifiable {
             return String(localized: "feed.buttonDebug.style.halo", defaultValue: "Halo")
         case .command:
             return String(localized: "feed.buttonDebug.style.command", defaultValue: "Command")
+        case .commandLight:
+            return String(localized: "feed.buttonDebug.style.commandLight", defaultValue: "Command Light")
         case .outline:
             return String(localized: "feed.buttonDebug.style.outline", defaultValue: "Outline")
         case .flat:
@@ -251,6 +254,12 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
     case frostedOutline
     case haloGlow
     case commandDark
+    case commandLight
+    case clearGlass
+    case nativeBlue
+    case liquidMono
+    case softHalo
+    case hairlineGlass
     case minimalFlat
 
     var id: String { rawValue }
@@ -273,6 +282,18 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
             return String(localized: "feed.buttonDebug.preset.haloGlow", defaultValue: "Halo Glow")
         case .commandDark:
             return String(localized: "feed.buttonDebug.preset.commandDark", defaultValue: "Command Dark")
+        case .commandLight:
+            return String(localized: "feed.buttonDebug.preset.commandLight", defaultValue: "Command Light")
+        case .clearGlass:
+            return String(localized: "feed.buttonDebug.preset.clearGlass", defaultValue: "Clear Glass")
+        case .nativeBlue:
+            return String(localized: "feed.buttonDebug.preset.nativeBlue", defaultValue: "Native Blue")
+        case .liquidMono:
+            return String(localized: "feed.buttonDebug.preset.liquidMono", defaultValue: "Liquid Mono")
+        case .softHalo:
+            return String(localized: "feed.buttonDebug.preset.softHalo", defaultValue: "Soft Halo")
+        case .hairlineGlass:
+            return String(localized: "feed.buttonDebug.preset.hairlineGlass", defaultValue: "Hairline Glass")
         case .minimalFlat:
             return String(localized: "feed.buttonDebug.preset.minimalFlat", defaultValue: "Minimal Flat")
         }
@@ -288,6 +309,12 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .frostedOutline: return .outline
         case .haloGlow: return .halo
         case .commandDark: return .command
+        case .commandLight: return .commandLight
+        case .clearGlass: return .nativeGlass
+        case .nativeBlue: return .nativeGlass
+        case .liquidMono: return .liquid
+        case .softHalo: return .halo
+        case .hairlineGlass: return .outline
         case .minimalFlat: return .flat
         }
     }
@@ -299,7 +326,10 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .nativeGlass: return 9.0
         case .nativeProminentGlass: return 10.0
         case .liquidCapsule: return 12.0
-        case .haloGlow, .commandDark: return 8.0
+        case .haloGlow, .commandDark, .commandLight: return 8.0
+        case .clearGlass, .nativeBlue, .softHalo: return 9.0
+        case .liquidMono: return 11.0
+        case .hairlineGlass: return 6.0
         }
     }
 
@@ -311,6 +341,10 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .nativeProminentGlass: return 11.0
         case .liquidCapsule: return 14.0
         case .haloGlow: return 9.0
+        case .commandLight: return 8.0
+        case .clearGlass, .nativeBlue, .softHalo: return 10.0
+        case .liquidMono: return 13.0
+        case .hairlineGlass: return 7.0
         }
     }
 
@@ -322,6 +356,9 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .nativeProminentGlass: return 10.0
         case .liquidCapsule: return 10.0
         case .haloGlow: return 9.5
+        case .commandLight, .clearGlass, .nativeBlue, .softHalo: return 9.5
+        case .liquidMono: return 10.5
+        case .hairlineGlass: return 8.5
         case .solidClassic: return 8.0
         }
     }
@@ -334,6 +371,10 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .liquidCapsule: return 15.0
         case .haloGlow: return 13.0
         case .solidClassic, .raycastGlass, .frostedOutline, .commandDark: return 12.0
+        case .commandLight: return 12.0
+        case .clearGlass, .nativeBlue, .softHalo: return 13.0
+        case .liquidMono: return 14.0
+        case .hairlineGlass: return 11.0
         }
     }
 
@@ -344,6 +385,9 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .nativeProminentGlass: return 5.5
         case .liquidCapsule, .haloGlow: return 5.0
         case .raycastGlass, .frostedOutline, .commandDark: return 4.5
+        case .commandLight, .clearGlass, .nativeBlue, .softHalo: return 4.5
+        case .liquidMono: return 5.0
+        case .hairlineGlass: return 4.0
         case .solidClassic: return 4.0
         }
     }
@@ -356,6 +400,9 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .liquidCapsule: return 6.5
         case .raycastGlass, .haloGlow: return 6.0
         case .frostedOutline, .commandDark: return 5.5
+        case .commandLight, .clearGlass, .nativeBlue, .softHalo: return 5.5
+        case .liquidMono: return 6.0
+        case .hairlineGlass: return 5.0
         case .solidClassic: return 5.0
         }
     }
@@ -370,6 +417,12 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .frostedOutline: return 0.18
         case .haloGlow: return 0.34
         case .commandDark: return 0.24
+        case .commandLight: return 0.18
+        case .clearGlass: return 0.08
+        case .nativeBlue: return 0.34
+        case .liquidMono: return 0.20
+        case .softHalo: return 0.18
+        case .hairlineGlass: return 0.10
         case .minimalFlat: return 0.12
         }
     }
@@ -382,6 +435,10 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .liquidCapsule: return 0.7
         case .frostedOutline: return 1.2
         case .haloGlow: return 0.9
+        case .commandLight: return 0.8
+        case .clearGlass, .nativeBlue: return 0.6
+        case .liquidMono, .softHalo: return 0.8
+        case .hairlineGlass: return 0.7
         case .minimalFlat: return 0.5
         }
     }
@@ -400,6 +457,18 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
             return haloPalette(for: kind)
         case .commandDark:
             return commandPalette(for: kind)
+        case .commandLight:
+            return commandLightPalette(for: kind)
+        case .clearGlass:
+            return clearGlassPalette(for: kind)
+        case .nativeBlue:
+            return nativeBluePalette(for: kind)
+        case .liquidMono:
+            return liquidMonoPalette(for: kind)
+        case .softHalo:
+            return softHaloPalette(for: kind)
+        case .hairlineGlass:
+            return hairlineGlassPalette(for: kind)
         case .minimalFlat:
             return minimalPalette(for: kind)
         }
@@ -467,6 +536,84 @@ enum FeedButtonDebugPreset: String, CaseIterable, Identifiable {
         case .success: return .init(background: "#1D8051", hoverBackground: "#299C64", foreground: "#FFFFFF")
         case .warning: return .init(background: "#BE6930", hoverBackground: "#D97D3C", foreground: "#FFFFFF")
         case .destructive: return .init(background: "#A9363F", hoverBackground: "#C44550", foreground: "#FFFFFF")
+        }
+    }
+
+    private func commandLightPalette(for kind: FeedButton.Kind) -> FeedButtonDebugPalette {
+        switch kind {
+        case .ghost: return .init(background: "#E7EDF3", hoverBackground: "#F4F7FA", foreground: "#1B2430")
+        case .soft: return .init(background: "#DDE5ED", hoverBackground: "#EAF0F5", foreground: "#1C2430")
+        case .dark: return .init(background: "#48525F", hoverBackground: "#5A6675", foreground: "#FFFFFF")
+        case .light: return .init(background: "#F5F7FA", hoverBackground: "#FFFFFF", foreground: "#111827")
+        case .primary: return .init(background: "#D9E8FF", hoverBackground: "#E6F1FF", foreground: "#123B6D")
+        case .success: return .init(background: "#D8F0E2", hoverBackground: "#E7F8EE", foreground: "#155234")
+        case .warning: return .init(background: "#F5E2CE", hoverBackground: "#FAECDD", foreground: "#70421C")
+        case .destructive: return .init(background: "#F2D7DA", hoverBackground: "#F8E5E7", foreground: "#7A1E28")
+        }
+    }
+
+    private func clearGlassPalette(for kind: FeedButton.Kind) -> FeedButtonDebugPalette {
+        switch kind {
+        case .ghost: return .init(background: "#CBD5DF", hoverBackground: "#E2E8EF", foreground: "#111827")
+        case .soft: return .init(background: "#D2D8DF", hoverBackground: "#E7EBEF", foreground: "#111827")
+        case .dark: return .init(background: "#5B6572", hoverBackground: "#6F7A89", foreground: "#FFFFFF")
+        case .light: return .init(background: "#F8FAFC", hoverBackground: "#FFFFFF", foreground: "#111827")
+        case .primary: return .init(background: "#CFE2FF", hoverBackground: "#E0EDFF", foreground: "#133A66")
+        case .success: return .init(background: "#D6F1E2", hoverBackground: "#E6F8EE", foreground: "#145234")
+        case .warning: return .init(background: "#F4E1CF", hoverBackground: "#FAECDF", foreground: "#6B401E")
+        case .destructive: return .init(background: "#F1D6DB", hoverBackground: "#F8E5E9", foreground: "#751D2A")
+        }
+    }
+
+    private func nativeBluePalette(for kind: FeedButton.Kind) -> FeedButtonDebugPalette {
+        switch kind {
+        case .ghost: return .init(background: "#8CB7E8", hoverBackground: "#A8C9F0", foreground: "#F8FBFF")
+        case .soft: return .init(background: "#7799C4", hoverBackground: "#8EADD4", foreground: "#FFFFFF")
+        case .dark: return .init(background: "#1B3356", hoverBackground: "#294A78", foreground: "#FFFFFF")
+        case .light: return .init(background: "#EAF3FF", hoverBackground: "#FFFFFF", foreground: "#0F2E52")
+        case .primary: return .init(background: "#2C79E4", hoverBackground: "#4992FA", foreground: "#FFFFFF")
+        case .success: return .init(background: "#299A82", hoverBackground: "#36B99C", foreground: "#FFFFFF")
+        case .warning: return .init(background: "#D68A45", hoverBackground: "#F09D55", foreground: "#FFFFFF")
+        case .destructive: return .init(background: "#C64D67", hoverBackground: "#DD5E79", foreground: "#FFFFFF")
+        }
+    }
+
+    private func liquidMonoPalette(for kind: FeedButton.Kind) -> FeedButtonDebugPalette {
+        switch kind {
+        case .ghost: return .init(background: "#88919A", hoverBackground: "#A1A9B1", foreground: "#F8FAFC")
+        case .soft: return .init(background: "#6D747C", hoverBackground: "#828A93", foreground: "#FFFFFF")
+        case .dark: return .init(background: "#252A30", hoverBackground: "#343B43", foreground: "#FFFFFF")
+        case .light: return .init(background: "#ECEFF2", hoverBackground: "#FFFFFF", foreground: "#111827")
+        case .primary: return .init(background: "#607D9F", hoverBackground: "#7492B6", foreground: "#FFFFFF")
+        case .success: return .init(background: "#607F70", hoverBackground: "#749685", foreground: "#FFFFFF")
+        case .warning: return .init(background: "#8C785F", hoverBackground: "#A08D73", foreground: "#FFFFFF")
+        case .destructive: return .init(background: "#87656A", hoverBackground: "#9C777D", foreground: "#FFFFFF")
+        }
+    }
+
+    private func softHaloPalette(for kind: FeedButton.Kind) -> FeedButtonDebugPalette {
+        switch kind {
+        case .ghost: return .init(background: "#B4C0D5", hoverBackground: "#C7D2E6", foreground: "#FFFFFF")
+        case .soft: return .init(background: "#9DA8BA", hoverBackground: "#B2BDCE", foreground: "#FFFFFF")
+        case .dark: return .init(background: "#303848", hoverBackground: "#434D60", foreground: "#FFFFFF")
+        case .light: return .init(background: "#F1F4FA", hoverBackground: "#FFFFFF", foreground: "#111827")
+        case .primary: return .init(background: "#7EAAED", hoverBackground: "#96BCF5", foreground: "#FFFFFF")
+        case .success: return .init(background: "#7AC49A", hoverBackground: "#91D8AD", foreground: "#FFFFFF")
+        case .warning: return .init(background: "#E0A676", hoverBackground: "#F0BA8A", foreground: "#FFFFFF")
+        case .destructive: return .init(background: "#D7868D", hoverBackground: "#EA9CA3", foreground: "#FFFFFF")
+        }
+    }
+
+    private func hairlineGlassPalette(for kind: FeedButton.Kind) -> FeedButtonDebugPalette {
+        switch kind {
+        case .ghost: return .init(background: "#9CA3AF", hoverBackground: "#C1C7D0", foreground: "#E5E7EB")
+        case .soft: return .init(background: "#7B838E", hoverBackground: "#9AA2AD", foreground: "#F3F4F6")
+        case .dark: return .init(background: "#30343A", hoverBackground: "#454A52", foreground: "#FFFFFF")
+        case .light: return .init(background: "#EEF0F3", hoverBackground: "#FFFFFF", foreground: "#111827")
+        case .primary: return .init(background: "#73A7EC", hoverBackground: "#8DB9F5", foreground: "#FFFFFF")
+        case .success: return .init(background: "#72BE92", hoverBackground: "#88D2A6", foreground: "#FFFFFF")
+        case .warning: return .init(background: "#D69B6F", hoverBackground: "#EAB083", foreground: "#FFFFFF")
+        case .destructive: return .init(background: "#CE7E84", hoverBackground: "#E19399", foreground: "#FFFFFF")
         }
     }
 
@@ -546,6 +693,45 @@ final class FeedButtonStyleDebugWindowController: NSWindowController, NSWindowDe
     func show() {
         window?.center()
         window?.makeKeyAndOrderFront(nil)
+    }
+}
+
+private struct FeedButtonDebugPresetSection: Identifiable {
+    let id: String
+    let label: String
+    let presets: [FeedButtonDebugPreset]
+
+    static var all: [FeedButtonDebugPresetSection] {
+        [
+            FeedButtonDebugPresetSection(
+                id: "base",
+                label: String(localized: "feed.buttonDebug.section.base", defaultValue: "Base"),
+                presets: [.solidClassic, .minimalFlat]
+            ),
+            FeedButtonDebugPresetSection(
+                id: "native",
+                label: String(localized: "feed.buttonDebug.section.nativeGlass", defaultValue: "Native Glass"),
+                presets: [.nativeGlass, .nativeProminentGlass, .clearGlass, .nativeBlue]
+            ),
+            FeedButtonDebugPresetSection(
+                id: "command",
+                label: String(localized: "feed.buttonDebug.section.command", defaultValue: "Command"),
+                presets: [.commandDark, .commandLight]
+            ),
+            FeedButtonDebugPresetSection(
+                id: "material",
+                label: String(localized: "feed.buttonDebug.section.material", defaultValue: "Material"),
+                presets: [
+                    .raycastGlass,
+                    .liquidCapsule,
+                    .liquidMono,
+                    .frostedOutline,
+                    .haloGlow,
+                    .softHalo,
+                    .hairlineGlass,
+                ]
+            ),
+        ]
     }
 }
 
@@ -671,45 +857,22 @@ private struct FeedButtonStyleDebugView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
 
-                LazyVGrid(
-                    columns: [
-                        GridItem(.adaptive(minimum: 132), spacing: 8, alignment: .leading),
-                    ],
-                    alignment: .leading,
-                    spacing: 8
-                ) {
-                    ForEach(FeedButtonDebugPreset.allCases) { preset in
-                        Button {
-                            applyPreset(preset)
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: preset == activePreset ? "checkmark.circle.fill" : "circle")
-                                    .font(.system(size: 11, weight: .medium))
-                                Text(preset.label)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.82)
+                ForEach(FeedButtonDebugPresetSection.all) { section in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(section.label)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        LazyVGrid(
+                            columns: [
+                                GridItem(.adaptive(minimum: 132), spacing: 8, alignment: .leading),
+                            ],
+                            alignment: .leading,
+                            spacing: 8
+                        ) {
+                            ForEach(section.presets) { preset in
+                                presetButton(preset)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
-                            .background(
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(preset == activePreset
-                                          ? Color.accentColor.opacity(0.18)
-                                          : Color.primary.opacity(0.05))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .stroke(
-                                        preset == activePreset
-                                            ? Color.accentColor.opacity(0.5)
-                                            : Color.primary.opacity(0.08),
-                                        lineWidth: 0.8
-                                    )
-                            )
                         }
-                        .buttonStyle(.plain)
                     }
                 }
 
@@ -764,6 +927,40 @@ private struct FeedButtonStyleDebugView: View {
             }
             .padding(.vertical, 4)
         }
+    }
+
+    private func presetButton(_ preset: FeedButtonDebugPreset) -> some View {
+        Button {
+            applyPreset(preset)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: preset == activePreset ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 11, weight: .medium))
+                Text(preset.label)
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(preset == activePreset
+                          ? Color.accentColor.opacity(0.18)
+                          : Color.primary.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(
+                        preset == activePreset
+                            ? Color.accentColor.opacity(0.5)
+                            : Color.primary.opacity(0.08),
+                        lineWidth: 0.8
+                    )
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private var kindPicker: some View {
