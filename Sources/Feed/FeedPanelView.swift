@@ -964,13 +964,13 @@ struct FeedButton: View {
         HStack(spacing: iconSpacing) {
             if let leadingIcon {
                 Image(systemName: leadingIcon)
-                    .font(.system(size: iconSize, weight: .medium))
+                    .font(.system(size: iconSize, weight: .semibold))
             }
             Text(label)
-                .font(.system(size: labelSize, weight: .medium))
+                .font(.system(size: labelSize, weight: .semibold))
             if let trailingIcon {
                 Image(systemName: trailingIcon)
-                    .font(.system(size: iconSize, weight: .medium))
+                    .font(.system(size: iconSize, weight: .semibold))
             }
         }
     }
@@ -985,6 +985,7 @@ struct FeedButton: View {
                 Image(systemName: trailingIcon)
             }
         }
+        .font(.system(size: labelSize, weight: .semibold))
     }
 
     private func performAction() {
@@ -1106,7 +1107,7 @@ struct FeedButton: View {
 
     // MARK: - Style resolution
 
-    private var labelSize: CGFloat { size == .compact ? 10.5 : 11 }
+    private var labelSize: CGFloat { size == .compact ? 10 : 10.5 }
     private var iconSize: CGFloat { size == .compact ? 9 : 10 }
     private var iconSpacing: CGFloat { size == .compact ? 3 : 5 }
     private var cornerRadius: CGFloat {
