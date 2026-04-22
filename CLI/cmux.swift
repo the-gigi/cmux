@@ -919,7 +919,7 @@ final class SocketClient {
         }
     }
 
-    func send(command: String) throws -> String {
+    func send(command: String, responseTimeout: TimeInterval? = nil) throws -> String {
         if relayEndpoint != nil, socketFD < 0 {
             try connect()
         }
@@ -940,10 +940,11 @@ final class SocketClient {
 
         var data = Data()
         var sawNewline = false
+        let initialResponseTimeout = responseTimeout ?? Self.responseTimeoutSeconds
 
         while true {
             try configureReceiveTimeout(
-                sawNewline ? Self.multilineResponseIdleTimeoutSeconds : Self.responseTimeoutSeconds
+                sawNewline ? Self.multilineResponseIdleTimeoutSeconds : initialResponseTimeout
             )
 
             var buffer = [UInt8](repeating: 0, count: 8192)
@@ -1422,7 +1423,11 @@ final class SocketClient {
         return nil
     }
 
-    func sendV2(method: String, params: [String: Any] = [:]) throws -> [String: Any] {
+    func sendV2(
+        method: String,
+        params: [String: Any] = [:],
+        responseTimeout: TimeInterval? = nil
+    ) throws -> [String: Any] {
         let request: [String: Any] = [
             "id": UUID().uuidString,
             "method": method,
@@ -1437,7 +1442,7 @@ final class SocketClient {
             throw CLIError(message: "Failed to encode v2 request")
         }
 
-        let raw = try send(command: requestLine)
+        let raw = try send(command: requestLine, responseTimeout: responseTimeout)
 
         // The server may return plain-text errors (e.g., "ERROR: Access denied ...")
         // before the JSON protocol starts. Surface these directly instead of letting
@@ -2080,7 +2085,7 @@ struct CMUXCLI {
                 // auth.begin_sign_in blocks on the server side until the
                 // popup completes (or 5min timeout). The response is the
                 // callback — no polling.
-                let result = try client.sendV2(method: "auth.begin_sign_in")
+                let result = try client.sendV2(method: "auth.begin_sign_in", responseTimeout: 305)
                 if (result["signed_in"] as? Bool) == true {
                     let email = (result["user"] as? [String: Any])?["email"] as? String
                     print("Signed in\(email.map { " as \($0)" } ?? "").")
@@ -2152,7 +2157,7 @@ struct CMUXCLI {
                 if let normalizedProvider { params["provider"] = normalizedProvider }
                 let idempotency = try Self.activeVMCreateIdempotency(image: imageOpt, provider: normalizedProvider)
                 params["idempotency_key"] = idempotency.key
-                let response = try client.sendV2(method: "vm.create", params: params)
+                let response = try client.sendV2(method: "vm.create", params: params, responseTimeout: 300)
                 if jsonOutput {
                     Self.clearVMCreateIdempotency(idempotency)
                     print(jsonString(response))
@@ -2198,7 +2203,7 @@ struct CMUXCLI {
                 guard let vmId = rest.first else {
                     throw CLIError(message: "Usage: cmux vm rm <id>")
                 }
-                _ = try client.sendV2(method: "vm.destroy", params: ["id": vmId])
+                _ = try client.sendV2(method: "vm.destroy", params: ["id": vmId], responseTimeout: 60)
                 if jsonOutput {
                     print("{\"ok\":true,\"id\":\"\(vmId)\"}")
                 } else {
@@ -2209,7 +2214,7 @@ struct CMUXCLI {
                 guard let vmId = rest.first else {
                     throw CLIError(message: "Usage: cmux \(command) ssh <id>")
                 }
-                let response = try client.sendV2(method: "vm.ssh_info", params: ["id": vmId])
+                let response = try client.sendV2(method: "vm.ssh_info", params: ["id": vmId], responseTimeout: 60)
                 if jsonOutput {
                     print(jsonString(response))
                     break
@@ -2251,7 +2256,8 @@ struct CMUXCLI {
                 let command = commandArgsForVM.map(shellQuote).joined(separator: " ")
                 let response = try client.sendV2(
                     method: "vm.exec",
-                    params: ["id": vmId, "command": command]
+                    params: ["id": vmId, "command": command],
+                    responseTimeout: 35
                 )
                 let stdout = (response["stdout"] as? String) ?? ""
                 let stderr = (response["stderr"] as? String) ?? ""
@@ -5464,7 +5470,7 @@ struct CMUXCLI {
     /// workspace path. E2B uses the cmuxd-remote WebSocket PTY path because E2B does not expose
     /// raw TCP/22.
     private func vmOpenShell(id: String, workspaceName: String?, client: SocketClient, jsonOutput: Bool, idFormat: CLIIDFormat) throws {
-        let response = try client.sendV2(method: "vm.attach_info", params: ["id": id])
+        let response = try client.sendV2(method: "vm.attach_info", params: ["id": id], responseTimeout: 60)
         let transport = (response["transport"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? "ssh"
