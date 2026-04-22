@@ -91574,13 +91574,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Skip interview and plan immediately"
+            "value": "Skip + plan immediately"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "インタビューをスキップしてすぐ計画"
+            "value": "スキップしてすぐ計画"
           }
         }
       }
@@ -91690,22 +91690,22 @@
     "feed.context.you": {
       "extractionState": "manual",
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "You" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "あなた" } }
+        "en": { "stringUnit": { "state": "translated", "value": "You:" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "あなた:" } }
       }
     },
     "feed.context.agent": {
       "extractionState": "manual",
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Agent" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "エージェント" } }
+        "en": { "stringUnit": { "state": "translated", "value": "Agent:" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "エージェント:" } }
       }
     },
     "feed.context.plan": {
       "extractionState": "manual",
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Plan" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "計画" } }
+        "en": { "stringUnit": { "state": "translated", "value": "Plan:" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "計画:" } }
       }
     },
     "feed.promptEcho": {

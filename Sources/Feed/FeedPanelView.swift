@@ -369,7 +369,7 @@ struct FeedItemRow: View {
         VStack(alignment: .leading, spacing: 10) {
             chipHeader
             if let context = displayContext {
-                FeedContextBlock(context: context)
+                FeedContextBlock(context: context, source: snapshot.source)
             } else if let echo = promptEcho, !echo.isEmpty {
                 Text(echo)
                     .font(.system(size: 11))
@@ -472,16 +472,24 @@ struct FeedItemRow: View {
     }
 
     private var headerTitle: String {
-        // Prefer the user prompt as the card title — it's the most
-        // useful context ("fun · make a plan and ask me for permissions")
-        // rather than the raw tool name ("~/fun · AskUserQuestion").
+        // Prefer the user prompt as the card title, but keep question
+        // headers before it so short labels like "Demo style" survive
+        // middle truncation.
         let promptLine = (displayContext?.lastUserMessage ?? snapshot.userPromptEcho)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let questionHeader = questionHeaderForTitle
         if !promptLine.isEmpty {
+            let detail = [questionHeader, promptLine].compactMap { $0 }.joined(separator: " · ")
             if let cwd = snapshot.cwd, !cwd.isEmpty {
-                return "\(cwdBasename(cwd)) · \(promptLine)"
+                return "\(cwdBasename(cwd)) · \(detail)"
             }
-            return promptLine
+            return detail
+        }
+        if let questionHeader {
+            if let cwd = snapshot.cwd, !cwd.isEmpty {
+                return "\(cwdBasename(cwd)) · \(questionHeader)"
+            }
+            return questionHeader
         }
         if let title = snapshot.title, !title.isEmpty {
             if let cwd = snapshot.cwd, !cwd.isEmpty {
@@ -493,6 +501,13 @@ struct FeedItemRow: View {
             return "\(cwdBasename(cwd)) · \(kindLabel.capitalized)"
         }
         return kindLabel.capitalized
+    }
+
+    private var questionHeaderForTitle: String? {
+        guard case .question(_, let questions) = snapshot.payload else { return nil }
+        return questions
+            .compactMap { $0.header?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
     }
 
     /// Last path component only — `fun` instead of `~/fun` or the full
@@ -691,26 +706,27 @@ struct FeedItemRow: View {
 
 private struct FeedContextBlock: View {
     let context: WorkstreamContext
+    let source: WorkstreamSource
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let user = context.lastUserMessage {
                 row(
-                    label: String(localized: "feed.context.you", defaultValue: "You"),
+                    label: String(localized: "feed.context.you", defaultValue: "You:"),
                     text: user,
                     color: .secondary
                 )
             }
             if let preamble = context.assistantPreamble {
                 row(
-                    label: String(localized: "feed.context.agent", defaultValue: "Agent"),
+                    label: agentLabel,
                     text: preamble,
                     color: Color.blue.opacity(0.85)
                 )
             }
             if let plan = context.planSummary {
                 row(
-                    label: String(localized: "feed.context.plan", defaultValue: "Plan"),
+                    label: String(localized: "feed.context.plan", defaultValue: "Plan:"),
                     text: plan,
                     color: Color.purple.opacity(0.85)
                 )
@@ -719,12 +735,16 @@ private struct FeedContextBlock: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var agentLabel: String {
+        "\(source.rawValue.capitalized):"
+    }
+
     private func row(label: String, text: String, color: Color) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(label)
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(color)
-                .frame(width: 38, alignment: .leading)
+                .frame(width: 48, alignment: .leading)
             Text(text)
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
@@ -1828,9 +1848,13 @@ private struct QuestionActionArea: View {
                     questionBlock(index: idx + 1, question: q)
                 }
             }
-            submitCTA
             if shouldShowSkipInterviewCTA {
-                skipInterviewCTA
+                HStack(spacing: 8) {
+                    submitCTA
+                    skipInterviewCTA
+                }
+            } else {
+                submitCTA
             }
         }
     }
@@ -1849,7 +1873,7 @@ private struct QuestionActionArea: View {
             Image(systemName: "bubble.left.and.bubble.right.fill")
                 .font(.system(size: 10))
                 .foregroundColor(.blue)
-            Text(String(localized: "feed.question.header", defaultValue: "Claude's Question"))
+            Text(agentLabel)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.blue)
             if questions.count > 1 {
@@ -1861,6 +1885,10 @@ private struct QuestionActionArea: View {
                     .foregroundColor(.blue.opacity(0.7))
             }
         }
+    }
+
+    private var agentLabel: String {
+        "\(source.rawValue.capitalized):"
     }
 
     /// Long-form rendering: single question with rich options. Each
@@ -2136,10 +2164,10 @@ private struct QuestionActionArea: View {
     private var skipInterviewCTA: some View {
         FeedButton(
             label: String(localized: "feed.question.skipInterviewPlan",
-                          defaultValue: "Skip interview and plan immediately"),
+                          defaultValue: "Skip + plan immediately"),
             leadingIcon: "forward.end.fill",
             kind: .soft,
-            size: .compact,
+            size: .medium,
             fullWidth: true
         ) {
             onReply([Self.skipInterviewAndPlanAnswer])
