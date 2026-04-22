@@ -15401,11 +15401,17 @@ struct CMUXCLI {
                         message: "User rejected the plan via cmux Feed."
                     ))
                 }
+                if mode == "ultraplan" {
+                    return encode(claudePermissionRequestDecision(
+                        behavior: "deny",
+                        message: "User chose Ultraplan via cmux Feed. Refine this plan with Ultraplan on Claude Code on the web."
+                    ))
+                }
                 var updatedPermissions: [[String: Any]]?
                 if mode == "autoAccept" {
                     updatedPermissions = [[
                         "type": "setMode",
-                        "mode": "acceptEdits",
+                        "mode": "auto",
                         "destination": "session",
                     ]]
                 } else if mode == "bypassPermissions" {
@@ -15435,12 +15441,20 @@ struct CMUXCLI {
                     reason: "User rejected the plan via cmux Feed."
                 ))
             }
+            if mode == "ultraplan" {
+                let reason = "User chose Ultraplan via cmux Feed. Refine this plan with Ultraplan if available."
+                return encode(nonClaudePreToolDecision(
+                    permission: "deny",
+                    reason: reason,
+                    additionalContext: reason
+                ))
+            }
             let modeText: String
             switch mode {
             case "bypassPermissions":
                 modeText = "bypass-permissions mode (no per-edit approval)"
             case "autoAccept":
-                modeText = "auto-accept-edits mode (no per-edit approval)"
+                modeText = "auto mode"
             default:
                 modeText = "manual-approval mode (approve each edit)"
             }

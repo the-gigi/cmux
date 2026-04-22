@@ -12738,16 +12738,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             identifier: "CMUXFeedExitPlan",
             actions: [
                 UNNotificationAction(
-                    identifier: "feed.exit_plan.bypassPermissions",
-                    title: String(localized: "feed.notification.exitPlan.bypass", defaultValue: "Bypass")
-                ),
-                UNNotificationAction(
-                    identifier: "feed.exit_plan.autoAccept",
-                    title: String(localized: "feed.notification.exitPlan.autoAccept", defaultValue: "Auto-accept")
+                    identifier: "feed.exit_plan.ultraplan",
+                    title: String(localized: "feed.notification.exitPlan.ultraplan", defaultValue: "Ultraplan")
                 ),
                 UNNotificationAction(
                     identifier: "feed.exit_plan.manual",
                     title: String(localized: "feed.notification.exitPlan.manual", defaultValue: "Manual")
+                ),
+                UNNotificationAction(
+                    identifier: "feed.exit_plan.autoAccept",
+                    title: String(localized: "feed.notification.exitPlan.autoAccept", defaultValue: "Auto")
                 ),
             ],
             intentIdentifiers: [],
@@ -12794,6 +12794,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             FeedCoordinator.shared.deliverReply(requestId: requestId, decision: .permission(.always))
         case "feed.permission.deny":
             FeedCoordinator.shared.deliverReply(requestId: requestId, decision: .permission(.deny))
+        case "feed.exit_plan.ultraplan":
+            FeedCoordinator.shared.deliverReply(requestId: requestId, decision: .exitPlan(.ultraplan))
         case "feed.exit_plan.bypassPermissions":
             FeedCoordinator.shared.deliverReply(requestId: requestId, decision: .exitPlan(.bypassPermissions))
         case "feed.exit_plan.autoAccept":

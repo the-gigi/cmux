@@ -91364,19 +91364,53 @@
         }
       }
     },
+    "feed.exitplan.ultraplan": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ultraplan"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ウルトラプラン"
+          }
+        }
+      }
+    },
+    "feed.exitplan.auto": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auto"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自動"
+          }
+        }
+      }
+    },
     "feed.exitplan.autoaccept": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Auto-accept"
+            "value": "Auto"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "自動承認"
+            "value": "自動"
           }
         }
       }
@@ -91855,11 +91889,18 @@
         "ja": { "stringUnit": { "state": "translated", "value": "バイパス" } }
       }
     },
+    "feed.exitplan.mode.ultraplan": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "ultraplan" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ウルトラプラン" } }
+      }
+    },
     "feed.exitplan.mode.autoAccept": {
       "extractionState": "manual",
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "auto-accept" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "自動承認" } }
+        "en": { "stringUnit": { "state": "translated", "value": "auto" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "自動" } }
       }
     },
     "feed.exitplan.mode.manual": {
@@ -92037,11 +92078,18 @@
         "ja": { "stringUnit": { "state": "translated", "value": "バイパス" } }
       }
     },
+    "feed.notification.exitPlan.ultraplan": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Ultraplan" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ウルトラプラン" } }
+      }
+    },
     "feed.notification.exitPlan.autoAccept": {
       "extractionState": "manual",
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Auto-accept" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "自動承認" } }
+        "en": { "stringUnit": { "state": "translated", "value": "Auto" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "自動" } }
       }
     },
     "feed.notification.exitPlan.manual": {

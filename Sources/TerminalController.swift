@@ -7250,7 +7250,7 @@ class TerminalController {
         else {
             return .err(
                 code: "invalid_params",
-                message: "feed.exit_plan.reply requires mode ∈ bypassPermissions|autoAccept|manual|deny",
+                message: "feed.exit_plan.reply requires mode ∈ ultraplan|bypassPermissions|autoAccept|manual|deny",
                 data: nil
             )
         }

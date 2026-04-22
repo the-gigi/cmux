@@ -22,10 +22,12 @@ private extension WorkstreamPermissionMode {
 private extension WorkstreamExitPlanMode {
     var displayLabel: String {
         switch self {
+        case .ultraplan:
+            return String(localized: "feed.exitplan.mode.ultraplan", defaultValue: "ultraplan")
         case .bypassPermissions:
             return String(localized: "feed.exitplan.mode.bypass", defaultValue: "bypass")
         case .autoAccept:
-            return String(localized: "feed.exitplan.mode.autoAccept", defaultValue: "auto-accept")
+            return String(localized: "feed.exitplan.mode.autoAccept", defaultValue: "auto")
         case .manual:
             return String(localized: "feed.exitplan.mode.manual", defaultValue: "manual")
         case .deny:
@@ -914,7 +916,7 @@ struct FeedButton: View {
         /// Transparent pill that lights up on hover/selection. Used
         /// for filter bar pills and single-select option pills.
         case ghost
-        /// Soft neutral fill (e.g. "Manually Approve", disabled Submit).
+        /// Soft neutral fill (e.g. Manual, disabled Submit).
         case soft
         /// Dark background with white text (Deny).
         case dark
@@ -922,11 +924,11 @@ struct FeedButton: View {
         case light
         /// Solid blue (Always Allow, Send feedback, active Submit).
         case primary
-        /// Solid green (checked multi-select option, confirmations).
+        /// Solid green (Auto, checked multi-select option, confirmations).
         case success
-        /// Solid orange (Auto-accept Edits).
+        /// Solid orange (warning actions).
         case warning
-        /// Solid red (Bypass, destructive deny).
+        /// Solid red (destructive deny).
         case destructive
     }
 
@@ -1557,32 +1559,32 @@ private struct ExitPlanActionArea: View {
                         label: hasFeedback
                             ? String(localized: "feed.exitplan.refine",
                                      defaultValue: "Send feedback")
-                            : String(localized: "feed.exitplan.manual",
-                                     defaultValue: "Manually Approve"),
+                            : String(localized: "feed.exitplan.ultraplan",
+                                     defaultValue: "Ultraplan"),
                         kind: hasFeedback ? .primary : .soft,
                         size: .medium, fullWidth: true
                     ) {
                         // Feedback always wins over mode; hook translates
                         // non-empty feedback into block+reason.
+                        onApprove(hasFeedback ? .manual : .ultraplan, hasFeedback ? trimmedFeedback : nil)
+                    }
+                    FeedButton(
+                        label: String(localized: "feed.exitplan.manual",
+                                      defaultValue: "Manual"),
+                        kind: .soft,
+                        size: .medium, fullWidth: true,
+                        dimmed: hasFeedback
+                    ) {
                         onApprove(.manual, hasFeedback ? trimmedFeedback : nil)
                     }
                     FeedButton(
-                        label: String(localized: "feed.exitplan.autoaccept",
-                                      defaultValue: "Auto-accept Edits"),
-                        kind: .warning,
+                        label: String(localized: "feed.exitplan.auto",
+                                      defaultValue: "Auto"),
+                        kind: .success,
                         size: .medium, fullWidth: true,
                         dimmed: hasFeedback
                     ) {
                         onApprove(.autoAccept, hasFeedback ? trimmedFeedback : nil)
-                    }
-                    FeedButton(
-                        label: String(localized: "feed.exitplan.bypass",
-                                      defaultValue: "Bypass Permissions"),
-                        kind: .destructive,
-                        size: .medium, fullWidth: true,
-                        dimmed: hasFeedback
-                    ) {
-                        onApprove(.bypassPermissions, hasFeedback ? trimmedFeedback : nil)
                     }
                 }
             } else if let badge = submittedBadge {

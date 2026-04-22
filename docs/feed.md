@@ -3,7 +3,7 @@
 Feed is cmux's inline surface for AI agent decisions. It shows three things that need a human response, right in the right sidebar next to Files and Sessions:
 
 - **Permission requests** — Agent wants to run a tool, edit a file, or execute a shell command. Pick Once / Always / All tools / Bypass / Deny.
-- **ExitPlanMode** — Agent finished planning and is ready to start editing. Pick Bypass Permissions / Auto-accept / Manual / Deny.
+- **ExitPlanMode** — Agent finished planning and is ready to start editing. Pick Ultraplan / Manual / Auto.
 - **AskUserQuestion** — Agent is asking a multiple-choice question. Pick one (or several) and hit Submit.
 
 Anything else the agent does — tool uses, assistant messages, session starts/stops, `TodoWrite` updates — is stored but hidden under the Feed's Actionable / All toggle. The default view only shows what needs your attention.
@@ -96,10 +96,10 @@ For Claude Code, the cmux wrapper launches Claude with `--allow-dangerously-skip
 
 | Mode              | Behavior                                                  |
 |-------------------|-----------------------------------------------------------|
-| Bypass Permissions| Allow the plan and request session-level bypass mode.     |
-| Auto-accept Edits | Allow the plan and request session-level accept-edits mode. |
-| Manual            | Allow the plan.                                           |
-| Deny              | Deny with the user's rejection or feedback message.       |
+| Ultraplan | Reject the local plan and ask Claude to refine it with Ultraplan. |
+| Manual    | Allow the plan and keep manual edit approvals.                    |
+| Auto      | Allow the plan and request Claude auto mode.                      |
+| Deny      | Deny with the user's rejection or feedback message.               |
 
 **AskUserQuestion**
 

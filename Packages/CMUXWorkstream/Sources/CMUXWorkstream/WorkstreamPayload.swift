@@ -12,6 +12,7 @@ public enum WorkstreamPermissionMode: String, Codable, Sendable, Equatable, Case
 
 /// Inline plan-mode decision the user can pick on an `.exitPlan` item.
 public enum WorkstreamExitPlanMode: String, Codable, Sendable, Equatable, CaseIterable {
+    case ultraplan
     case bypassPermissions
     case autoAccept
     case manual
