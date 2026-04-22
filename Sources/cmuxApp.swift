@@ -507,6 +507,14 @@ struct cmuxApp: App {
                     }
                     Button(
                         String(
+                            localized: "debug.menu.feedTextEditorDebug",
+                            defaultValue: "Feed Text Editor Lab…"
+                        )
+                    ) {
+                        FeedTextEditorDebugWindowController.shared.show()
+                    }
+                    Button(
+                        String(
                             localized: "debug.menu.feedButtonStyleDebug",
                             defaultValue: "Feed Button Style Debug…"
                         )
@@ -1172,6 +1180,7 @@ struct cmuxApp: App {
         BackgroundDebugWindowController.shared.show()
         MenuBarExtraDebugWindowController.shared.show()
         FeedPreviewWindowController.shared.show()
+        FeedTextEditorDebugWindowController.shared.show()
         FeedButtonStyleDebugWindowController.shared.show()
     }
 }
@@ -1823,6 +1832,14 @@ private struct DebugWindowControlsView: View {
                         Button("Menu Bar Extra Debug…") {
                             MenuBarExtraDebugWindowController.shared.show()
                         }
+                        Button(
+                            String(
+                                localized: "debug.menu.feedTextEditorDebug",
+                                defaultValue: "Feed Text Editor Lab…"
+                            )
+                        ) {
+                            FeedTextEditorDebugWindowController.shared.show()
+                        }
                         Button("Open All Debug Windows") {
                             BrowserImportHintDebugWindowController.shared.show()
                             BrowserProfilePopoverDebugWindowController.shared.show()
@@ -1830,6 +1847,7 @@ private struct DebugWindowControlsView: View {
                             SidebarDebugWindowController.shared.show()
                             BackgroundDebugWindowController.shared.show()
                             MenuBarExtraDebugWindowController.shared.show()
+                            FeedTextEditorDebugWindowController.shared.show()
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

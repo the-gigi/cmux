@@ -92113,6 +92113,111 @@
         "ja": { "stringUnit": { "state": "translated", "value": "フィードボタンスタイルのデバッグ…" } }
       }
     },
+    "debug.menu.feedTextEditorDebug": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Feed Text Editor Lab…" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "フィードテキストエディタラボ…" } }
+      }
+    },
+    "feed.textEditorDebug.windowTitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Feed Text Editor Lab" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "フィードテキストエディタラボ" } }
+      }
+    },
+    "feed.textEditorDebug.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Feed Text Editors" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "フィードテキストエディタ" } }
+      }
+    },
+    "feed.textEditorDebug.subtitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Compare autosizing editors with identical input." } },
+        "ja": { "stringUnit": { "state": "translated", "value": "同じ入力で自動サイズ調整エディタを比較します。" } }
+      }
+    },
+    "feed.textEditorDebug.reset": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Reset" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "リセット" } }
+      }
+    },
+    "feed.textEditorDebug.placeholder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Type several lines here..." } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ここに複数行を入力..." } }
+      }
+    },
+    "feed.textEditorDebug.metrics": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "%lld lines · %lld chars" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "%lld 行・%lld 文字" } }
+      }
+    },
+    "feed.textEditorDebug.section.swiftui": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "SwiftUI" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "SwiftUI" } }
+      }
+    },
+    "feed.textEditorDebug.section.appkit": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "AppKit" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "AppKit" } }
+      }
+    },
+    "feed.textEditorDebug.variant.swiftUITextField": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "SwiftUI TextField" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "SwiftUI TextField" } }
+      }
+    },
+    "feed.textEditorDebug.variant.swiftUIMirror": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "SwiftUI Mirror TextEditor" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "SwiftUI Mirror TextEditor" } }
+      }
+    },
+    "feed.textEditorDebug.variant.appKitDirectSize": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "AppKit Direct, sizeThatFits" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "AppKit Direct, sizeThatFits" } }
+      }
+    },
+    "feed.textEditorDebug.variant.appKitDirectIntrinsic": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "AppKit Direct, intrinsic" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "AppKit Direct, intrinsic" } }
+      }
+    },
+    "feed.textEditorDebug.variant.appKitScrollSize": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "AppKit ScrollView, sizeThatFits" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "AppKit ScrollView, sizeThatFits" } }
+      }
+    },
+    "feed.textEditorDebug.variant.appKitScrollMeasured": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "AppKit ScrollView, measured" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "AppKit ScrollView, measured" } }
+      }
+    },
     "feed.buttonDebug.windowTitle": {
       "extractionState": "manual",
       "localizations": {
