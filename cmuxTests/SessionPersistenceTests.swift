@@ -1820,6 +1820,54 @@ final class SocketListenerAcceptPolicyTests: XCTestCase {
         )
     }
 
+    func testResumeCommandUsesProviderSpecificEnvironmentAllowlists() {
+        let codex = SessionRestorableAgentSnapshot(
+            kind: .codex,
+            sessionId: "codex-session-env",
+            workingDirectory: nil,
+            launchCommand: AgentLaunchCommandSnapshot(
+                launcher: "codex",
+                executablePath: "codex",
+                arguments: ["codex"],
+                workingDirectory: nil,
+                environment: [
+                    "CLAUDE_CONFIG_DIR": "/tmp/claude",
+                    "CODEX_HOME": "/tmp/codex",
+                    "OPENCODE_CONFIG_DIR": "/tmp/opencode"
+                ],
+                capturedAt: nil,
+                source: nil
+            )
+        )
+        let opencode = SessionRestorableAgentSnapshot(
+            kind: .opencode,
+            sessionId: "opencode-session-env",
+            workingDirectory: nil,
+            launchCommand: AgentLaunchCommandSnapshot(
+                launcher: "opencode",
+                executablePath: "opencode",
+                arguments: ["opencode"],
+                workingDirectory: nil,
+                environment: [
+                    "CODEX_HOME": "/tmp/codex",
+                    "NODE_OPTIONS": "--trace-warnings",
+                    "OPENCODE_CONFIG_DIR": "/tmp/opencode"
+                ],
+                capturedAt: nil,
+                source: nil
+            )
+        )
+
+        XCTAssertEqual(
+            codex.resumeCommand,
+            "'env' 'CODEX_HOME=/tmp/codex' 'codex' 'resume' 'codex-session-env'"
+        )
+        XCTAssertEqual(
+            opencode.resumeCommand,
+            "'env' 'OPENCODE_CONFIG_DIR=/tmp/opencode' 'opencode' '--session' 'opencode-session-env'"
+        )
+    }
+
     func testClaudeResumeCommandStripsStaleCmuxNodeOptionsRestoreModule() {
         let snapshot = SessionRestorableAgentSnapshot(
             kind: .claude,

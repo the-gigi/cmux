@@ -54,166 +54,364 @@ fileprivate func shellSingleQuoted(_ value: String) -> String {
     "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
+fileprivate func isOpenCodeInternalWorkerArgument(_ value: String) -> Bool {
+    let normalized = value.replacingOccurrences(of: "\\", with: "/")
+    return normalized.contains("/$bunfs/") &&
+        normalized.contains("/src/cli/cmd/tui/worker.js")
+}
+
+private struct AgentResumeOptionPolicy {
+    let valueOptions: Set<String>
+    let optionalValueOptions: Set<String>
+    let variadicOptions: Set<String>
+    let nonRestorableCommands: Set<String>
+    let droppedOptions: Set<String>
+    let droppedOptionPrefixes: [String]
+    let rejectOptions: Set<String>
+    let skipsHookSettings: Bool
+    let resumeSubcommand: String?
+    let preserveFirstPositional: Bool
+    let sanitizeArguments: ([String]) -> [String]
+
+    init(
+        valueOptions: Set<String>,
+        optionalValueOptions: Set<String> = [],
+        variadicOptions: Set<String> = [],
+        nonRestorableCommands: Set<String>,
+        droppedOptions: Set<String> = [],
+        droppedOptionPrefixes: [String] = [],
+        rejectOptions: Set<String> = [],
+        skipsHookSettings: Bool = false,
+        resumeSubcommand: String? = nil,
+        preserveFirstPositional: Bool = false,
+        sanitizeArguments: @escaping ([String]) -> [String] = { $0 }
+    ) {
+        self.valueOptions = valueOptions
+        self.optionalValueOptions = optionalValueOptions
+        self.variadicOptions = variadicOptions
+        self.nonRestorableCommands = nonRestorableCommands
+        self.droppedOptions = droppedOptions
+        self.droppedOptionPrefixes = droppedOptionPrefixes
+        self.rejectOptions = rejectOptions
+        self.skipsHookSettings = skipsHookSettings
+        self.resumeSubcommand = resumeSubcommand
+        self.preserveFirstPositional = preserveFirstPositional
+        self.sanitizeArguments = sanitizeArguments
+    }
+}
+
+private enum AgentResumeSessionPlacement {
+    case afterPrefix([String])
+    case afterPreserved([String])
+
+    func build(executable: String, leadingSubcommand: String?, sessionId: String, preserved: [String]) -> [String] {
+        var result = [executable]
+        if let leadingSubcommand {
+            result.append(leadingSubcommand)
+        }
+
+        switch self {
+        case .afterPrefix(let prefix):
+            result.append(contentsOf: prefix)
+            result.append(sessionId)
+            result.append(contentsOf: preserved)
+        case .afterPreserved(let prefix):
+            result.append(contentsOf: prefix)
+            result.append(contentsOf: preserved)
+            result.append(sessionId)
+        }
+        return result
+    }
+}
+
+private struct AgentResumeInvocationSpec {
+    let fallbackExecutable: String
+    let leadingSubcommand: String?
+    let sessionPlacement: AgentResumeSessionPlacement
+}
+
+private enum AgentResumeLauncherBehavior {
+    case use(AgentResumeInvocationSpec)
+    case unsupported
+}
+
+private struct AgentResumeProviderSpec {
+    let optionPolicy: AgentResumeOptionPolicy
+    let defaultInvocation: AgentResumeInvocationSpec
+    let launcherOverrides: [String: AgentResumeLauncherBehavior]
+    let safeEnvironmentKeys: Set<String>
+}
+
+private extension RestorableAgentKind {
+    var resumeProviderSpec: AgentResumeProviderSpec {
+        switch self {
+        case .claude:
+            return AgentResumeProviderSpec(
+                optionPolicy: AgentResumeOptionPolicy(
+                    valueOptions: [
+                        "--add-dir",
+                        "--agent",
+                        "--agents",
+                        "--allowedTools",
+                        "--allowed-tools",
+                        "--append-system-prompt",
+                        "--betas",
+                        "--debug-file",
+                        "--disallowedTools",
+                        "--disallowed-tools",
+                        "--effort",
+                        "--fallback-model",
+                        "--file",
+                        "--fork-session",
+                        "--from-pr",
+                        "--input-format",
+                        "--json-schema",
+                        "--max-budget-usd",
+                        "--mcp-config",
+                        "--model",
+                        "--name",
+                        "-n",
+                        "--output-format",
+                        "--permission-mode",
+                        "--plugin-dir",
+                        "--remote-control-session-name-prefix",
+                        "--resume",
+                        "-r",
+                        "--session-id",
+                        "--setting-sources",
+                        "--settings",
+                        "--system-prompt",
+                        "--teammate-mode",
+                        "--tmux",
+                        "--tools",
+                        "--worktree",
+                        "-w"
+                    ],
+                    optionalValueOptions: ["--debug"],
+                    variadicOptions: [
+                        "--add-dir",
+                        "--allowedTools",
+                        "--allowed-tools",
+                        "--betas",
+                        "--disallowedTools",
+                        "--disallowed-tools",
+                        "--file",
+                        "--mcp-config",
+                        "--tools"
+                    ],
+                    nonRestorableCommands: [
+                        "agents",
+                        "auth",
+                        "auto-mode",
+                        "api-key",
+                        "config",
+                        "doctor",
+                        "install",
+                        "mcp",
+                        "plugin",
+                        "plugins",
+                        "rc",
+                        "remote-control",
+                        "setup-token",
+                        "update",
+                        "upgrade"
+                    ],
+                    droppedOptions: [
+                        "--continue",
+                        "-c",
+                        "--fork-session",
+                        "--from-pr",
+                        "--resume",
+                        "-r",
+                        "--session-id",
+                        "--tmux",
+                        "--worktree",
+                        "-w"
+                    ],
+                    droppedOptionPrefixes: [
+                        "--fork-session=",
+                        "--from-pr=",
+                        "--resume=",
+                        "--session-id=",
+                        "--tmux=",
+                        "--worktree="
+                    ],
+                    rejectOptions: [
+                        "--print",
+                        "-p",
+                        "--no-session-persistence"
+                    ],
+                    skipsHookSettings: true
+                ),
+                defaultInvocation: AgentResumeInvocationSpec(
+                    fallbackExecutable: "claude",
+                    leadingSubcommand: nil,
+                    sessionPlacement: .afterPrefix(["--resume"])
+                ),
+                launcherOverrides: [
+                    "claudeTeams": .use(
+                        AgentResumeInvocationSpec(
+                            fallbackExecutable: "cmux",
+                            leadingSubcommand: "claude-teams",
+                            sessionPlacement: .afterPrefix(["--resume"])
+                        )
+                    ),
+                    "omx": .unsupported,
+                    "omc": .unsupported
+                ],
+                safeEnvironmentKeys: [
+                    "ANTHROPIC_MODEL",
+                    "CLAUDE_CONFIG_DIR",
+                    "CMUX_CUSTOM_CLAUDE_PATH",
+                    "NODE_OPTIONS"
+                ]
+            )
+        case .codex:
+            return AgentResumeProviderSpec(
+                optionPolicy: AgentResumeOptionPolicy(
+                    valueOptions: [
+                        "--config",
+                        "-c",
+                        "--remote",
+                        "--remote-auth-token-env",
+                        "--image",
+                        "-i",
+                        "--model",
+                        "-m",
+                        "--local-provider",
+                        "--profile",
+                        "-p",
+                        "--sandbox",
+                        "-s",
+                        "--ask-for-approval",
+                        "-a",
+                        "--cd",
+                        "-C",
+                        "--add-dir",
+                        "--enable",
+                        "--disable"
+                    ],
+                    variadicOptions: ["--image", "-i", "--add-dir"],
+                    nonRestorableCommands: [
+                        "exec",
+                        "e",
+                        "review",
+                        "login",
+                        "logout",
+                        "mcp",
+                        "mcp-server",
+                        "app-server",
+                        "app",
+                        "completion",
+                        "sandbox",
+                        "debug",
+                        "apply",
+                        "a",
+                        "fork",
+                        "cloud",
+                        "exec-server",
+                        "features",
+                        "help"
+                    ],
+                    droppedOptions: [
+                        "--last",
+                        "--all"
+                    ],
+                    resumeSubcommand: "resume"
+                ),
+                defaultInvocation: AgentResumeInvocationSpec(
+                    fallbackExecutable: "codex",
+                    leadingSubcommand: nil,
+                    sessionPlacement: .afterPreserved(["resume"])
+                ),
+                launcherOverrides: [
+                    "omx": .unsupported,
+                    "omc": .unsupported
+                ],
+                safeEnvironmentKeys: ["CODEX_HOME"]
+            )
+        case .opencode:
+            return AgentResumeProviderSpec(
+                optionPolicy: AgentResumeOptionPolicy(
+                    valueOptions: [
+                        "--log-level",
+                        "--port",
+                        "--hostname",
+                        "--mdns-domain",
+                        "--cors",
+                        "--model",
+                        "-m",
+                        "--session",
+                        "-s",
+                        "--prompt",
+                        "--agent"
+                    ],
+                    variadicOptions: ["--cors"],
+                    nonRestorableCommands: [
+                        "completion",
+                        "acp",
+                        "mcp",
+                        "attach",
+                        "run",
+                        "debug",
+                        "providers",
+                        "auth",
+                        "agent",
+                        "upgrade",
+                        "uninstall",
+                        "serve",
+                        "web",
+                        "models",
+                        "stats",
+                        "export",
+                        "import",
+                        "pr",
+                        "github",
+                        "session",
+                        "plugin",
+                        "plug",
+                        "db"
+                    ],
+                    droppedOptions: [
+                        "--continue",
+                        "-c",
+                        "--fork",
+                        "--session",
+                        "-s",
+                        "--prompt"
+                    ],
+                    droppedOptionPrefixes: [
+                        "--session=",
+                        "--prompt="
+                    ],
+                    preserveFirstPositional: true,
+                    sanitizeArguments: { args in
+                        args.filter { !isOpenCodeInternalWorkerArgument($0) }
+                    }
+                ),
+                defaultInvocation: AgentResumeInvocationSpec(
+                    fallbackExecutable: "opencode",
+                    leadingSubcommand: nil,
+                    sessionPlacement: .afterPrefix(["--session"])
+                ),
+                launcherOverrides: [
+                    "omo": .use(
+                        AgentResumeInvocationSpec(
+                            fallbackExecutable: "cmux",
+                            leadingSubcommand: "omo",
+                            sessionPlacement: .afterPrefix(["--session"])
+                        )
+                    ),
+                    "omx": .unsupported,
+                    "omc": .unsupported
+                ],
+                safeEnvironmentKeys: ["OPENCODE_CONFIG_DIR"]
+            )
+        }
+    }
+}
+
 private enum AgentResumeCommandBuilder {
-    private static let claudeValueOptions: Set<String> = [
-        "--add-dir",
-        "--agent",
-        "--agents",
-        "--allowedTools",
-        "--allowed-tools",
-        "--append-system-prompt",
-        "--betas",
-        "--debug-file",
-        "--disallowedTools",
-        "--disallowed-tools",
-        "--effort",
-        "--fallback-model",
-        "--file",
-        "--fork-session",
-        "--from-pr",
-        "--input-format",
-        "--json-schema",
-        "--max-budget-usd",
-        "--mcp-config",
-        "--model",
-        "--name",
-        "-n",
-        "--output-format",
-        "--permission-mode",
-        "--plugin-dir",
-        "--remote-control-session-name-prefix",
-        "--resume",
-        "-r",
-        "--session-id",
-        "--setting-sources",
-        "--settings",
-        "--system-prompt",
-        "--teammate-mode",
-        "--tmux",
-        "--tools",
-        "--worktree",
-        "-w"
-    ]
-
-    private static let claudeOptionalValueOptions: Set<String> = [
-        "--debug"
-    ]
-
-    private static let claudeVariadicOptions: Set<String> = [
-        "--add-dir",
-        "--allowedTools",
-        "--allowed-tools",
-        "--betas",
-        "--disallowedTools",
-        "--disallowed-tools",
-        "--file",
-        "--mcp-config",
-        "--tools"
-    ]
-
-    private static let claudeNonRestorableCommands: Set<String> = [
-        "agents",
-        "auth",
-        "auto-mode",
-        "api-key",
-        "config",
-        "doctor",
-        "install",
-        "mcp",
-        "plugin",
-        "plugins",
-        "rc",
-        "remote-control",
-        "setup-token",
-        "update",
-        "upgrade"
-    ]
-
-    private static let codexValueOptions: Set<String> = [
-        "--config",
-        "-c",
-        "--remote",
-        "--remote-auth-token-env",
-        "--image",
-        "-i",
-        "--model",
-        "-m",
-        "--local-provider",
-        "--profile",
-        "-p",
-        "--sandbox",
-        "-s",
-        "--ask-for-approval",
-        "-a",
-        "--cd",
-        "-C",
-        "--add-dir",
-        "--enable",
-        "--disable"
-    ]
-
-    private static let codexNonRestorableCommands: Set<String> = [
-        "exec",
-        "e",
-        "review",
-        "login",
-        "logout",
-        "mcp",
-        "mcp-server",
-        "app-server",
-        "app",
-        "completion",
-        "sandbox",
-        "debug",
-        "apply",
-        "a",
-        "fork",
-        "cloud",
-        "exec-server",
-        "features",
-        "help"
-    ]
-
-    private static let opencodeValueOptions: Set<String> = [
-        "--log-level",
-        "--port",
-        "--hostname",
-        "--mdns-domain",
-        "--cors",
-        "--model",
-        "-m",
-        "--session",
-        "-s",
-        "--prompt",
-        "--agent"
-    ]
-
-    private static let opencodeNonRestorableCommands: Set<String> = [
-        "completion",
-        "acp",
-        "mcp",
-        "attach",
-        "run",
-        "debug",
-        "providers",
-        "auth",
-        "agent",
-        "upgrade",
-        "uninstall",
-        "serve",
-        "web",
-        "models",
-        "stats",
-        "export",
-        "import",
-        "pr",
-        "github",
-        "session",
-        "plugin",
-        "plug",
-        "db"
-    ]
-
     static func resumeShellCommand(
         kind: RestorableAgentKind,
         sessionId: String,
@@ -227,10 +425,11 @@ private enum AgentResumeCommandBuilder {
         }
 
         var commandParts: [String] = []
+        let spec = kind.resumeProviderSpec
         if let env = launchCommand?.environment, !env.isEmpty {
             var environmentParts: [String] = []
             for key in env.keys.sorted() {
-                guard isSafeEnvironmentKey(key),
+                guard spec.safeEnvironmentKeys.contains(key),
                       let value = sanitizedEnvironmentValue(key: key, value: env[key]) else { continue }
                 environmentParts.append("\(key)=\(value)")
             }
@@ -254,49 +453,26 @@ private enum AgentResumeCommandBuilder {
         sessionId: String,
         launchCommand: AgentLaunchCommandSnapshot?
     ) -> [String]? {
-        switch launchCommand?.launcher {
-        case "claudeTeams":
-            let original = commandParts(
-                launchCommand: launchCommand,
-                fallbackExecutable: "cmux"
-            )
-            var args = original.tail
-            if args.first == "claude-teams" {
-                args.removeFirst()
-            }
-            guard let preserved = preservedClaudeArguments(args) else { return nil }
-            return [original.executable, "claude-teams", "--resume", sessionId] + preserved
-        case "omo":
-            let original = commandParts(
-                launchCommand: launchCommand,
-                fallbackExecutable: "cmux"
-            )
-            var args = original.tail
-            if args.first == "omo" {
-                args.removeFirst()
-            }
-            guard let preserved = preservedOpenCodeArguments(args) else { return nil }
-            return [original.executable, "omo", "--session", sessionId] + preserved
-        case "omx", "omc":
+        let spec = kind.resumeProviderSpec
+        let launcherBehavior = launchCommand?.launcher.flatMap { spec.launcherOverrides[$0] } ?? .use(spec.defaultInvocation)
+        guard case .use(let invocation) = launcherBehavior else {
             return nil
-        default:
-            break
         }
 
-        switch kind {
-        case .claude:
-            let original = commandParts(launchCommand: launchCommand, fallbackExecutable: "claude")
-            guard let preserved = preservedClaudeArguments(original.tail) else { return nil }
-            return [original.executable, "--resume", sessionId] + preserved
-        case .codex:
-            let original = commandParts(launchCommand: launchCommand, fallbackExecutable: "codex")
-            guard let preserved = preservedCodexArguments(original.tail) else { return nil }
-            return [original.executable, "resume"] + preserved + [sessionId]
-        case .opencode:
-            let original = commandParts(launchCommand: launchCommand, fallbackExecutable: "opencode")
-            guard let preserved = preservedOpenCodeArguments(original.tail) else { return nil }
-            return [original.executable, "--session", sessionId] + preserved
+        let original = commandParts(launchCommand: launchCommand, fallbackExecutable: invocation.fallbackExecutable)
+        var args = original.tail
+        if let leadingSubcommand = invocation.leadingSubcommand, args.first == leadingSubcommand {
+            args.removeFirst()
         }
+
+        let sanitizedArgs = spec.optionPolicy.sanitizeArguments(args)
+        guard let preserved = preserveOptions(sanitizedArgs, policy: spec.optionPolicy) else { return nil }
+        return invocation.sessionPlacement.build(
+            executable: original.executable,
+            leadingSubcommand: invocation.leadingSubcommand,
+            sessionId: sessionId,
+            preserved: preserved
+        )
     }
 
     private static func commandParts(
@@ -311,106 +487,9 @@ private enum AgentResumeCommandBuilder {
         return (executable, tail)
     }
 
-    private static func preservedClaudeArguments(_ args: [String]) -> [String]? {
-        preserveOptions(
-            args,
-            valueOptions: claudeValueOptions,
-            optionalValueOptions: claudeOptionalValueOptions,
-            variadicOptions: claudeVariadicOptions,
-            nonRestorableCommands: claudeNonRestorableCommands,
-            droppedOptions: [
-                "--continue",
-                "-c",
-                "--fork-session",
-                "--from-pr",
-                "--resume",
-                "-r",
-                "--session-id",
-                "--tmux",
-                "--worktree",
-                "-w"
-            ],
-            droppedOptionPrefixes: [
-                "--fork-session=",
-                "--from-pr=",
-                "--resume=",
-                "--session-id=",
-                "--tmux=",
-                "--worktree="
-            ],
-            rejectOptions: [
-                "--print",
-                "-p",
-                "--no-session-persistence"
-            ],
-            skipHookSettings: true,
-            resumeSubcommand: nil
-        )
-    }
-
-    private static func preservedCodexArguments(_ args: [String]) -> [String]? {
-        preserveOptions(
-            args,
-            valueOptions: codexValueOptions,
-            optionalValueOptions: [],
-            variadicOptions: ["--image", "-i", "--add-dir"],
-            nonRestorableCommands: codexNonRestorableCommands,
-            droppedOptions: [
-                "--last",
-                "--all"
-            ],
-            droppedOptionPrefixes: [],
-            rejectOptions: [],
-            skipHookSettings: false,
-            resumeSubcommand: "resume"
-        )
-    }
-
-    private static func preservedOpenCodeArguments(_ args: [String]) -> [String]? {
-        let sanitizedArgs = args.filter { !isOpenCodeInternalWorkerArgument($0) }
-        return preserveOptions(
-            sanitizedArgs,
-            valueOptions: opencodeValueOptions,
-            optionalValueOptions: [],
-            variadicOptions: ["--cors"],
-            nonRestorableCommands: opencodeNonRestorableCommands,
-            droppedOptions: [
-                "--continue",
-                "-c",
-                "--fork",
-                "--session",
-                "-s",
-                "--prompt"
-            ],
-            droppedOptionPrefixes: [
-                "--session=",
-                "--prompt="
-            ],
-            rejectOptions: [],
-            skipHookSettings: false,
-            resumeSubcommand: nil,
-            preserveFirstPositional: true
-        )
-    }
-
-    private static func isOpenCodeInternalWorkerArgument(_ value: String) -> Bool {
-        let normalized = value.replacingOccurrences(of: "\\", with: "/")
-        return normalized.contains("/$bunfs/") &&
-            normalized.contains("/src/cli/cmd/tui/worker.js")
-    }
-
     private static func preserveOptions(
         _ args: [String],
-        valueOptions: Set<String>,
-        optionalValueOptions: Set<String>,
-        variadicOptions: Set<String>,
-        nonRestorableCommands: Set<String>,
-        droppedOptions: Set<String>,
-        droppedOptionPrefixes: [String],
-        rejectOptions: Set<String>,
-        skipHookSettings: Bool,
-        resumeSubcommand: String?,
-        preserveFirstPositional: Bool = false
+        policy: AgentResumeOptionPolicy
     ) -> [String]? {
         var result: [String] = []
         var index = 0
@@ -424,7 +503,7 @@ private enum AgentResumeCommandBuilder {
             }
 
             if !arg.hasPrefix("-") || arg == "-" {
-                if let resumeSubcommand, arg == resumeSubcommand {
+                if let resumeSubcommand = policy.resumeSubcommand, arg == resumeSubcommand {
                     skippingResumePositionals = true
                     index += 1
                     continue
@@ -432,10 +511,10 @@ private enum AgentResumeCommandBuilder {
                 if skippingResumePositionals {
                     break
                 }
-                if nonRestorableCommands.contains(arg) {
+                if policy.nonRestorableCommands.contains(arg) {
                     return nil
                 }
-                if preserveFirstPositional && !consumedFirstPositional {
+                if policy.preserveFirstPositional && !consumedFirstPositional {
                     result.append(arg)
                     consumedFirstPositional = true
                     index += 1
@@ -444,33 +523,33 @@ private enum AgentResumeCommandBuilder {
                 break
             }
 
-            if shouldDropOption(arg, droppedOptions: rejectOptions) {
+            if shouldDropOption(arg, droppedOptions: policy.rejectOptions) {
                 return nil
             }
 
-            if droppedOptionPrefixes.contains(where: { arg.hasPrefix($0) }) {
+            if policy.droppedOptionPrefixes.contains(where: { arg.hasPrefix($0) }) {
                 index += 1
                 continue
             }
 
-            if shouldDropOption(arg, droppedOptions: droppedOptions) {
+            if shouldDropOption(arg, droppedOptions: policy.droppedOptions) {
                 index += optionWidth(
                     args,
                     index: index,
-                    valueOptions: valueOptions,
-                    optionalValueOptions: optionalValueOptions,
-                    variadicOptions: variadicOptions
+                    valueOptions: policy.valueOptions,
+                    optionalValueOptions: policy.optionalValueOptions,
+                    variadicOptions: policy.variadicOptions
                 )
                 continue
             }
 
-            if skipHookSettings, isHookSettingsOption(args, index: index) {
+            if policy.skipsHookSettings, isHookSettingsOption(args, index: index) {
                 index += optionWidth(
                     args,
                     index: index,
-                    valueOptions: valueOptions,
-                    optionalValueOptions: optionalValueOptions,
-                    variadicOptions: variadicOptions
+                    valueOptions: policy.valueOptions,
+                    optionalValueOptions: policy.optionalValueOptions,
+                    variadicOptions: policy.variadicOptions
                 )
                 continue
             }
@@ -478,9 +557,9 @@ private enum AgentResumeCommandBuilder {
             let width = optionWidth(
                 args,
                 index: index,
-                valueOptions: valueOptions,
-                optionalValueOptions: optionalValueOptions,
-                variadicOptions: variadicOptions
+                valueOptions: policy.valueOptions,
+                optionalValueOptions: policy.optionalValueOptions,
+                variadicOptions: policy.variadicOptions
             )
             result.append(contentsOf: args[index..<min(args.count, index + width)])
             index += width
@@ -547,20 +626,6 @@ private enum AgentResumeCommandBuilder {
             return false
         }
         return args[index + 1].contains("claude-hook")
-    }
-
-    private static func isSafeEnvironmentKey(_ key: String) -> Bool {
-        switch key {
-        case "ANTHROPIC_MODEL",
-             "CLAUDE_CONFIG_DIR",
-             "CMUX_CUSTOM_CLAUDE_PATH",
-             "CODEX_HOME",
-             "NODE_OPTIONS",
-             "OPENCODE_CONFIG_DIR":
-            return true
-        default:
-            return false
-        }
     }
 
     private static func sanitizedEnvironmentValue(key: String, value: String?) -> String? {
