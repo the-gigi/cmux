@@ -2038,7 +2038,6 @@ private struct QuestionActionArea: View {
                 }
             } else {
                 current = [option.id]
-                freeTexts[questionId] = ""
             }
             selections[questionId] = current
         } label: {
@@ -2297,7 +2296,6 @@ private struct QuestionActionArea: View {
                 else { current.insert(option.id) }
             } else {
                 current = [option.id]
-                freeTexts[questionId] = ""
             }
             selections[questionId] = current
         }
@@ -2492,10 +2490,13 @@ private struct FeedInlineTextField: NSViewRepresentable {
         func controlTextDidChange(_ obj: Notification) {
             guard !isProgrammaticMutation else { return }
             guard let field = obj.object as? NSTextField else { return }
-            parent.text = field.stringValue
+            parent.text = (field.currentEditor() as? NSTextView)?.string ?? field.stringValue
         }
 
         func controlTextDidEndEditing(_ obj: Notification) {
+            if !isProgrammaticMutation, let field = obj.object as? NSTextField {
+                parent.text = (field.currentEditor() as? NSTextView)?.string ?? field.stringValue
+            }
             if parent.isFocused {
                 parent.isFocused = false
             }
@@ -2606,9 +2607,12 @@ private struct FeedIBeamCursorRegion: NSViewRepresentable {
 }
 
 private final class FeedCursorRectView: NSView {
+    private var trackingArea: NSTrackingArea?
+
     var cursor: NSCursor? {
         didSet {
             window?.invalidateCursorRects(for: self)
+            updateTrackingAreas()
         }
     }
 
@@ -2620,6 +2624,38 @@ private final class FeedCursorRectView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
+    }
+
+    override func updateTrackingAreas() {
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+            self.trackingArea = nil
+        }
+        if cursor != nil {
+            let options: NSTrackingArea.Options = [
+                .activeAlways,
+                .cursorUpdate,
+                .inVisibleRect,
+                .mouseEnteredAndExited,
+                .mouseMoved,
+            ]
+            let next = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
+            addTrackingArea(next)
+            trackingArea = next
+        }
+        super.updateTrackingAreas()
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        cursor?.set()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        cursor?.set()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        cursor?.set()
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -2640,7 +2676,10 @@ private final class FeedCursorRectView: NSView {
 
 private extension View {
     func feedIBeamCursorOnHover(enabled: Bool) -> some View {
-        overlay(FeedIBeamCursorRegion(enabled: enabled))
+        overlay {
+            FeedIBeamCursorRegion(enabled: enabled)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
 
