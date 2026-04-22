@@ -696,11 +696,10 @@ final class CmuxWebView: WKWebView {
         // Menu/app shortcut routing is only needed for Command equivalents
         // (New Tab, Close Tab, tab switching, split commands, etc).
         guard flags.contains(.command) else {
-            let result = super.performKeyEquivalent(with: event)
 #if DEBUG
-            handled = result
+            handled = false
 #endif
-            return result
+            return false
         }
 
         if Self.isPasteAsPlainTextCommandEquivalent(event) {

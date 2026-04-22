@@ -228,6 +228,13 @@ final class CmuxWebViewKeyEquivalentTests: XCTestCase {
         XCTAssertFalse(spy.invoked)
     }
 
+    func testPlainTextKeyEquivalentFallsThroughToKeyDownWhenWebViewIsFirstResponder() throws {
+        let webView = CmuxWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        let event = try XCTUnwrap(makeKeyDownEvent(key: "z", modifiers: [], keyCode: 6))
+
+        XCTAssertFalse(webView.performKeyEquivalent(with: event))
+    }
+
     func testCmdReturnDoesNotRouteToMainMenuWhenWebViewIsFirstResponder() {
         let spy = ActionSpy()
         installMenu(spy: spy, key: "\r", modifiers: [.command])
