@@ -99,7 +99,9 @@ enum RightSidebarFocusRequestCenter {
         if RightSidebarKeyboardFocusView.isFocusHost(responder, in: window) {
             return true
         }
-        if responder is FileExplorerNSOutlineView || responder is FeedKeyboardFocusView {
+        if responder is FileExplorerNSOutlineView ||
+            responder is SessionIndexKeyboardFocusView ||
+            responder is FeedKeyboardFocusView {
             return true
         }
         return false
@@ -212,7 +214,9 @@ struct RightSidebarPanelView: View {
             FileExplorerFocusRequestCenter.requestFocus(in: window)
             return false
         case .sessions:
-            return RightSidebarKeyboardFocusView.focusHost(in: window)
+            SessionIndexFocusRequestCenter.requestFocus(in: window)
+            return SessionIndexKeyboardFocusView.focusHost(in: window) ||
+                RightSidebarKeyboardFocusView.focusHost(in: window)
         case .feed:
             FeedFocusRequestCenter.requestFirstItemFocus(in: window)
             return FeedKeyboardFocusView.focusHost(in: window)

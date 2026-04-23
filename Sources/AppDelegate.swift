@@ -4975,12 +4975,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if let window {
             setActiveMainWindow(window)
         }
+        if let window,
+           let firstResponder = window.firstResponder,
+           RightSidebarFocusRequestCenter.isRightSidebarFocusResponder(firstResponder, in: window) {
+            return focusSelectedTerminal(in: context, window: window)
+        }
         guard let rightSidebarState = context.fileExplorerState ?? fileExplorerState else {
             return false
         }
         rightSidebarState.setVisible(true)
         RightSidebarFocusRequestCenter.requestFocus(mode: nil, in: window)
         return true
+    }
+
+    @discardableResult
+    private func focusSelectedTerminal(in context: MainWindowContext, window: NSWindow) -> Bool {
+        setActiveMainWindow(window)
+        guard let workspace = context.tabManager.selectedWorkspace else { return false }
+        let terminalPanel: TerminalPanel? = {
+            if let focusedPanelId = workspace.focusedPanelId,
+               let terminalPanel = workspace.terminalPanel(for: focusedPanelId) {
+                return terminalPanel
+            }
+            return workspace.focusedTerminalPanel
+        }()
+        guard let terminalPanel else { return false }
+        workspace.focusPanel(terminalPanel.id)
+        terminalPanel.hostedView.ensureFocus(for: workspace.id, surfaceId: terminalPanel.id)
+        return terminalPanel.hostedView.isSurfaceViewFirstResponder()
     }
 
     func sidebarVisibility(windowId: UUID) -> Bool? {

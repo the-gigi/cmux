@@ -3,6 +3,54 @@ import Bonsplit
 import SwiftUI
 import UniformTypeIdentifiers
 
+struct SessionIndexFocusRequest: Equatable {
+    let generation: Int
+    let windowNumber: Int?
+}
+
+enum SessionIndexFocusRequestCenter {
+    static let notificationName = Notification.Name("cmux.sessionIndexFocusRequested")
+
+    private static var generation = 0
+    private static var latestRequest: SessionIndexFocusRequest?
+
+    static func requestFocus(in window: NSWindow?) {
+        generation &+= 1
+        let request = SessionIndexFocusRequest(
+            generation: generation,
+            windowNumber: window?.windowNumber
+        )
+        latestRequest = request
+
+        var userInfo: [AnyHashable: Any] = ["generation": request.generation]
+        if let windowNumber = request.windowNumber {
+            userInfo["windowNumber"] = windowNumber
+        }
+        NotificationCenter.default.post(name: notificationName, object: nil, userInfo: userInfo)
+    }
+
+    static func request(from notification: Notification) -> SessionIndexFocusRequest? {
+        guard let generation = notification.userInfo?["generation"] as? Int else { return nil }
+        return SessionIndexFocusRequest(
+            generation: generation,
+            windowNumber: notification.userInfo?["windowNumber"] as? Int
+        )
+    }
+
+    static func latestRequest(for window: NSWindow?) -> SessionIndexFocusRequest? {
+        guard let latestRequest else { return nil }
+        if let targetWindowNumber = latestRequest.windowNumber {
+            guard window?.windowNumber == targetWindowNumber else { return nil }
+        }
+        return latestRequest
+    }
+}
+
+private struct SessionIndexScrollRequest: Equatable {
+    let id: SessionEntry.ID
+    let sequence: Int
+}
+
 struct SessionIndexView: View {
     @ObservedObject var store: SessionIndexStore
     /// Lives alongside the store but is owned by this view so drag-state
@@ -13,6 +61,11 @@ struct SessionIndexView: View {
     @State private var collapsedSections: Set<SectionKey> = []
     /// Section whose "Show more" popover is currently open.
     @State private var openPopoverSection: SectionKey? = nil
+    @State private var selectedEntryId: SessionEntry.ID?
+    @State private var sessionFocusActive = false
+    @State private var scrollRequest: SessionIndexScrollRequest?
+    @State private var scrollRequestSequence = 0
+    @State private var handledFocusRequestGeneration = 0
     let onResume: ((SessionEntry) -> Void)?
 
     /// Rows shown per section before "Show more" is tapped.
@@ -32,6 +85,7 @@ struct SessionIndexView: View {
     }()
 
     var body: some View {
+        let focusEntries = visibleEntriesForFocus()
         VStack(spacing: 0) {
             controlBar
             Divider()
@@ -50,6 +104,30 @@ struct SessionIndexView: View {
             if store.entries.isEmpty && !store.isLoading {
                 store.reload()
             }
+        }
+        .background(
+            SessionIndexKeyboardFocusBridge(
+                onEscape: {
+                    sessionFocusActive = false
+                    NSApp.keyWindow?.makeFirstResponder(nil)
+                },
+                onMoveSelection: { delta in
+                    moveSelection(in: focusEntries, delta: delta)
+                },
+                onActivateSelection: {
+                    activateSelection(in: focusEntries)
+                },
+                onFocusFirstItemRequested: { generation in
+                    handleFocusRequest(generation, entries: focusEntries)
+                },
+                onFocusChanged: { focused in
+                    sessionFocusActive = focused
+                }
+            )
+            .frame(width: 1, height: 1)
+        )
+        .onChange(of: focusEntries.map(\.id)) { ids in
+            reconcileFocusedSelection(with: ids)
         }
     }
 
@@ -143,57 +221,148 @@ struct SessionIndexView: View {
             await store.loadDirectorySnapshot(cwd: cwd)
         }
 
-        return ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(sections.enumerated()), id: \.element.key) { index, section in
-                    // Drop above this row → insert dragged section BEFORE this section's key.
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(sections.enumerated()), id: \.element.key) { index, section in
+                        // Drop above this row → insert dragged section BEFORE this section's key.
+                        SectionReorderGap(
+                            beforeKey: section.key,
+                            isValidDrop: draggedKey == nil || draggedKey != section.key,
+                            actions: gapActions
+                        ).equatable()
+                        IndexSectionView(
+                            section: section,
+                            rowLimit: Self.collapsedRowLimit,
+                            isDragged: draggedKey == section.key,
+                            selectedEntryId: selectedEntryId,
+                            sessionFocusActive: sessionFocusActive,
+                            isCollapsed: Binding(
+                                get: { collapsedSections.contains(section.key) },
+                                set: { newValue in
+                                    if newValue {
+                                        collapsedSections.insert(section.key)
+                                    } else {
+                                        collapsedSections.remove(section.key)
+                                    }
+                                }
+                            ),
+                            isPopoverOpen: Binding(
+                                get: { openPopoverSection == section.key },
+                                set: { newValue in
+                                    openPopoverSection = newValue ? section.key : nil
+                                }
+                            ),
+                            actions: IndexSectionActions(
+                                onBeginDrag: { dragCoordinator.draggedKey = section.key },
+                                onSelectEntry: { id, focusSessions in
+                                    selectEntry(id, focusSessions: focusSessions)
+                                },
+                                onResume: onResumeClosure,
+                                search: searchFn,
+                                loadSnapshot: loadSnapshotFn
+                            )
+                        ).equatable()
+                        let _ = index
+                    }
+                    // Trailing gap → append.
                     SectionReorderGap(
-                        beforeKey: section.key,
-                        isValidDrop: draggedKey == nil || draggedKey != section.key,
+                        beforeKey: nil,
+                        isValidDrop: true,
                         actions: gapActions
                     ).equatable()
-                    IndexSectionView(
-                        section: section,
-                        rowLimit: Self.collapsedRowLimit,
-                        isDragged: draggedKey == section.key,
-                        isCollapsed: Binding(
-                            get: { collapsedSections.contains(section.key) },
-                            set: { newValue in
-                                if newValue {
-                                    collapsedSections.insert(section.key)
-                                } else {
-                                    collapsedSections.remove(section.key)
-                                }
-                            }
-                        ),
-                        isPopoverOpen: Binding(
-                            get: { openPopoverSection == section.key },
-                            set: { newValue in
-                                openPopoverSection = newValue ? section.key : nil
-                            }
-                        ),
-                        actions: IndexSectionActions(
-                            onBeginDrag: { dragCoordinator.draggedKey = section.key },
-                            onResume: onResumeClosure,
-                            search: searchFn,
-                            loadSnapshot: loadSnapshotFn
-                        )
-                    ).equatable()
-                    let _ = index
                 }
-                // Trailing gap → append.
-                SectionReorderGap(
-                    beforeKey: nil,
-                    isValidDrop: true,
-                    actions: gapActions
-                ).equatable()
+                .padding(.bottom, 8)
             }
-            .padding(.bottom, 8)
+            .onChange(of: scrollRequest) { request in
+                guard let request else { return }
+                proxy.scrollTo(request.id, anchor: .top)
+            }
+            .modifier(ClearScrollBackground())
+            .background(
+                DragCancelMonitor(dragCoordinator: dragCoordinator)
+            )
         }
-        .modifier(ClearScrollBackground())
-        .background(
-            DragCancelMonitor(dragCoordinator: dragCoordinator)
-        )
+    }
+
+    private func visibleEntriesForFocus() -> [SessionEntry] {
+        var entries: [SessionEntry] = []
+        for section in store.sectionsForCurrentGrouping() {
+            guard !collapsedSections.contains(section.key) else { continue }
+            entries.append(contentsOf: section.entries.prefix(Self.collapsedRowLimit))
+        }
+        return entries
+    }
+
+    private func selectEntry(_ id: SessionEntry.ID, focusSessions: Bool) {
+        if selectedEntryId != id {
+            selectedEntryId = id
+        }
+        guard focusSessions else {
+            sessionFocusActive = true
+            return
+        }
+        sessionFocusActive = SessionIndexKeyboardFocusView.focusHost(in: NSApp.keyWindow ?? NSApp.mainWindow)
+    }
+
+    private func reconcileFocusedSelection(with ids: [SessionEntry.ID]) {
+        guard sessionFocusActive else { return }
+        if let selectedEntryId, ids.contains(selectedEntryId) {
+            return
+        }
+        guard let firstId = ids.first else {
+            selectedEntryId = nil
+            return
+        }
+        selectedEntryId = firstId
+        scrollRequestSequence &+= 1
+        scrollRequest = SessionIndexScrollRequest(id: firstId, sequence: scrollRequestSequence)
+    }
+
+    private func handleFocusRequest(_ generation: Int, entries: [SessionEntry]) {
+        guard handledFocusRequestGeneration != generation else { return }
+        handledFocusRequestGeneration = generation
+        focusFirstVisibleEntry(in: entries)
+    }
+
+    private func focusFirstVisibleEntry(in entries: [SessionEntry]) {
+        guard let first = entries.first else {
+            sessionFocusActive = SessionIndexKeyboardFocusView.focusHost(in: NSApp.keyWindow ?? NSApp.mainWindow)
+            return
+        }
+        selectEntry(first.id, focusSessions: true)
+        scrollRequestSequence &+= 1
+        scrollRequest = SessionIndexScrollRequest(id: first.id, sequence: scrollRequestSequence)
+    }
+
+    private func moveSelection(in entries: [SessionEntry], delta: Int) {
+        guard !entries.isEmpty else { return }
+        let ids = entries.map(\.id)
+        let targetIndex: Int
+        if let selectedEntryId,
+           let currentIndex = ids.firstIndex(of: selectedEntryId) {
+            targetIndex = min(max(currentIndex + delta, 0), ids.count - 1)
+        } else {
+            targetIndex = delta >= 0 ? 0 : ids.count - 1
+        }
+        let targetId = ids[targetIndex]
+        selectedEntryId = targetId
+        sessionFocusActive = true
+        scrollRequestSequence &+= 1
+        scrollRequest = SessionIndexScrollRequest(id: targetId, sequence: scrollRequestSequence)
+    }
+
+    private func activateSelection(in entries: [SessionEntry]) {
+        guard !entries.isEmpty else { return }
+        let entry: SessionEntry
+        if let selectedEntryId,
+           let selectedEntry = entries.first(where: { $0.id == selectedEntryId }) {
+            entry = selectedEntry
+        } else {
+            entry = entries[0]
+        }
+        selectEntry(entry.id, focusSessions: true)
+        onResume?(entry)
     }
 }
 
@@ -249,6 +418,7 @@ typealias DirectorySnapshotFn = @MainActor (_ cwd: String?) async -> DirectorySn
 /// than a silent 100% CPU regression.
 struct IndexSectionActions {
     let onBeginDrag: @MainActor () -> Void
+    let onSelectEntry: (SessionEntry.ID, Bool) -> Void
     let onResume: ((SessionEntry) -> Void)?
     let search: SessionSearchFn
     let loadSnapshot: DirectorySnapshotFn
@@ -268,6 +438,8 @@ private struct IndexSectionView: View, Equatable {
     /// in the parent from a single `draggedKey` snapshot so the section's
     /// opacity fade doesn't require observing the drag coordinator here.
     let isDragged: Bool
+    let selectedEntryId: SessionEntry.ID?
+    let sessionFocusActive: Bool
     @Binding var isCollapsed: Bool
     @Binding var isPopoverOpen: Bool
     /// Value-type action bundle. See `IndexSectionActions` — replaces the
@@ -284,6 +456,8 @@ private struct IndexSectionView: View, Equatable {
         lhs.section == rhs.section
             && lhs.rowLimit == rhs.rowLimit
             && lhs.isDragged == rhs.isDragged
+            && lhs.selectedEntryId == rhs.selectedEntryId
+            && lhs.sessionFocusActive == rhs.sessionFocusActive
             && lhs.isCollapsed == rhs.isCollapsed
             && lhs.isPopoverOpen == rhs.isPopoverOpen
     }
@@ -300,8 +474,17 @@ private struct IndexSectionView: View, Equatable {
                         .padding(.vertical, 4)
                 } else {
                     ForEach(Array(section.entries.prefix(rowLimit))) { entry in
-                        SessionRow(entry: entry, onResume: actions.onResume)
+                        SessionRow(
+                            entry: entry,
+                            isSelected: selectedEntryId == entry.id,
+                            isFocusActive: sessionFocusActive,
+                            onSelect: {
+                                actions.onSelectEntry(entry.id, true)
+                            },
+                            onResume: actions.onResume
+                        )
                             .equatable()
+                            .id(entry.id)
                     }
                     if section.entries.count > rowLimit {
                         showMoreButton
@@ -467,12 +650,17 @@ private struct SectionGapDropDelegate: DropDelegate {
 
 private struct SessionRow: View, Equatable {
     let entry: SessionEntry
+    let isSelected: Bool
+    let isFocusActive: Bool
+    let onSelect: () -> Void
     let onResume: ((SessionEntry) -> Void)?
 
     static func == (lhs: SessionRow, rhs: SessionRow) -> Bool {
         // Skip body re-eval during scroll when the entry is unchanged.
         // The closure isn't compared (it comes from stable parent state).
-        lhs.entry == rhs.entry
+        lhs.entry == rhs.entry &&
+            lhs.isSelected == rhs.isSelected &&
+            lhs.isFocusActive == rhs.isFocusActive
     }
 
     var body: some View {
@@ -498,8 +686,13 @@ private struct SessionRow: View, Equatable {
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+        .background(rowBackground)
         .help(helpText)
+        .simultaneousGesture(TapGesture(count: 1).onEnded {
+            onSelect()
+        })
         .onTapGesture(count: 2) {
+            onSelect()
             if let onResume { onResume(entry) }
         }
         .onDrag {
@@ -525,6 +718,18 @@ private struct SessionRow: View, Equatable {
         }
     }
 
+    private var rowBackground: some View {
+        Rectangle()
+            .fill(isSelected ? selectionColor : Color.clear)
+    }
+
+    private var selectionColor: Color {
+        if isFocusActive {
+            return Color.accentColor.opacity(0.22)
+        }
+        return Color.primary.opacity(0.08)
+    }
+
     private var helpText: String {
         var lines: [String] = [entry.displayTitle]
         if let cwd = entry.cwdLabel {
@@ -540,6 +745,173 @@ private struct SessionRow: View, Equatable {
 
     private func absoluteTime(_ date: Date) -> String {
         SessionIndexView.absoluteFormatter.string(from: date)
+    }
+}
+
+private struct SessionIndexKeyboardFocusBridge: NSViewRepresentable {
+    let onEscape: () -> Void
+    let onMoveSelection: (Int) -> Void
+    let onActivateSelection: () -> Void
+    let onFocusFirstItemRequested: (Int) -> Void
+    let onFocusChanged: (Bool) -> Void
+
+    func makeNSView(context: Context) -> SessionIndexKeyboardFocusView {
+        let view = SessionIndexKeyboardFocusView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        view.onEscape = onEscape
+        view.onMoveSelection = onMoveSelection
+        view.onActivateSelection = onActivateSelection
+        view.onFocusFirstItemRequested = onFocusFirstItemRequested
+        view.onFocusChanged = onFocusChanged
+        return view
+    }
+
+    func updateNSView(_ nsView: SessionIndexKeyboardFocusView, context: Context) {
+        nsView.onEscape = onEscape
+        nsView.onMoveSelection = onMoveSelection
+        nsView.onActivateSelection = onActivateSelection
+        nsView.onFocusFirstItemRequested = onFocusFirstItemRequested
+        nsView.onFocusChanged = onFocusChanged
+        nsView.replayPendingFocusRequestIfNeeded()
+    }
+}
+
+final class SessionIndexKeyboardFocusView: NSView {
+    private static let hosts = NSMapTable<NSWindow, SessionIndexKeyboardFocusView>(
+        keyOptions: .weakMemory,
+        valueOptions: .weakMemory
+    )
+
+    var onEscape: (() -> Void)?
+    var onMoveSelection: ((Int) -> Void)?
+    var onActivateSelection: (() -> Void)?
+    var onFocusFirstItemRequested: ((Int) -> Void)?
+    var onFocusChanged: ((Bool) -> Void)?
+    private var focusRequestObserver: NSObjectProtocol?
+
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
+
+    deinit {
+        if let focusRequestObserver {
+            NotificationCenter.default.removeObserver(focusRequestObserver)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        Self.hosts.setObject(self, forKey: window)
+        installFocusRequestObserverIfNeeded()
+        replayPendingFocusRequestIfNeeded()
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown, event.keyCode == 53 {
+            onEscape?()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if let mode = RightSidebarFocusRequestCenter.modeShortcut(for: event) {
+            RightSidebarFocusRequestCenter.requestFocus(mode: mode, in: window)
+            return
+        }
+
+        let normalizedFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let hasShortcutModifier = !normalizedFlags.intersection([.command, .control, .option]).isEmpty
+        guard !hasShortcutModifier else {
+            super.keyDown(with: event)
+            return
+        }
+
+        switch event.keyCode {
+        case 38, 125:
+            onMoveSelection?(1)
+            return
+        case 40, 126:
+            onMoveSelection?(-1)
+            return
+        case 36, 76:
+            onActivateSelection?()
+            return
+        case 53:
+            onEscape?()
+            return
+        default:
+            break
+        }
+
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        if key == "j" {
+            onMoveSelection?(1)
+            return
+        }
+        if key == "k" {
+            onMoveSelection?(-1)
+            return
+        }
+
+        if let characters = event.charactersIgnoringModifiers, !characters.isEmpty {
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            onFocusChanged?(true)
+        }
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        if result {
+            onFocusChanged?(false)
+        }
+        return result
+    }
+
+    static func focusHost(in window: NSWindow?) -> Bool {
+        guard let window, let host = hosts.object(forKey: window) else { return false }
+        guard host.cmuxCanAcceptRightSidebarKeyboardFocus else { return false }
+        return window.makeFirstResponder(host)
+    }
+
+    private func installFocusRequestObserverIfNeeded() {
+        guard focusRequestObserver == nil else { return }
+        focusRequestObserver = NotificationCenter.default.addObserver(
+            forName: SessionIndexFocusRequestCenter.notificationName,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let request = SessionIndexFocusRequestCenter.request(from: notification),
+                  self.shouldHandleFocusRequest(request)
+            else { return }
+            self.onFocusFirstItemRequested?(request.generation)
+        }
+    }
+
+    fileprivate func replayPendingFocusRequestIfNeeded() {
+        guard let request = SessionIndexFocusRequestCenter.latestRequest(for: window),
+              shouldHandleFocusRequest(request) else {
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.shouldHandleFocusRequest(request) else { return }
+            self.onFocusFirstItemRequested?(request.generation)
+        }
+    }
+
+    private func shouldHandleFocusRequest(_ request: SessionIndexFocusRequest) -> Bool {
+        if let windowNumber = request.windowNumber {
+            return window?.windowNumber == windowNumber
+        }
+        return window != nil
     }
 }
 
