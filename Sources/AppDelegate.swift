@@ -565,6 +565,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let tabManager: TabManager
         let sidebarState: SidebarState
         let sidebarSelectionState: SidebarSelectionState
+        weak var fileExplorerState: FileExplorerState?
         weak var window: NSWindow?
 
         init(
@@ -572,12 +573,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             tabManager: TabManager,
             sidebarState: SidebarState,
             sidebarSelectionState: SidebarSelectionState,
+            fileExplorerState: FileExplorerState?,
             window: NSWindow?
         ) {
             self.windowId = windowId
             self.tabManager = tabManager
             self.sidebarState = sidebarState
             self.sidebarSelectionState = sidebarSelectionState
+            self.fileExplorerState = fileExplorerState
             self.window = window
         }
     }
@@ -3203,7 +3206,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         windowId: UUID,
         tabManager: TabManager,
         sidebarState: SidebarState,
-        sidebarSelectionState: SidebarSelectionState
+        sidebarSelectionState: SidebarSelectionState,
+        fileExplorerState: FileExplorerState
     ) {
         tabManager.window = window
 
@@ -3213,8 +3217,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         #endif
         if let existing = mainWindowContexts[key] {
             existing.window = window
+            existing.fileExplorerState = fileExplorerState
         } else if let existing = mainWindowContexts.values.first(where: { $0.windowId == windowId }) {
             existing.window = window
+            existing.fileExplorerState = fileExplorerState
             reindexMainWindowContextIfNeeded(existing, for: window)
         } else {
             mainWindowContexts[key] = MainWindowContext(
@@ -3222,6 +3228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 tabManager: tabManager,
                 sidebarState: sidebarState,
                 sidebarSelectionState: sidebarSelectionState,
+                fileExplorerState: fileExplorerState,
                 window: window
             )
             NotificationCenter.default.addObserver(
@@ -4136,6 +4143,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         hostedView: GhosttySurfaceScrollView
     ) -> Bool {
         guard let responder else { return true }
+        if responder is FeedKeyboardFocusView {
+            return false
+        }
         return focusedTerminalKeyRepairNeeded(
             responderIsWindow: responder is NSWindow,
             responderHasViableKeyRoutingOwner: responderHasViableKeyRoutingOwner(responder, in: window),
@@ -4152,12 +4162,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard isMainTerminalWindow(window) else { return }
         guard window.attachedSheet == nil else { return }
         guard !isCommandPaletteEffectivelyVisible(in: window) else { return }
-        // If the active first responder is a text-field editor (e.g. a popover's
-        // search field whose field editor is borrowed from the parent window),
+        // If the active first responder is owned by a non-terminal interaction surface,
         // never re-route the keystroke to the terminal. Symmetric with
-        // applyFirstResponderIfNeeded's NSText guard. Terminals use GhosttyNSView,
-        // never NSText, so this can't suppress legitimate terminal repair.
-        if window.firstResponder is NSText {
+        // applyFirstResponderIfNeeded's foreign focus guard.
+        if let firstResponder = window.firstResponder,
+           firstResponder is NSText || firstResponder is FeedKeyboardFocusView {
             return
         }
         guard let context = contextForMainWindow(window) ?? contextForMainTerminalWindow(window),
@@ -4941,6 +4950,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return false
     }
 
+    @discardableResult
+    func focusRightSidebarInActiveMainWindow(preferredWindow: NSWindow? = nil) -> Bool {
+        let context: MainWindowContext? = {
+            if let preferredWindow,
+               let context = contextForMainWindow(preferredWindow) {
+                return context
+            }
+            if let context = contextForMainWindow(NSApp.keyWindow) {
+                return context
+            }
+            if let context = contextForMainWindow(NSApp.mainWindow) {
+                return context
+            }
+            if let activeManager = tabManager,
+               let activeContext = mainWindowContexts.values.first(where: { $0.tabManager === activeManager }) {
+                return activeContext
+            }
+            return mainWindowContexts.values.first
+        }()
+
+        guard let context else { return false }
+        let window = context.window ?? windowForMainWindowId(context.windowId)
+        if let window {
+            setActiveMainWindow(window)
+        }
+        guard let rightSidebarState = context.fileExplorerState ?? fileExplorerState else {
+            return false
+        }
+        rightSidebarState.setVisible(true)
+        RightSidebarFocusRequestCenter.requestFocus(mode: nil, in: window)
+        return true
+    }
+
     func sidebarVisibility(windowId: UUID) -> Bool? {
         mainWindowContexts.values.first(where: { $0.windowId == windowId })?.sidebarState.isVisible
     }
@@ -5617,7 +5659,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             windowId: windowId,
             tabManager: tabManager,
             sidebarState: sidebarState,
-            sidebarSelectionState: sidebarSelectionState
+            sidebarSelectionState: sidebarSelectionState,
+            fileExplorerState: fileExplorerState
         )
         installFileDropOverlay(on: window, tabManager: tabManager)
         if TerminalController.shouldSuppressSocketCommandActivation() {
@@ -9476,6 +9519,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return true
         }
 
+        if let rightSidebarWindow = mainWindowForShortcutEvent(event) ?? event.window ?? NSApp.keyWindow ?? NSApp.mainWindow,
+           let mode = RightSidebarFocusRequestCenter.focusedModeShortcut(for: event, in: rightSidebarWindow) {
+            RightSidebarFocusRequestCenter.requestFocus(mode: mode, in: rightSidebarWindow)
+            return true
+        }
+
         if matchConfiguredShortcut(event: event, action: .commandPalette) {
             let targetWindow = commandPaletteTargetWindow ?? event.window ?? NSApp.keyWindow ?? NSApp.mainWindow
             requestCommandPaletteCommands(preferredWindow: targetWindow, source: "shortcut.commandPalette")
@@ -9578,6 +9627,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 self?.fileExplorerState?.toggle()
             }
             return true
+        }
+
+        if matchConfiguredShortcut(event: event, action: .focusRightSidebar) {
+            return focusRightSidebarInActiveMainWindow(preferredWindow: mainWindowForShortcutEvent(event))
         }
 
         if matchConfiguredShortcut(event: event, action: .sendFeedback) {
@@ -11525,6 +11578,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         tabManager = context.tabManager
         sidebarState = context.sidebarState
         sidebarSelectionState = context.sidebarSelectionState
+        fileExplorerState = context.fileExplorerState
         TerminalController.shared.setActiveTabManager(context.tabManager)
 #if DEBUG
         dlog(

@@ -11018,14 +11018,14 @@ final class GhosttySurfaceScrollView: NSView {
 #endif
             return
         }
-        // Don't steal focus from an active text editor (NSTextField/NSTextView/field editor).
-        // The terminal surface uses its own GhosttyNSView for input, never NSText, so this is
-        // safe. Without this guard, a popover (e.g. session-index search) loses its text-field
-        // focus instantly because applyFirstResponderIfNeeded runs on a deferred async tick and
-        // sees the field editor as a "foreign" responder to clobber.
-        if window.firstResponder is NSText {
+        // Don't steal focus from active non-terminal input owners. The terminal surface uses its
+        // own GhosttyNSView for input, so NSText and the feed focus host are always foreign focus
+        // owners that should survive deferred terminal visibility applies.
+        if let firstResponder = window.firstResponder,
+           firstResponder is NSText || firstResponder is FeedKeyboardFocusView {
 #if DEBUG
-            dlog("find.applyFirstResponder SKIP surface=\(surfaceShort) reason=textEditorFocused")
+            let reason = firstResponder is FeedKeyboardFocusView ? "feedFocused" : "textEditorFocused"
+            dlog("find.applyFirstResponder SKIP surface=\(surfaceShort) reason=\(reason)")
 #endif
             return
         }

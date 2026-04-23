@@ -128,6 +128,8 @@ private struct FeedPreviewCardHost: View {
             actions: FeedPreviewActions.make(),
             isSelected: false,
             onPressSelect: {},
+            onControlFocus: {},
+            onControlBlur: {},
             onActivate: {}
         )
     }

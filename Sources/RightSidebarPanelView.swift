@@ -26,6 +26,86 @@ enum RightSidebarMode: String, CaseIterable {
     }
 }
 
+struct RightSidebarFocusRequest: Equatable {
+    let generation: Int
+    let windowNumber: Int?
+    let mode: RightSidebarMode?
+}
+
+enum RightSidebarFocusRequestCenter {
+    static let notificationName = Notification.Name("cmux.rightSidebarFocusRequested")
+
+    private static var generation = 0
+    private static var latestRequest: RightSidebarFocusRequest?
+
+    static func requestFocus(mode: RightSidebarMode?, in window: NSWindow?) {
+        generation &+= 1
+        let request = RightSidebarFocusRequest(
+            generation: generation,
+            windowNumber: window?.windowNumber,
+            mode: mode
+        )
+        latestRequest = request
+
+        var userInfo: [AnyHashable: Any] = ["generation": request.generation]
+        if let windowNumber = request.windowNumber {
+            userInfo["windowNumber"] = windowNumber
+        }
+        if let mode = request.mode {
+            userInfo["mode"] = mode.rawValue
+        }
+        NotificationCenter.default.post(name: notificationName, object: nil, userInfo: userInfo)
+    }
+
+    static func request(from notification: Notification) -> RightSidebarFocusRequest? {
+        guard let generation = notification.userInfo?["generation"] as? Int else { return nil }
+        let rawMode = notification.userInfo?["mode"] as? String
+        return RightSidebarFocusRequest(
+            generation: generation,
+            windowNumber: notification.userInfo?["windowNumber"] as? Int,
+            mode: rawMode.flatMap(RightSidebarMode.init(rawValue:))
+        )
+    }
+
+    static func latestRequest(for window: NSWindow?) -> RightSidebarFocusRequest? {
+        guard let latestRequest else { return nil }
+        if let targetWindowNumber = latestRequest.windowNumber {
+            guard window?.windowNumber == targetWindowNumber else { return nil }
+        }
+        return latestRequest
+    }
+
+    static func modeShortcut(for event: NSEvent) -> RightSidebarMode? {
+        guard event.type == .keyDown else { return nil }
+        if KeyboardShortcutSettings.shortcut(for: .switchRightSidebarToFiles).matches(event: event) {
+            return .files
+        }
+        if KeyboardShortcutSettings.shortcut(for: .switchRightSidebarToSessions).matches(event: event) {
+            return .sessions
+        }
+        if KeyboardShortcutSettings.shortcut(for: .switchRightSidebarToFeed).matches(event: event) {
+            return .feed
+        }
+        return nil
+    }
+
+    static func focusedModeShortcut(for event: NSEvent, in window: NSWindow?) -> RightSidebarMode? {
+        guard ownsKeyboardFocus(in: window) else { return nil }
+        return modeShortcut(for: event)
+    }
+
+    private static func ownsKeyboardFocus(in window: NSWindow?) -> Bool {
+        guard let window, let responder = window.firstResponder else { return false }
+        if RightSidebarKeyboardFocusView.isFocusHost(responder, in: window) {
+            return true
+        }
+        if responder is FileExplorerNSOutlineView || responder is FeedKeyboardFocusView {
+            return true
+        }
+        return false
+    }
+}
+
 /// Right sidebar root view. Hosts a segmented mode picker plus the active panel.
 struct RightSidebarPanelView: View {
     @ObservedObject var fileExplorerStore: FileExplorerStore
@@ -48,6 +128,12 @@ struct RightSidebarPanelView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            RightSidebarKeyboardFocusBridge { request in
+                handleFocusRequest(request)
+            }
+            .frame(width: 1, height: 1)
+        )
         .accessibilityIdentifier("RightSidebar")
     }
 
@@ -59,15 +145,7 @@ struct RightSidebarPanelView: View {
                     isSelected: fileExplorerState.mode == mode,
                     badgeCount: mode == .feed ? feedPendingCount : 0
                 ) {
-                    if fileExplorerState.mode != mode {
-                        fileExplorerState.mode = mode
-                        if mode == .sessions {
-                            sessionIndexStore.setCurrentDirectoryIfChanged(sessionIndexDirectory)
-                            if sessionIndexStore.entries.isEmpty {
-                                sessionIndexStore.reload()
-                            }
-                        }
-                    }
+                    selectMode(mode)
                 }
             }
             Spacer(minLength: 0)
@@ -95,6 +173,144 @@ struct RightSidebarPanelView: View {
 
     private var sessionIndexDirectory: String? {
         fileExplorerStore.rootPath.isEmpty ? nil : fileExplorerStore.rootPath
+    }
+
+    private func handleFocusRequest(_ request: RightSidebarFocusRequest) {
+        let targetMode = request.mode ?? fileExplorerState.mode
+        selectMode(targetMode)
+        focusMode(targetMode, windowNumber: request.windowNumber)
+    }
+
+    private func selectMode(_ mode: RightSidebarMode) {
+        if fileExplorerState.mode != mode {
+            fileExplorerState.mode = mode
+        }
+        if mode == .sessions {
+            sessionIndexStore.setCurrentDirectoryIfChanged(sessionIndexDirectory)
+            if sessionIndexStore.entries.isEmpty {
+                sessionIndexStore.reload()
+            }
+        }
+    }
+
+    private func focusMode(_ mode: RightSidebarMode, windowNumber: Int?) {
+        let window = windowNumber.flatMap { NSApp.window(withWindowNumber: $0) }
+            ?? NSApp.keyWindow
+            ?? NSApp.mainWindow
+        switch mode {
+        case .files:
+            FileExplorerFocusRequestCenter.requestFocus(in: window)
+        case .sessions:
+            _ = RightSidebarKeyboardFocusView.focusHost(in: window)
+        case .feed:
+            FeedFocusRequestCenter.requestFirstItemFocus(in: window)
+        }
+    }
+}
+
+private struct RightSidebarKeyboardFocusBridge: NSViewRepresentable {
+    let onFocusRequest: (RightSidebarFocusRequest) -> Void
+
+    func makeNSView(context: Context) -> RightSidebarKeyboardFocusView {
+        let view = RightSidebarKeyboardFocusView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        view.onFocusRequest = onFocusRequest
+        return view
+    }
+
+    func updateNSView(_ nsView: RightSidebarKeyboardFocusView, context: Context) {
+        nsView.onFocusRequest = onFocusRequest
+    }
+}
+
+private final class RightSidebarKeyboardFocusView: NSView {
+    private static let hosts = NSMapTable<NSWindow, RightSidebarKeyboardFocusView>(
+        keyOptions: .weakMemory,
+        valueOptions: .weakMemory
+    )
+
+    var onFocusRequest: ((RightSidebarFocusRequest) -> Void)?
+    private var focusRequestObserver: NSObjectProtocol?
+    private var handledFocusRequestGeneration = 0
+
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
+
+    deinit {
+        if let focusRequestObserver {
+            NotificationCenter.default.removeObserver(focusRequestObserver)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        Self.hosts.setObject(self, forKey: window)
+        installFocusRequestObserverIfNeeded()
+        replayPendingFocusRequestIfNeeded()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if let mode = RightSidebarFocusRequestCenter.modeShortcut(for: event) {
+            RightSidebarFocusRequestCenter.requestFocus(mode: mode, in: window)
+            return
+        }
+        if event.keyCode == 53 {
+            window?.makeFirstResponder(nil)
+            return
+        }
+        if let characters = event.charactersIgnoringModifiers, !characters.isEmpty {
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    static func focusHost(in window: NSWindow?) -> Bool {
+        guard let window, let host = hosts.object(forKey: window) else { return false }
+        return window.makeFirstResponder(host)
+    }
+
+    static func isFocusHost(_ responder: NSResponder, in window: NSWindow?) -> Bool {
+        guard let window, let host = hosts.object(forKey: window) else { return false }
+        return responder === host
+    }
+
+    private func installFocusRequestObserverIfNeeded() {
+        guard focusRequestObserver == nil else { return }
+        focusRequestObserver = NotificationCenter.default.addObserver(
+            forName: RightSidebarFocusRequestCenter.notificationName,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let request = RightSidebarFocusRequestCenter.request(from: notification),
+                  self.shouldHandleFocusRequest(request)
+            else { return }
+            self.handleFocusRequest(request)
+        }
+    }
+
+    private func replayPendingFocusRequestIfNeeded() {
+        guard let request = RightSidebarFocusRequestCenter.latestRequest(for: window),
+              shouldHandleFocusRequest(request) else {
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.shouldHandleFocusRequest(request) else { return }
+            self.handleFocusRequest(request)
+        }
+    }
+
+    private func handleFocusRequest(_ request: RightSidebarFocusRequest) {
+        guard handledFocusRequestGeneration != request.generation else { return }
+        handledFocusRequestGeneration = request.generation
+        onFocusRequest?(request)
+    }
+
+    private func shouldHandleFocusRequest(_ request: RightSidebarFocusRequest) -> Bool {
+        if let windowNumber = request.windowNumber {
+            return window?.windowNumber == windowNumber
+        }
+        return window != nil
     }
 }
 

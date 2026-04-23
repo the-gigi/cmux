@@ -5,6 +5,49 @@ import SwiftUI
 
 // MARK: - File Explorer Panel (single NSViewRepresentable)
 
+struct FileExplorerFocusRequest: Equatable {
+    let generation: Int
+    let windowNumber: Int?
+}
+
+enum FileExplorerFocusRequestCenter {
+    static let notificationName = Notification.Name("cmux.fileExplorerFocusRequested")
+
+    private static var generation = 0
+    private static var latestRequest: FileExplorerFocusRequest?
+
+    static func requestFocus(in window: NSWindow?) {
+        generation &+= 1
+        let request = FileExplorerFocusRequest(
+            generation: generation,
+            windowNumber: window?.windowNumber
+        )
+        latestRequest = request
+
+        var userInfo: [AnyHashable: Any] = ["generation": request.generation]
+        if let windowNumber = request.windowNumber {
+            userInfo["windowNumber"] = windowNumber
+        }
+        NotificationCenter.default.post(name: notificationName, object: nil, userInfo: userInfo)
+    }
+
+    static func request(from notification: Notification) -> FileExplorerFocusRequest? {
+        guard let generation = notification.userInfo?["generation"] as? Int else { return nil }
+        return FileExplorerFocusRequest(
+            generation: generation,
+            windowNumber: notification.userInfo?["windowNumber"] as? Int
+        )
+    }
+
+    static func latestRequest(for window: NSWindow?) -> FileExplorerFocusRequest? {
+        guard let latestRequest else { return nil }
+        if let targetWindowNumber = latestRequest.windowNumber {
+            guard window?.windowNumber == targetWindowNumber else { return nil }
+        }
+        return latestRequest
+    }
+}
+
 /// The entire file explorer panel as one AppKit view hierarchy.
 /// Contains the header bar (path + controls) and NSOutlineView, with no SwiftUI intermediaries.
 struct FileExplorerPanelView: NSViewRepresentable {
@@ -303,11 +346,18 @@ struct FileExplorerPanelView: NSViewRepresentable {
 
 /// Pure AppKit container holding the header bar and outline view.
 final class FileExplorerContainerView: NSView {
+    private static let hosts = NSMapTable<NSWindow, FileExplorerContainerView>(
+        keyOptions: .weakMemory,
+        valueOptions: .weakMemory
+    )
+
     private let headerView: FileExplorerHeaderView
     private let scrollView: NSScrollView
     private let outlineView: FileExplorerNSOutlineView
     private let emptyLabel: NSTextField
     private let loadingIndicator: NSProgressIndicator
+    private var focusRequestObserver: NSObjectProtocol?
+    private var handledFocusRequestGeneration = 0
 
     init(coordinator: FileExplorerPanelView.Coordinator) {
         headerView = FileExplorerHeaderView()
@@ -395,6 +445,20 @@ final class FileExplorerContainerView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        if let focusRequestObserver {
+            NotificationCenter.default.removeObserver(focusRequestObserver)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        Self.hosts.setObject(self, forKey: window)
+        installFocusRequestObserverIfNeeded()
+        replayPendingFocusRequestIfNeeded()
+    }
+
     func updateHeader(store: FileExplorerStore) {
         headerView.update(displayPath: store.displayRootPath)
     }
@@ -409,6 +473,61 @@ final class FileExplorerContainerView: NSView {
         } else {
             loadingIndicator.stopAnimation(nil)
         }
+    }
+
+    @discardableResult
+    func focusOutline() -> Bool {
+        guard let window else { return false }
+        if outlineView.numberOfRows > 0, outlineView.selectedRow < 0 {
+            outlineView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            outlineView.scrollRowToVisible(0)
+        }
+        return window.makeFirstResponder(outlineView)
+    }
+
+    @discardableResult
+    static func focus(in window: NSWindow?) -> Bool {
+        guard let window, let host = hosts.object(forKey: window) else { return false }
+        return host.focusOutline()
+    }
+
+    private func installFocusRequestObserverIfNeeded() {
+        guard focusRequestObserver == nil else { return }
+        focusRequestObserver = NotificationCenter.default.addObserver(
+            forName: FileExplorerFocusRequestCenter.notificationName,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let request = FileExplorerFocusRequestCenter.request(from: notification),
+                  self.shouldHandleFocusRequest(request)
+            else { return }
+            self.handleFocusRequest(request)
+        }
+    }
+
+    private func replayPendingFocusRequestIfNeeded() {
+        guard let request = FileExplorerFocusRequestCenter.latestRequest(for: window),
+              shouldHandleFocusRequest(request) else {
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.shouldHandleFocusRequest(request) else { return }
+            self.handleFocusRequest(request)
+        }
+    }
+
+    private func handleFocusRequest(_ request: FileExplorerFocusRequest) {
+        guard handledFocusRequestGeneration != request.generation else { return }
+        handledFocusRequestGeneration = request.generation
+        focusOutline()
+    }
+
+    private func shouldHandleFocusRequest(_ request: FileExplorerFocusRequest) -> Bool {
+        if let windowNumber = request.windowNumber {
+            return window?.windowNumber == windowNumber
+        }
+        return window != nil
     }
 }
 
@@ -612,6 +731,14 @@ final class FileExplorerNSOutlineView: NSOutlineView {
     /// Leading margin applied to disclosure triangles and content.
     static let leadingMargin: CGFloat = 8
 
+    override func keyDown(with event: NSEvent) {
+        if let mode = RightSidebarFocusRequestCenter.modeShortcut(for: event) {
+            RightSidebarFocusRequestCenter.requestFocus(mode: mode, in: window)
+            return
+        }
+        super.keyDown(with: event)
+    }
+
     override func expandItem(_ item: Any?, expandChildren: Bool) {
         NSAnimationContext.beginGrouping()
         NSAnimationContext.current.duration = 0
@@ -665,6 +792,3 @@ final class FileExplorerRowView: NSTableRowView {
         isSelected ? .emphasized : .normal
     }
 }
-
-
-

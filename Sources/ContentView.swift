@@ -3520,7 +3520,8 @@ struct ContentView: View {
                 windowId: windowId,
                 tabManager: tabManager,
                 sidebarState: sidebarState,
-                sidebarSelectionState: sidebarSelectionState
+                sidebarSelectionState: sidebarSelectionState,
+                fileExplorerState: fileExplorerState
             )
             installFileDropOverlayWhenReady(on: window, tabManager: tabManager)
         }))

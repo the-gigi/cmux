@@ -570,6 +570,13 @@ struct cmuxApp: App {
                     }
                 }
 
+                splitCommandButton(title: String(localized: "menu.view.focusRightSidebar", defaultValue: "Focus Right Sidebar"), shortcut: menuShortcut(for: .focusRightSidebar)) {
+                    if AppDelegate.shared?.focusRightSidebarInActiveMainWindow() != true {
+                        fileExplorerState.setVisible(true)
+                        RightSidebarFocusRequestCenter.requestFocus(mode: nil, in: NSApp.keyWindow ?? NSApp.mainWindow)
+                    }
+                }
+
                 Divider()
 
                 splitCommandButton(title: String(localized: "menu.view.nextSurface", defaultValue: "Next Surface"), shortcut: menuShortcut(for: .nextSurface)) {

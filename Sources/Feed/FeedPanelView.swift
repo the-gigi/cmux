@@ -1,6 +1,14 @@
 import AppKit
+import Bonsplit
 import CMUXWorkstream
 import SwiftUI
+
+#if DEBUG
+private func feedDebugResponderSummary(_ responder: NSResponder?) -> String {
+    guard let responder else { return "nil" }
+    return String(describing: type(of: responder))
+}
+#endif
 
 private extension WorkstreamPermissionMode {
     var displayLabel: String {
@@ -147,6 +155,45 @@ final class FeedPanelViewModel: ObservableObject {
     }
 }
 
+struct FeedFocusRequest: Equatable {
+    let generation: Int
+    let windowNumber: Int?
+}
+
+enum FeedFocusRequestCenter {
+    static let notificationName = Notification.Name("cmux.feedFocusFirstItemRequested")
+
+    private static var generation = 0
+    private static var latestRequest: FeedFocusRequest?
+
+    static func requestFirstItemFocus(in window: NSWindow?) {
+        generation &+= 1
+        let request = FeedFocusRequest(generation: generation, windowNumber: window?.windowNumber)
+        latestRequest = request
+        var userInfo: [AnyHashable: Any] = ["generation": request.generation]
+        if let windowNumber = request.windowNumber {
+            userInfo["windowNumber"] = windowNumber
+        }
+        NotificationCenter.default.post(name: notificationName, object: nil, userInfo: userInfo)
+    }
+
+    static func request(from notification: Notification) -> FeedFocusRequest? {
+        guard let generation = notification.userInfo?["generation"] as? Int else { return nil }
+        return FeedFocusRequest(
+            generation: generation,
+            windowNumber: notification.userInfo?["windowNumber"] as? Int
+        )
+    }
+
+    static func latestRequest(for window: NSWindow?) -> FeedFocusRequest? {
+        guard let latestRequest else { return nil }
+        if let targetWindowNumber = latestRequest.windowNumber {
+            guard window?.windowNumber == targetWindowNumber else { return nil }
+        }
+        return latestRequest
+    }
+}
+
 /// Feed content surface. Isolated so the outer panel's `@State`
 /// changes don't invalidate rows unnecessarily. Receives items as a
 /// plain value so its body never touches the live store, the parent
@@ -155,18 +202,50 @@ private struct FeedListView: View {
     let filter: FeedPanelView.Filter
     let items: [WorkstreamItem]
 
-    @State private var hoveredItemId: UUID?
     @State private var selectedItemId: UUID?
+    @State private var feedFocusActive = false
+    @State private var scrollRequest: FeedScrollRequest?
+    @State private var scrollRequestSequence = 0
+    @State private var handledFocusRequestGeneration = 0
 
     var body: some View {
         let snapshots = visibleSnapshots(items)
         let rowActions = FeedRowActions.bound()
-        if snapshots.isEmpty {
-            emptyState
-        } else {
-            contentBody(
-                snapshots: snapshots,
-                actions: rowActions
+        ScrollViewReader { proxy in
+            Group {
+                if snapshots.isEmpty {
+                    emptyState
+                } else {
+                    contentBody(
+                        snapshots: snapshots,
+                        actions: rowActions
+                    )
+                }
+            }
+            .onChange(of: scrollRequest) { request in
+                guard let request else { return }
+                proxy.scrollTo(request.id, anchor: .top)
+            }
+            .background(
+                FeedKeyboardFocusBridge(
+                    onEscape: {
+                        feedFocusActive = false
+                        NSApp.keyWindow?.makeFirstResponder(nil)
+                    },
+                    onMoveSelection: { delta in
+                        moveSelection(in: snapshots, delta: delta)
+                    },
+                    onActivateSelection: {
+                        activateSelection(in: snapshots, actions: rowActions)
+                    },
+                    onFocusFirstItemRequested: { generation in
+                        handleFocusFirstItemRequest(generation, snapshots: snapshots)
+                    },
+                    onFocusChanged: { focused in
+                        feedFocusActive = focused
+                    }
+                )
+                .frame(width: 1, height: 1)
             )
         }
     }
@@ -213,10 +292,16 @@ private struct FeedListView: View {
         actions: FeedRowActions
     ) -> some View {
         ScrollView {
-            stableRows(
-                snapshots: snapshots,
-                actions: actions
-            )
+            LazyVStack(spacing: 0) {
+                ForEach(Array(snapshots.enumerated()), id: \.element.id) { idx, snapshot in
+                    rowSurface(
+                        snapshot: snapshot,
+                        actions: actions,
+                        showsDivider: idx < snapshots.count - 1
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .feedZeroScrollContentMargins()
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -269,44 +354,28 @@ private struct FeedListView: View {
         actions: FeedRowActions,
         showsDivider: Bool
     ) -> some View {
-        let isHovered = hoveredItemId == snapshot.id
-        let isSelected = selectedItemId == snapshot.id
-        return VStack(spacing: 0) {
-            FeedItemRow(
-                snapshot: snapshot,
-                actions: actions,
-                isSelected: isSelected,
-                onPressSelect: {
-                    selectRow(snapshot.id)
-                },
-                onActivate: {
-                    selectRow(snapshot.id)
-                    actions.jump(snapshot.workstreamId)
+        FeedRowSurface(
+            snapshot: snapshot,
+            actions: actions,
+            isSelected: feedFocusActive && selectedItemId == snapshot.id,
+            showsDivider: showsDivider,
+            onPressSelect: {
+                selectRow(snapshot.id, focusFeed: true)
+            },
+            onControlFocus: {
+                selectRow(snapshot.id, focusFeed: false)
+            },
+            onControlBlur: {
+                if selectedItemId == snapshot.id {
+                    feedFocusActive = false
                 }
-            )
-            if showsDivider {
-                rowSeparator
+            },
+            onActivate: {
+                selectRow(snapshot.id, focusFeed: true)
+                actions.jump(snapshot.workstreamId)
             }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            rowBackgroundFill(
-                for: snapshot,
-                isHovered: isHovered,
-                isSelected: isSelected
-            )
         )
-        .animation(.easeOut(duration: 0.14), value: isHovered)
-        .animation(.easeOut(duration: 0.14), value: isSelected)
-        .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.14)) {
-                if hovering {
-                    hoveredItemId = snapshot.id
-                } else if hoveredItemId == snapshot.id {
-                    hoveredItemId = nil
-                }
-            }
-        }
+        .id(snapshot.id)
     }
 
     /// Walks the full items list (not just the filtered visible set),
@@ -364,39 +433,91 @@ private struct FeedListView: View {
         snapshot.status.isPending || snapshot.kind == .stop
     }
 
-    private func selectRow(_ id: UUID) {
-        guard selectedItemId != id else { return }
-        FeedInlineNativeTextView.blurActiveEditor()
-        selectedItemId = id
+    private func selectRow(_ id: UUID, focusFeed: Bool) {
+        let selectionChanged = selectedItemId != id
+#if DEBUG
+        let window = NSApp.keyWindow ?? NSApp.mainWindow
+        dlog(
+            "feed.focus.select begin id=\(id.uuidString.prefix(5)) " +
+            "focusFeed=\(focusFeed ? 1 : 0) selectionChanged=\(selectionChanged ? 1 : 0) " +
+            "frBefore=\(feedDebugResponderSummary(window?.firstResponder))"
+        )
+#endif
+        if focusFeed || selectionChanged {
+            FeedInlineNativeTextView.blurActiveEditor()
+        }
+        if selectionChanged || selectedItemId == nil {
+            selectedItemId = id
+        }
+        var focusedFeed = false
+        if focusFeed {
+            focusedFeed = FeedKeyboardFocusView.focusHostInActiveWindow()
+        }
+        feedFocusActive = focusFeed ? focusedFeed : true
+#if DEBUG
+        let afterWindow = NSApp.keyWindow ?? NSApp.mainWindow
+        dlog(
+            "feed.focus.select end id=\(id.uuidString.prefix(5)) " +
+            "focusFeed=\(focusFeed ? 1 : 0) focusedFeed=\(focusedFeed ? 1 : 0) " +
+            "selected=\(selectedItemId == id ? 1 : 0) " +
+            "frAfter=\(feedDebugResponderSummary(afterWindow?.firstResponder))"
+        )
+#endif
     }
 
-    private func rowBackgroundFill(
-        for snapshot: FeedItemSnapshot,
-        isHovered: Bool,
-        isSelected: Bool
-    ) -> Color {
-        if isSelected {
-            if snapshot.status.isPending {
-                return tint(for: snapshot).opacity(0.14)
-            }
-            return Color.primary.opacity(0.075)
-        }
-        if isHovered {
-            if snapshot.status.isPending {
-                return tint(for: snapshot).opacity(0.10)
-            }
-            return Color.primary.opacity(0.055)
-        }
-        return .clear
+    private func handleFocusFirstItemRequest(_ generation: Int, snapshots: [FeedItemSnapshot]) {
+        guard handledFocusRequestGeneration != generation else { return }
+        handledFocusRequestGeneration = generation
+        focusFirstVisibleItem(in: snapshots)
     }
 
-    private func tint(for snapshot: FeedItemSnapshot) -> Color {
-        switch snapshot.kind {
-        case .permissionRequest: return .orange
-        case .exitPlan: return .purple
-        case .question: return .blue
-        default: return snapshot.status.isPending ? .orange : .secondary.opacity(0.8)
+    private func focusFirstVisibleItem(in snapshots: [FeedItemSnapshot]) {
+        guard let first = snapshots.first else {
+            feedFocusActive = FeedKeyboardFocusView.focusHostInActiveWindow()
+            return
         }
+        selectRow(first.id, focusFeed: true)
+        scrollRequestSequence &+= 1
+        scrollRequest = FeedScrollRequest(id: first.id, sequence: scrollRequestSequence)
+    }
+
+    private func moveSelection(in snapshots: [FeedItemSnapshot], delta: Int) {
+        guard !snapshots.isEmpty else { return }
+        let ids = snapshots.map(\.id)
+        let targetIndex: Int
+        if let selectedItemId,
+           let currentIndex = ids.firstIndex(of: selectedItemId) {
+            targetIndex = min(max(currentIndex + delta, 0), ids.count - 1)
+        } else {
+            targetIndex = delta >= 0 ? 0 : ids.count - 1
+        }
+        let targetId = ids[targetIndex]
+        selectedItemId = targetId
+        feedFocusActive = true
+        scrollRequestSequence &+= 1
+        scrollRequest = FeedScrollRequest(id: targetId, sequence: scrollRequestSequence)
+#if DEBUG
+        dlog(
+            "feed.focus.move delta=\(delta) " +
+            "target=\(targetId.uuidString.prefix(5)) count=\(ids.count)"
+        )
+#endif
+    }
+
+    private func activateSelection(
+        in snapshots: [FeedItemSnapshot],
+        actions: FeedRowActions
+    ) {
+        guard !snapshots.isEmpty else { return }
+        let snapshot: FeedItemSnapshot
+        if let selectedItemId,
+           let matched = snapshots.first(where: { $0.id == selectedItemId }) {
+            snapshot = matched
+        } else {
+            snapshot = snapshots[0]
+        }
+        selectRow(snapshot.id, focusFeed: true)
+        actions.jump(snapshot.workstreamId)
     }
 
     private var rowSeparator: some View {
@@ -429,6 +550,79 @@ private struct FeedListView: View {
     }
 }
 
+private struct FeedScrollRequest: Equatable {
+    let id: UUID
+    let sequence: Int
+}
+
+private struct FeedRowSurface: View {
+    let snapshot: FeedItemSnapshot
+    let actions: FeedRowActions
+    let isSelected: Bool
+    let showsDivider: Bool
+    let onPressSelect: () -> Void
+    let onControlFocus: () -> Void
+    let onControlBlur: () -> Void
+    let onActivate: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            FeedItemRow(
+                snapshot: snapshot,
+                actions: actions,
+                isSelected: isSelected,
+                onPressSelect: onPressSelect,
+                onControlFocus: onControlFocus,
+                onControlBlur: onControlBlur,
+                onActivate: onActivate
+            )
+            .equatable()
+            if showsDivider {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.08))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(rowBackgroundFill)
+        .animation(.easeOut(duration: 0.14), value: isHovered)
+        .animation(.easeOut(duration: 0.14), value: isSelected)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.14)) {
+                isHovered = hovering
+            }
+        }
+    }
+
+    private var rowBackgroundFill: Color {
+        if isSelected {
+            if snapshot.status.isPending {
+                return tint.opacity(0.14)
+            }
+            return Color.primary.opacity(0.075)
+        }
+        if isHovered {
+            if snapshot.status.isPending {
+                return tint.opacity(0.10)
+            }
+            return Color.primary.opacity(0.055)
+        }
+        return .clear
+    }
+
+    private var tint: Color {
+        switch snapshot.kind {
+        case .permissionRequest: return .orange
+        case .exitPlan: return .purple
+        case .question: return .blue
+        default: return snapshot.status.isPending ? .orange : .secondary.opacity(0.8)
+        }
+    }
+}
+
 private extension View {
     @ViewBuilder
     func feedZeroScrollContentMargins() -> some View {
@@ -437,6 +631,215 @@ private extension View {
         } else {
             self
         }
+    }
+}
+
+private struct FeedKeyboardFocusBridge: NSViewRepresentable {
+    let onEscape: () -> Void
+    let onMoveSelection: (Int) -> Void
+    let onActivateSelection: () -> Void
+    let onFocusFirstItemRequested: (Int) -> Void
+    let onFocusChanged: (Bool) -> Void
+
+    func makeNSView(context: Context) -> FeedKeyboardFocusView {
+        let view = FeedKeyboardFocusView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        view.onEscape = onEscape
+        view.onMoveSelection = onMoveSelection
+        view.onActivateSelection = onActivateSelection
+        view.onFocusFirstItemRequested = onFocusFirstItemRequested
+        view.onFocusChanged = onFocusChanged
+        return view
+    }
+
+    func updateNSView(_ nsView: FeedKeyboardFocusView, context: Context) {
+        nsView.onEscape = onEscape
+        nsView.onMoveSelection = onMoveSelection
+        nsView.onActivateSelection = onActivateSelection
+        nsView.onFocusFirstItemRequested = onFocusFirstItemRequested
+        nsView.onFocusChanged = onFocusChanged
+    }
+}
+
+final class FeedKeyboardFocusView: NSView {
+    private static let hosts = NSMapTable<NSWindow, FeedKeyboardFocusView>(
+        keyOptions: .weakMemory,
+        valueOptions: .weakMemory
+    )
+
+    var onEscape: (() -> Void)?
+    var onMoveSelection: ((Int) -> Void)?
+    var onActivateSelection: (() -> Void)?
+    var onFocusFirstItemRequested: ((Int) -> Void)?
+    var onFocusChanged: ((Bool) -> Void)?
+    private var focusRequestObserver: NSObjectProtocol?
+
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
+
+    deinit {
+        if let focusRequestObserver {
+            NotificationCenter.default.removeObserver(focusRequestObserver)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        Self.hosts.setObject(self, forKey: window)
+        installFocusRequestObserverIfNeeded()
+        replayPendingFocusRequestIfNeeded()
+#if DEBUG
+        dlog("feed.focus.host attach window=\(ObjectIdentifier(window))")
+#endif
+    }
+
+    private func installFocusRequestObserverIfNeeded() {
+        guard focusRequestObserver == nil else { return }
+        focusRequestObserver = NotificationCenter.default.addObserver(
+            forName: FeedFocusRequestCenter.notificationName,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let request = FeedFocusRequestCenter.request(from: notification),
+                  self.shouldHandleFocusRequest(request)
+            else { return }
+            self.onFocusFirstItemRequested?(request.generation)
+        }
+    }
+
+    private func replayPendingFocusRequestIfNeeded() {
+        guard let request = FeedFocusRequestCenter.latestRequest(for: window),
+              shouldHandleFocusRequest(request) else {
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.shouldHandleFocusRequest(request) else { return }
+            self.onFocusFirstItemRequested?(request.generation)
+        }
+    }
+
+    private func shouldHandleFocusRequest(_ request: FeedFocusRequest) -> Bool {
+        if let windowNumber = request.windowNumber {
+            return window?.windowNumber == windowNumber
+        }
+        return window != nil
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown, event.keyCode == 53 {
+#if DEBUG
+            dlog(
+                "feed.focus.host escape window=\(window.map { String(describing: ObjectIdentifier($0)) } ?? "nil") " +
+                "fr=\(feedDebugResponderSummary(window?.firstResponder))"
+            )
+#endif
+            onEscape?()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+#if DEBUG
+        let chars = event.charactersIgnoringModifiers ?? ""
+        dlog(
+            "feed.focus.host keyDown key=\(event.keyCode) chars=\(chars) " +
+            "fr=\(feedDebugResponderSummary(window?.firstResponder))"
+        )
+#endif
+        if let mode = RightSidebarFocusRequestCenter.modeShortcut(for: event) {
+            RightSidebarFocusRequestCenter.requestFocus(mode: mode, in: window)
+            return
+        }
+
+        let normalizedFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let hasShortcutModifier = !normalizedFlags.intersection([.command, .control, .option]).isEmpty
+        guard !hasShortcutModifier else {
+            super.keyDown(with: event)
+            return
+        }
+
+        switch event.keyCode {
+        case 38, 125:
+            onMoveSelection?(1)
+            return
+        case 40, 126:
+            onMoveSelection?(-1)
+            return
+        case 36, 76:
+            onActivateSelection?()
+            return
+        case 53:
+            onEscape?()
+            return
+        default:
+            break
+        }
+
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        if key == "j" {
+            onMoveSelection?(1)
+            return
+        }
+        if key == "k" {
+            onMoveSelection?(-1)
+            return
+        }
+
+        if let characters = event.charactersIgnoringModifiers, !characters.isEmpty {
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            onFocusChanged?(true)
+        }
+#if DEBUG
+        dlog(
+            "feed.focus.host become result=\(result ? 1 : 0) " +
+            "window=\(window.map { String(describing: ObjectIdentifier($0)) } ?? "nil") " +
+            "fr=\(feedDebugResponderSummary(window?.firstResponder))"
+        )
+#endif
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        if result {
+            onFocusChanged?(false)
+        }
+#if DEBUG
+        dlog(
+            "feed.focus.host resign result=\(result ? 1 : 0) " +
+            "window=\(window.map { String(describing: ObjectIdentifier($0)) } ?? "nil") " +
+            "fr=\(feedDebugResponderSummary(window?.firstResponder))"
+        )
+#endif
+        return result
+    }
+
+    static func focusHostInActiveWindow() -> Bool {
+        let targetWindow = NSApp.keyWindow ?? NSApp.mainWindow
+        return focusHost(in: targetWindow)
+    }
+
+    static func focusHost(in window: NSWindow?) -> Bool {
+        guard let window, let host = hosts.object(forKey: window) else { return false }
+        let before = feedDebugResponderSummary(window.firstResponder)
+        let result = window.makeFirstResponder(host)
+#if DEBUG
+        dlog(
+            "feed.focus.host request result=\(result ? 1 : 0) " +
+            "window=\(ObjectIdentifier(window)) before=\(before) " +
+            "after=\(feedDebugResponderSummary(window.firstResponder))"
+        )
+#endif
+        return result
     }
 }
 
@@ -544,14 +947,21 @@ struct FeedRowActions {
 
 // MARK: - Row (matches SessionIndexView row aesthetic)
 
-struct FeedItemRow: View {
+struct FeedItemRow: View, Equatable {
     let snapshot: FeedItemSnapshot
     let actions: FeedRowActions
     let isSelected: Bool
     let onPressSelect: () -> Void
+    let onControlFocus: () -> Void
+    let onControlBlur: () -> Void
     let onActivate: () -> Void
 
     @State private var didHandlePressSelection = false
+
+    static func == (lhs: FeedItemRow, rhs: FeedItemRow) -> Bool {
+        lhs.snapshot == rhs.snapshot
+            && lhs.isSelected == rhs.isSelected
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -782,7 +1192,8 @@ struct FeedItemRow: View {
                 source: snapshot.source,
                 status: snapshot.status,
                 isRowSelected: isSelected,
-                onFocusRow: onPressSelect,
+                onFocusRow: onControlFocus,
+                onBlurRow: onControlBlur,
                 onApprove: { mode, feedback in
                     actions.approveExitPlan(snapshot.id, mode, feedback)
                 }
@@ -793,7 +1204,8 @@ struct FeedItemRow: View {
                 source: snapshot.source,
                 status: snapshot.status,
                 isRowSelected: isSelected,
-                onFocusRow: onPressSelect,
+                onFocusRow: onControlFocus,
+                onBlurRow: onControlBlur,
                 context: displayContext,
                 onReply: { selections in
                     actions.replyQuestion(snapshot.id, selections)
@@ -803,7 +1215,8 @@ struct FeedItemRow: View {
             StopActionArea(
                 workstreamId: snapshot.workstreamId,
                 isRowSelected: isSelected,
-                onFocusRow: onPressSelect,
+                onFocusRow: onControlFocus,
+                onBlurRow: onControlBlur,
                 onSend: { text in actions.sendText(snapshot.workstreamId, text) }
             )
         default:
@@ -1705,6 +2118,7 @@ private struct ExitPlanActionArea: View {
     let status: WorkstreamStatus
     let isRowSelected: Bool
     let onFocusRow: () -> Void
+    let onBlurRow: () -> Void
     let onApprove: (WorkstreamExitPlanMode, String?) -> Void
 
     @State private var feedback: String = ""
@@ -1759,6 +2173,8 @@ private struct ExitPlanActionArea: View {
                 .onChange(of: feedbackFocused) { _, focused in
                     if focused {
                         onFocusRow()
+                    } else {
+                        onBlurRow()
                     }
                 }
                 HStack(spacing: 6) {
@@ -2109,6 +2525,7 @@ private struct QuestionActionArea: View {
     let status: WorkstreamStatus
     let isRowSelected: Bool
     let onFocusRow: () -> Void
+    let onBlurRow: () -> Void
     let context: WorkstreamContext?
     let onReply: ([String]) -> Void
 
@@ -2283,7 +2700,8 @@ private struct QuestionActionArea: View {
                 onFocus: {
                     onFocusRow()
                     selectCustomAnswer(questionId: questionId, multi: multi)
-                }
+                },
+                onBlur: onBlurRow
             )
             Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 12, weight: .medium))
@@ -2375,7 +2793,8 @@ private struct QuestionActionArea: View {
             onFocus: {
                 onFocusRow()
                 selectCustomAnswer(questionId: questionId, multi: multi)
-            }
+            },
+            onBlur: onBlurRow
         )
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -2401,7 +2820,8 @@ private struct QuestionActionArea: View {
         text: Binding<String>,
         isFocused: Binding<Bool>,
         font: NSFont,
-        onFocus: @escaping () -> Void
+        onFocus: @escaping () -> Void,
+        onBlur: @escaping () -> Void
     ) -> some View {
         FeedInlineTextField(
             text: text,
@@ -2410,7 +2830,8 @@ private struct QuestionActionArea: View {
                                 defaultValue: "Type something..."),
             isEnabled: status.isPending,
             font: font,
-            onFocus: onFocus
+            onFocus: onFocus,
+            onBlur: onBlur
         )
         .frame(
             maxWidth: .infinity,
@@ -2623,16 +3044,25 @@ private final class FeedInlineNativeTextView: NSTextView {
             }
             return
         }
+#if DEBUG
+        dlog("feed.editor.blurActive fr=\(feedDebugResponderSummary(window.firstResponder))")
+#endif
         window.makeFirstResponder(nil)
     }
 
     override func mouseDown(with event: NSEvent) {
+#if DEBUG
+        dlog("feed.editor.mouseDown frBefore=\(feedDebugResponderSummary(window?.firstResponder))")
+#endif
         onActivate?()
         super.mouseDown(with: event)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.type == .keyDown, event.keyCode == 53 {
+#if DEBUG
+            dlog("feed.editor.escape fr=\(feedDebugResponderSummary(window?.firstResponder))")
+#endif
             onEscape?()
             return true
         }
@@ -2650,6 +3080,9 @@ private final class FeedInlineNativeTextView: NSTextView {
             Self.activeEditor = self
             onActivate?()
         }
+#if DEBUG
+        dlog("feed.editor.become result=\(didBecomeFirstResponder ? 1 : 0) fr=\(feedDebugResponderSummary(window?.firstResponder))")
+#endif
         return didBecomeFirstResponder
     }
 
@@ -2658,6 +3091,9 @@ private final class FeedInlineNativeTextView: NSTextView {
         if didResignFirstResponder, Self.activeEditor === self {
             Self.activeEditor = nil
         }
+#if DEBUG
+        dlog("feed.editor.resign result=\(didResignFirstResponder ? 1 : 0) fr=\(feedDebugResponderSummary(window?.firstResponder))")
+#endif
         return didResignFirstResponder
     }
 }
@@ -2832,6 +3268,7 @@ private struct FeedInlineTextField: NSViewRepresentable {
     let isEnabled: Bool
     let font: NSFont
     let onFocus: () -> Void
+    let onBlur: () -> Void
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: FeedInlineTextField
@@ -2844,6 +3281,9 @@ private struct FeedInlineTextField: NSViewRepresentable {
         }
 
         func activateField() {
+#if DEBUG
+            dlog("feed.editor.activateField")
+#endif
             parent.onFocus()
             if !parent.isFocused {
                 parent.isFocused = true
@@ -2858,7 +3298,12 @@ private struct FeedInlineTextField: NSViewRepresentable {
             guard let view, let window = view.window, window.firstResponder === view.textView else {
                 return
             }
-            window.makeFirstResponder(nil)
+#if DEBUG
+            dlog("feed.editor.blurField frBefore=\(feedDebugResponderSummary(window.firstResponder))")
+#endif
+            if !FeedKeyboardFocusView.focusHost(in: window) {
+                window.makeFirstResponder(nil)
+            }
         }
 
         func textDidBeginEditing(_ notification: Notification) {
@@ -2878,6 +3323,14 @@ private struct FeedInlineTextField: NSViewRepresentable {
             }
             if parent.isFocused {
                 parent.isFocused = false
+            }
+            guard let window = view?.window else {
+                parent.onBlur()
+                return
+            }
+            let responder = window.firstResponder
+            if !(responder is FeedKeyboardFocusView) && !(responder is FeedInlineNativeTextView) {
+                parent.onBlur()
             }
         }
 
@@ -3070,6 +3523,7 @@ private struct StopActionArea: View {
     let workstreamId: String
     let isRowSelected: Bool
     let onFocusRow: () -> Void
+    let onBlurRow: () -> Void
     let onSend: (String) -> Void
 
     @State private var reply: String = ""
@@ -3101,6 +3555,8 @@ private struct StopActionArea: View {
             .onChange(of: replyFocused) { _, focused in
                 if focused {
                     onFocusRow()
+                } else {
+                    onBlurRow()
                 }
             }
             .lineLimit(1...5)
