@@ -147,10 +147,10 @@ final class FeedPanelViewModel: ObservableObject {
     }
 }
 
-/// Inner list view. Isolated so the outer panel's `@State` changes don't
-/// invalidate rows unnecessarily. Receives items as a plain value so
-/// its body never touches the live store — the parent owns the
-/// observation.
+/// Feed content surface. Isolated so the outer panel's `@State`
+/// changes don't invalidate rows unnecessarily. Receives items as a
+/// plain value so its body never touches the live store, the parent
+/// owns the observation.
 private struct FeedListView: View {
     let filter: FeedPanelView.Filter
     let items: [WorkstreamItem]
@@ -159,72 +159,152 @@ private struct FeedListView: View {
     @State private var selectedItemId: UUID?
 
     var body: some View {
-        let visible = filtered(items)
-        let lastPromptByWorkstream = Self.lastPromptByWorkstream(items)
+        let snapshots = visibleSnapshots(items)
         let rowActions = FeedRowActions.bound()
-        if visible.isEmpty {
+        if snapshots.isEmpty {
             emptyState
         } else {
-            List {
-                // Single chronological stream. The plain List keeps the
-                // custom row surface while giving Feed real row
-                // virtualization instead of retaining every card view in
-                // a long ScrollView stack.
-                ForEach(Array(visible.enumerated()), id: \.element.id) { idx, item in
-                    let snapshot = FeedItemSnapshot(
-                        item: item,
-                        userPromptEcho: lastPromptByWorkstream[item.workstreamId]
-                    )
-                    let isHovered = hoveredItemId == item.id
-                    let isSelected = selectedItemId == item.id
-                    VStack(spacing: 0) {
-                        FeedItemRow(
-                            snapshot: snapshot,
-                            actions: rowActions,
-                            onSelect: {
-                                selectedItemId = item.id
-                            },
-                            onActivate: {
-                                selectedItemId = item.id
-                                rowActions.jump(item.workstreamId)
-                            }
+            contentBody(
+                snapshots: snapshots,
+                actions: rowActions
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func contentBody(
+        snapshots: [FeedItemSnapshot],
+        actions: FeedRowActions
+    ) -> some View {
+        switch filter {
+        case .actionable:
+            stableScrollSurface(
+                snapshots: snapshots,
+                actions: actions
+            )
+        case .activity:
+            let stable = snapshots.filter(prefersStableSurface)
+            let history = snapshots.filter { !prefersStableSurface($0) }
+            if history.isEmpty {
+                stableScrollSurface(
+                    snapshots: stable,
+                    actions: actions
+                )
+            } else {
+                VStack(spacing: 0) {
+                    if !stable.isEmpty {
+                        stableRows(
+                            snapshots: stable,
+                            actions: actions
                         )
-                        if idx < visible.count - 1 {
-                            Rectangle()
-                                .fill(Color.primary.opacity(0.08))
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 1)
-                        }
+                        rowSeparator
                     }
-                    .onHover { hovering in
-                        withAnimation(.easeOut(duration: 0.14)) {
-                            if hovering {
-                                hoveredItemId = item.id
-                            } else if hoveredItemId == item.id {
-                                hoveredItemId = nil
-                            }
-                        }
-                    }
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(
-                        Rectangle()
-                            .fill(
-                                rowBackgroundFill(
-                                    for: snapshot,
-                                    isHovered: isHovered,
-                                    isSelected: isSelected
-                                )
-                            )
-                            .animation(.easeOut(duration: 0.14), value: isHovered)
-                            .animation(.easeOut(duration: 0.14), value: isSelected)
+                    historyList(
+                        snapshots: history,
+                        actions: actions
                     )
                 }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .feedZeroScrollContentMargins()
-            .environment(\.defaultMinListRowHeight, 0)
+        }
+    }
+
+    private func stableScrollSurface(
+        snapshots: [FeedItemSnapshot],
+        actions: FeedRowActions
+    ) -> some View {
+        ScrollView {
+            stableRows(
+                snapshots: snapshots,
+                actions: actions
+            )
+        }
+        .feedZeroScrollContentMargins()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private func stableRows(
+        snapshots: [FeedItemSnapshot],
+        actions: FeedRowActions
+    ) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(snapshots.enumerated()), id: \.element.id) { idx, snapshot in
+                rowSurface(
+                    snapshot: snapshot,
+                    actions: actions,
+                    showsDivider: idx < snapshots.count - 1
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func historyList(
+        snapshots: [FeedItemSnapshot],
+        actions: FeedRowActions
+    ) -> some View {
+        List {
+            // Single chronological history stream. The plain List keeps
+            // virtualization for older feed rows while active decision
+            // surfaces live above it in a stable stack.
+            ForEach(Array(snapshots.enumerated()), id: \.element.id) { idx, snapshot in
+                rowSurface(
+                    snapshot: snapshot,
+                    actions: actions,
+                    showsDivider: idx < snapshots.count - 1
+                )
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .feedZeroScrollContentMargins()
+        .environment(\.defaultMinListRowHeight, 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func rowSurface(
+        snapshot: FeedItemSnapshot,
+        actions: FeedRowActions,
+        showsDivider: Bool
+    ) -> some View {
+        let isHovered = hoveredItemId == snapshot.id
+        let isSelected = selectedItemId == snapshot.id
+        return VStack(spacing: 0) {
+            FeedItemRow(
+                snapshot: snapshot,
+                actions: actions,
+                onSelect: {
+                    selectedItemId = snapshot.id
+                },
+                onActivate: {
+                    selectedItemId = snapshot.id
+                    actions.jump(snapshot.workstreamId)
+                }
+            )
+            if showsDivider {
+                rowSeparator
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            rowBackgroundFill(
+                for: snapshot,
+                isHovered: isHovered,
+                isSelected: isSelected
+            )
+        )
+        .animation(.easeOut(duration: 0.14), value: isHovered)
+        .animation(.easeOut(duration: 0.14), value: isSelected)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.14)) {
+                if hovering {
+                    hoveredItemId = snapshot.id
+                } else if hoveredItemId == snapshot.id {
+                    hoveredItemId = nil
+                }
+            }
         }
     }
 
@@ -269,6 +349,20 @@ private struct FeedListView: View {
         return base.sorted { $0.createdAt > $1.createdAt }
     }
 
+    private func visibleSnapshots(_ items: [WorkstreamItem]) -> [FeedItemSnapshot] {
+        let lastPromptByWorkstream = Self.lastPromptByWorkstream(items)
+        return filtered(items).map { item in
+            FeedItemSnapshot(
+                item: item,
+                userPromptEcho: lastPromptByWorkstream[item.workstreamId]
+            )
+        }
+    }
+
+    private func prefersStableSurface(_ snapshot: FeedItemSnapshot) -> Bool {
+        snapshot.status.isPending || snapshot.kind == .stop
+    }
+
     private func rowBackgroundFill(
         for snapshot: FeedItemSnapshot,
         isHovered: Bool,
@@ -296,6 +390,13 @@ private struct FeedListView: View {
         case .question: return .blue
         default: return snapshot.status.isPending ? .orange : .secondary.opacity(0.8)
         }
+    }
+
+    private var rowSeparator: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.08))
+            .frame(maxWidth: .infinity)
+            .frame(height: 1)
     }
 
     private var emptyState: some View {
