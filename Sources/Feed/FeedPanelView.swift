@@ -277,9 +277,11 @@ private struct FeedListView: View {
                 actions: actions,
                 isSelected: isSelected,
                 onSelect: {
+                    FeedInlineNativeTextView.blurActiveEditor()
                     selectedItemId = snapshot.id
                 },
                 onActivate: {
+                    FeedInlineNativeTextView.blurActiveEditor()
                     selectedItemId = snapshot.id
                     actions.jump(snapshot.workstreamId)
                 }
@@ -2567,11 +2569,39 @@ private final class FeedInlinePassthroughLabel: NSTextField {
 }
 
 private final class FeedInlineNativeTextView: NSTextView {
+    private static weak var activeEditor: FeedInlineNativeTextView?
+
     var onActivate: (() -> Void)?
+    var onEscape: (() -> Void)?
+
+    static func blurActiveEditor() {
+        guard let activeEditor else { return }
+        guard let window = activeEditor.window else {
+            if Self.activeEditor === activeEditor {
+                Self.activeEditor = nil
+            }
+            return
+        }
+        guard window.firstResponder === activeEditor else {
+            if Self.activeEditor === activeEditor {
+                Self.activeEditor = nil
+            }
+            return
+        }
+        window.makeFirstResponder(nil)
+    }
 
     override func mouseDown(with event: NSEvent) {
         onActivate?()
         super.mouseDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown, event.keyCode == 53 {
+            onEscape?()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     override func resetCursorRects() {
@@ -2582,9 +2612,18 @@ private final class FeedInlineNativeTextView: NSTextView {
     override func becomeFirstResponder() -> Bool {
         let didBecomeFirstResponder = super.becomeFirstResponder()
         if didBecomeFirstResponder {
+            Self.activeEditor = self
             onActivate?()
         }
         return didBecomeFirstResponder
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let didResignFirstResponder = super.resignFirstResponder()
+        if didResignFirstResponder, Self.activeEditor === self {
+            Self.activeEditor = nil
+        }
+        return didResignFirstResponder
     }
 }
 
@@ -2776,6 +2815,17 @@ private struct FeedInlineTextField: NSViewRepresentable {
             }
         }
 
+        func blurField() {
+            pendingFocusRequest = nil
+            if parent.isFocused {
+                parent.isFocused = false
+            }
+            guard let view, let window = view.window, window.firstResponder === view.textView else {
+                return
+            }
+            window.makeFirstResponder(nil)
+        }
+
         func textDidBeginEditing(_ notification: Notification) {
             activateField()
         }
@@ -2809,6 +2859,9 @@ private struct FeedInlineTextField: NSViewRepresentable {
         view.textView.onActivate = { [weak coordinator = context.coordinator] in
             coordinator?.activateField()
         }
+        view.textView.onEscape = { [weak coordinator = context.coordinator] in
+            coordinator?.blurField()
+        }
         configure(view)
         context.coordinator.view = view
         return view
@@ -2819,6 +2872,9 @@ private struct FeedInlineTextField: NSViewRepresentable {
         context.coordinator.view = nsView
         nsView.textView.onActivate = { [weak coordinator = context.coordinator] in
             coordinator?.activateField()
+        }
+        nsView.textView.onEscape = { [weak coordinator = context.coordinator] in
+            coordinator?.blurField()
         }
         configure(nsView)
 
@@ -2868,6 +2924,7 @@ private struct FeedInlineTextField: NSViewRepresentable {
     static func dismantleNSView(_ nsView: FeedInlineTextEditorView, coordinator: Coordinator) {
         nsView.textView.delegate = nil
         nsView.textView.onActivate = nil
+        nsView.textView.onEscape = nil
     }
 }
 
