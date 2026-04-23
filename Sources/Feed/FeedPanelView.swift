@@ -275,6 +275,7 @@ private struct FeedListView: View {
             FeedItemRow(
                 snapshot: snapshot,
                 actions: actions,
+                isSelected: isSelected,
                 onSelect: {
                     selectedItemId = snapshot.id
                 },
@@ -540,6 +541,7 @@ struct FeedRowActions {
 struct FeedItemRow: View {
     let snapshot: FeedItemSnapshot
     let actions: FeedRowActions
+    let isSelected: Bool
     let onSelect: () -> Void
     let onActivate: () -> Void
 
@@ -763,6 +765,7 @@ struct FeedItemRow: View {
                 plan: plan,
                 source: snapshot.source,
                 status: snapshot.status,
+                isRowSelected: isSelected,
                 onApprove: { mode, feedback in
                     actions.approveExitPlan(snapshot.id, mode, feedback)
                 }
@@ -772,6 +775,7 @@ struct FeedItemRow: View {
                 questions: questions,
                 source: snapshot.source,
                 status: snapshot.status,
+                isRowSelected: isSelected,
                 context: displayContext,
                 onReply: { selections in
                     actions.replyQuestion(snapshot.id, selections)
@@ -780,6 +784,7 @@ struct FeedItemRow: View {
         case .stop:
             StopActionArea(
                 workstreamId: snapshot.workstreamId,
+                isRowSelected: isSelected,
                 onSend: { text in actions.sendText(snapshot.workstreamId, text) }
             )
         default:
@@ -1679,6 +1684,7 @@ private struct ExitPlanActionArea: View {
     let plan: String
     let source: WorkstreamSource
     let status: WorkstreamStatus
+    let isRowSelected: Bool
     let onApprove: (WorkstreamExitPlanMode, String?) -> Void
 
     @State private var feedback: String = ""
@@ -1772,6 +1778,11 @@ private struct ExitPlanActionArea: View {
                     fullWidth: true,
                     dimmed: true
                 ) {}
+            }
+        }
+        .onChange(of: isRowSelected) { _, selected in
+            if !selected {
+                feedbackFocused = false
             }
         }
     }
@@ -2068,6 +2079,7 @@ private struct QuestionActionArea: View {
     let questions: [WorkstreamQuestionPrompt]
     let source: WorkstreamSource
     let status: WorkstreamStatus
+    let isRowSelected: Bool
     let context: WorkstreamContext?
     let onReply: ([String]) -> Void
 
@@ -2098,6 +2110,11 @@ private struct QuestionActionArea: View {
                 }
             } else {
                 submitCTA
+            }
+        }
+        .onChange(of: isRowSelected) { _, selected in
+            if !selected {
+                clearCustomAnswerFocus()
             }
         }
     }
@@ -2959,9 +2976,11 @@ private struct FlowLayout: Layout {
 /// Return — so the user can reply without switching focus.
 private struct StopActionArea: View {
     let workstreamId: String
+    let isRowSelected: Bool
     let onSend: (String) -> Void
 
     @State private var reply: String = ""
+    @FocusState private var replyFocused: Bool
 
     private var trimmed: String {
         reply.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2985,6 +3004,7 @@ private struct StopActionArea: View {
             )
             .textFieldStyle(.plain)
             .font(.system(size: 12))
+            .focused($replyFocused)
             .lineLimit(1...5)
             .padding(10)
             .background(
@@ -3011,6 +3031,11 @@ private struct StopActionArea: View {
             ) {
                 onSend(trimmed)
                 reply = ""
+            }
+        }
+        .onChange(of: isRowSelected) { _, selected in
+            if !selected {
+                replyFocused = false
             }
         }
     }
