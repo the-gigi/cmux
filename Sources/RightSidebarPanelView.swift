@@ -212,7 +212,7 @@ struct RightSidebarPanelView: View {
                 return true
             }
             FileExplorerFocusRequestCenter.requestFocus(in: window)
-            return false
+            return RightSidebarKeyboardFocusView.focusHost(in: window)
         case .sessions:
             SessionIndexFocusRequestCenter.requestFocus(in: window)
             return SessionIndexKeyboardFocusView.focusHost(in: window) ||

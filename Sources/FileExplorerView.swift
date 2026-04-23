@@ -359,6 +359,7 @@ final class FileExplorerContainerView: NSView {
     private let loadingIndicator: NSProgressIndicator
     private var focusRequestObserver: NSObjectProtocol?
     private var handledFocusRequestGeneration = 0
+    private var pendingFocusReplayScheduled = false
 
     init(coordinator: FileExplorerPanelView.Coordinator) {
         headerView = FileExplorerHeaderView()
@@ -460,6 +461,11 @@ final class FileExplorerContainerView: NSView {
         replayPendingFocusRequestIfNeeded()
     }
 
+    override func layout() {
+        super.layout()
+        replayPendingFocusRequestIfNeeded()
+    }
+
     func updateHeader(store: FileExplorerStore) {
         headerView.update(displayPath: store.displayRootPath)
     }
@@ -474,6 +480,7 @@ final class FileExplorerContainerView: NSView {
         } else {
             loadingIndicator.stopAnimation(nil)
         }
+        replayPendingFocusRequestIfNeeded()
     }
 
     @discardableResult
@@ -510,11 +517,17 @@ final class FileExplorerContainerView: NSView {
 
     fileprivate func replayPendingFocusRequestIfNeeded() {
         guard let request = FileExplorerFocusRequestCenter.latestRequest(for: window),
+              handledFocusRequestGeneration != request.generation,
               shouldHandleFocusRequest(request) else {
             return
         }
+        guard !pendingFocusReplayScheduled else { return }
+        pendingFocusReplayScheduled = true
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.shouldHandleFocusRequest(request) else { return }
+            guard let self else { return }
+            self.pendingFocusReplayScheduled = false
+            guard self.handledFocusRequestGeneration != request.generation,
+                  self.shouldHandleFocusRequest(request) else { return }
             self.handleFocusRequest(request)
         }
     }
