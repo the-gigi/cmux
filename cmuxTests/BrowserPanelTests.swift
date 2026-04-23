@@ -346,14 +346,14 @@ final class BrowserPanelReactGrabBridgeTests: XCTestCase {
         let terminalId = UUID()
         let panel = BrowserPanel(workspaceId: workspaceId)
         let expectation = expectation(description: "react grab pasteback notification")
-        let rawContent = "<button>Sa\u{202E}v\u{200B}e</button>\u{2069}\n"
+        let rawContent = "<button>\u{0007}Sa\u{202E}v\u{200B}e</button>\u{2069}\n\t"
 
         let observer = NotificationCenter.default.addObserver(
             forName: .reactGrabDidCopySelection,
             object: nil,
             queue: .main
         ) { notification in
-            XCTAssertEqual(notification.userInfo?[ReactGrabPastebackNotificationKey.content] as? String, "<button>Save</button>\n")
+            XCTAssertEqual(notification.userInfo?[ReactGrabPastebackNotificationKey.content] as? String, "<button>Save</button>\n\t")
             expectation.fulfill()
         }
         defer { NotificationCenter.default.removeObserver(observer) }
@@ -426,6 +426,46 @@ final class BrowserPanelReactGrabBridgeTests: XCTestCase {
             "\(heading)\n\(String(repeating: "=", count: heading.count))\n\n" +
                 "Vercel provides the developer tools and cloud infrastructure to build, scale, and secure a faster, more personalized web.\n\n" +
                 "[Deploy](/new) [Get a Demo](/contact/sales/demo)"
+        )
+    }
+
+    func testPastebackExtractorPreservesRepeatedBlocksAndCodeIndentation() async throws {
+        let panel = BrowserPanel(workspaceId: UUID())
+        let html = """
+        <div id="target">
+          <p>echo ready</p>
+          <p>echo ready</p>
+          <pre><code id="snippet"></code></pre>
+        </div>
+        """
+        let htmlLiteral = try XCTUnwrap(cmuxJavaScriptStringLiteral(html))
+        let codeLiteral = try XCTUnwrap(cmuxJavaScriptStringLiteral("if true:\n    print(\"a\")\n\tprint(\"b\")"))
+        let fallbackLiteral = try XCTUnwrap(cmuxJavaScriptStringLiteral("fallback"))
+
+        let result = try await panel.evaluateJavaScript(
+            """
+            document.body.innerHTML = \(htmlLiteral);
+            document.getElementById('snippet').textContent = \(codeLiteral);
+            \(ReactGrabPastebackContentExtractor.invocationScript(
+                elementsExpression: "[document.getElementById('target')]",
+                fallbackContentLiteral: fallbackLiteral
+            ))
+            """
+        ) as? String
+
+        XCTAssertEqual(
+            result,
+            """
+            echo ready
+
+            echo ready
+
+            ```
+            if true:
+                print("a")
+            \tprint("b")
+            ```
+            """
         )
     }
 }

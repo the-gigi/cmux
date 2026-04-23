@@ -79,8 +79,23 @@ private enum ReactGrabPastebackContentFilter {
         "\u{FEFF}",
     ]
 
+    private static func isAllowedPastebackScalar(_ scalar: Unicode.Scalar) -> Bool {
+        if dangerousScalars.contains(scalar) {
+            return false
+        }
+
+        switch scalar.value {
+        case 0x09, 0x0A:
+            return true
+        case 0x00 ... 0x1F, 0x7F ... 0x9F:
+            return false
+        default:
+            return true
+        }
+    }
+
     static func filtered(_ text: String) -> String {
-        String(text.unicodeScalars.filter { !dangerousScalars.contains($0) })
+        String(String.UnicodeScalarView(text.unicodeScalars.filter(isAllowedPastebackScalar)))
     }
 }
 
@@ -115,6 +130,13 @@ enum ReactGrabPastebackContentExtractor {
 
         var normalizeBlockText = function(text) {
             return normalizeWhitespace(text).replace(/\\n{3,}/g, '\\n\\n').trim();
+        };
+
+        var normalizePreformattedText = function(text) {
+            return String(text || '')
+                .replace(/\\r\\n?/g, '\\n')
+                .replace(/\\u00A0/g, ' ')
+                .replace(/^\\n+|\\n+$/g, '');
         };
 
         var isHidden = function(element) {
@@ -178,7 +200,6 @@ enum ReactGrabPastebackContentExtractor {
         var pushBlock = function(blocks, value) {
             var text = normalizeBlockText(value);
             if (!text) return;
-            if (blocks.length > 0 && blocks[blocks.length - 1] === text) return;
             blocks.push(text);
         };
 
@@ -194,10 +215,9 @@ enum ReactGrabPastebackContentExtractor {
             if (isHidden(element) || skipTags[element.tagName]) return;
 
             if (element.tagName === 'PRE' || element.tagName === 'CODE') {
-                var codeText = element.innerText || element.textContent || '';
-                codeText = String(codeText).replace(/^\\n+|\\n+$/g, '');
+                var codeText = normalizePreformattedText(element.innerText || element.textContent || '');
                 if (codeText) {
-                    pushBlock(blocks, '```\\n' + codeText + '\\n```');
+                    blocks.push('```\\n' + codeText + '\\n```');
                 }
                 return;
             }
