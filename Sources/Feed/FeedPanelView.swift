@@ -2483,6 +2483,7 @@ private final class FeedInlineTextEditorView: NSView {
 
     var placeholder: String = "" {
         didSet {
+            guard placeholder != oldValue else { return }
             placeholderField.stringValue = placeholder
             updatePlaceholderVisibility()
         }
@@ -2490,9 +2491,11 @@ private final class FeedInlineTextEditorView: NSView {
 
     var isEnabled: Bool = true {
         didSet {
+            guard isEnabled != oldValue else { return }
             textView.isEditable = isEnabled
             textView.isSelectable = isEnabled
             textView.textColor = isEnabled ? .labelColor : .disabledControlTextColor
+            textView.insertionPointColor = .controlAccentColor
         }
     }
 
@@ -2558,13 +2561,22 @@ private final class FeedInlineTextEditorView: NSView {
     }
 
     func apply(font: NSFont, isEnabled: Bool) {
-        currentFont = font
-        textView.font = font
-        textView.textColor = isEnabled ? .labelColor : .disabledControlTextColor
-        textView.insertionPointColor = .controlAccentColor
-        placeholderField.font = font
-        self.isEnabled = isEnabled
-        refreshMetrics()
+        let fontChanged = currentFont != font || textView.font != font || placeholderField.font != font
+        let enabledChanged = self.isEnabled != isEnabled
+
+        if fontChanged {
+            currentFont = font
+            textView.font = font
+            placeholderField.font = font
+            textView.textColor = self.isEnabled ? .labelColor : .disabledControlTextColor
+            textView.insertionPointColor = .controlAccentColor
+        }
+        if enabledChanged {
+            self.isEnabled = isEnabled
+        }
+        if fontChanged || enabledChanged {
+            refreshMetrics()
+        }
     }
 
     func refreshMetrics() {
