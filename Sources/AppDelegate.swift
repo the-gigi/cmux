@@ -9022,7 +9022,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 "webViewFocused": "true"
             ])
             if ProcessInfo.processInfo.environment["CMUX_UI_TEST_GOTO_SPLIT_INPUT_SETUP"] == "1" {
-                setupFocusedInputForGotoSplitUITestWhenNavigationReady(
+                recordFocusedInputFixtureSetupWhenNavigationReady(
                     panel: panel,
                     expectedBrowserURL: expectedBrowserURL
                 )
@@ -9140,7 +9140,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             guard let self else { return }
             guard let panelId = notification.object as? UUID else { return }
             self.recordGotoSplitUITestWebViewFocus(panelId: panelId, key: "webViewFocusedAfterAddressBarFocus")
-            self.recordGotoSplitUITestActiveElement(panelId: panelId, keyPrefix: "addressBarFocus")
         })
 
         gotoSplitUITestObservers.append(NotificationCenter.default.addObserver(
@@ -9151,7 +9150,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             guard let self else { return }
             guard let panelId = notification.object as? UUID else { return }
             self.recordGotoSplitUITestWebViewFocus(panelId: panelId, key: "webViewFocusedAfterAddressBarExit")
-            self.recordGotoSplitUITestActiveElement(panelId: panelId, keyPrefix: "addressBarExit")
         })
     }
 
@@ -9242,31 +9240,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         Task { @MainActor in evaluate() }
     }
 
-    private func setupFocusedInputForGotoSplitUITestWhenNavigationReady(
+    private func recordFocusedInputFixtureSetupWhenNavigationReady(
         panel: BrowserPanel,
         expectedBrowserURL: URL?
     ) {
-        guard let expectedBrowserURL else {
-            setupFocusedInputForGotoSplitUITest(panel: panel)
-            return
-        }
-
-        let expectedURLString = expectedBrowserURL.absoluteString
+        let expectedURLString = expectedBrowserURL?.absoluteString
         var resolved = false
         var urlObservation: NSKeyValueObservation?
         var loadingObservation: NSKeyValueObservation?
+        var titleObservation: NSKeyValueObservation?
 
         func cleanup() {
             urlObservation?.invalidate()
             urlObservation = nil
             loadingObservation?.invalidate()
             loadingObservation = nil
+            titleObservation?.invalidate()
+            titleObservation = nil
         }
 
-        func attemptSeed(reason: String) {
+        func attemptRecord(reason: String) {
             guard !resolved else { return }
-            guard panel.webView.url?.absoluteString == expectedURLString else { return }
+            if let expectedURLString,
+               panel.webView.url?.absoluteString != expectedURLString {
+                return
+            }
             guard !panel.webView.isLoading else { return }
+            guard panel.webView.title == "cmux-ui-focus-primary:cmux-ui-focus-primary" else { return }
             resolved = true
             cleanup()
 #if DEBUG
@@ -9275,17 +9275,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 "reason=\(reason)"
             )
 #endif
-            setupFocusedInputForGotoSplitUITest(panel: panel)
+            let primaryInputId = "cmux-ui-test-focus-input"
+            let secondaryInputId = "cmux-ui-test-focus-input-secondary"
+            let secondaryInputTop = 76.0
+            let inputHeight = 40.0
+            let horizontalInset = 24.0
+            let maxInputWidth = 520.0
+            guard let window = panel.webView.window else {
+                self.writeGotoSplitTestData([
+                    "webInputFocusSeeded": "false",
+                    "setupError": "Focused input fixture missing window"
+                ])
+                return
+            }
+
+            let webFrame = panel.webView.convert(panel.webView.bounds, to: nil)
+            let viewportWidth = Double(panel.webView.bounds.width)
+            let fittedWidth = max(0, min(maxInputWidth, viewportWidth - (horizontalInset * 2)))
+            let secondaryCenterX = horizontalInset + (fittedWidth / 2)
+            let secondaryCenterY = secondaryInputTop + (inputHeight / 2)
+            let contentHeight = Double(window.contentView?.bounds.height ?? 0)
+            guard webFrame.width > 1,
+                  webFrame.height > 1,
+                  contentHeight > 1,
+                  fittedWidth > 1,
+                  secondaryCenterX > 0,
+                  secondaryCenterY > 0,
+                  secondaryCenterY < Double(webFrame.height) else {
+                self.writeGotoSplitTestData([
+                    "webInputFocusSeeded": "false",
+                    "setupError": "Focused input fixture geometry invalid"
+                ])
+                return
+            }
+
+            let xInContent = Double(webFrame.minX) + secondaryCenterX
+            let yInContent = Double(webFrame.maxY) - secondaryCenterY
+            let yFromTopInContent = contentHeight - yInContent
+            let titlebarHeight = max(0, Double(window.frame.height) - contentHeight)
+            let secondaryClickOffsetX = xInContent
+            let secondaryClickOffsetY = titlebarHeight + yFromTopInContent
+
+            guard secondaryClickOffsetX > 0,
+                  secondaryClickOffsetY > 0 else {
+                self.writeGotoSplitTestData([
+                    "webInputFocusSeeded": "false",
+                    "setupError": "Focused input fixture click offsets invalid"
+                ])
+                return
+            }
+
+            self.writeGotoSplitTestData([
+                "webInputFocusSeeded": "true",
+                "webInputFocusElementId": primaryInputId,
+                "webInputFocusSecondaryElementId": secondaryInputId,
+                "webInputFocusSecondaryClickOffsetX": "\(secondaryClickOffsetX)",
+                "webInputFocusSecondaryClickOffsetY": "\(secondaryClickOffsetY)"
+            ])
         }
 
         urlObservation = panel.webView.observe(\.url, options: [.initial, .new]) { _, _ in
             DispatchQueue.main.async {
-                attemptSeed(reason: "url")
+                attemptRecord(reason: "url")
             }
         }
         loadingObservation = panel.webView.observe(\.isLoading, options: [.new]) { _, _ in
             DispatchQueue.main.async {
-                attemptSeed(reason: "loading")
+                attemptRecord(reason: "loading")
+            }
+        }
+        titleObservation = panel.webView.observe(\.title, options: [.new]) { _, _ in
+            DispatchQueue.main.async {
+                attemptRecord(reason: "title")
             }
         }
 
@@ -9294,383 +9355,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             cleanup()
             self?.writeGotoSplitTestData([
                 "webInputFocusSeeded": "false",
-                "setupError": "Timed out waiting for browser navigation before seeding focused input",
-                "webInputFocusExpectedURL": expectedURLString,
+                "setupError": "Timed out waiting for focused input fixture setup",
+                "webInputFocusExpectedURL": expectedURLString ?? "",
                 "webInputFocusActualURL": panel?.webView.url?.absoluteString ?? ""
             ])
         }
-    }
-
-    private func setupFocusedInputForGotoSplitUITest(panel: BrowserPanel) {
-        let script = """
-        (() => {
-          const snapshot = () => {
-            const active = document.activeElement;
-            return {
-              focused: false,
-              id: "",
-              secondaryId: "",
-              secondaryCenterX: -1,
-              secondaryCenterY: -1,
-              activeId: active && typeof active.id === "string" ? active.id : "",
-              activeTag: active && active.tagName ? active.tagName.toLowerCase() : "",
-              readyState: String(document.readyState || "")
-            };
-          };
-          const seed = () => {
-            const ensureInput = (id, value) => {
-              const existing = document.getElementById(id);
-              const input = (existing && existing.tagName && existing.tagName.toLowerCase() === "input")
-                ? existing
-                : (() => {
-                    const created = document.createElement("input");
-                    created.id = id;
-                    created.type = "text";
-                    created.value = value;
-                    return created;
-                  })();
-              input.autocapitalize = "off";
-              input.autocomplete = "off";
-              input.spellcheck = false;
-              input.style.display = "block";
-              input.style.width = "100%";
-              input.style.margin = "0";
-              input.style.padding = "8px 10px";
-              input.style.border = "1px solid #5f6368";
-              input.style.borderRadius = "6px";
-              input.style.boxSizing = "border-box";
-              input.style.fontSize = "14px";
-              input.style.fontFamily = "system-ui, -apple-system, sans-serif";
-              input.style.background = "white";
-              input.style.color = "black";
-              return input;
-            };
-
-            let container = document.getElementById("cmux-ui-test-focus-container");
-            if (!container || !container.tagName || container.tagName.toLowerCase() !== "div") {
-              container = document.createElement("div");
-              container.id = "cmux-ui-test-focus-container";
-              document.body.appendChild(container);
-            }
-            container.style.position = "fixed";
-            container.style.left = "24px";
-            container.style.top = "24px";
-            container.style.width = "min(520px, calc(100vw - 48px))";
-            container.style.display = "grid";
-            container.style.rowGap = "12px";
-            container.style.padding = "12px";
-            container.style.background = "rgba(255,255,255,0.92)";
-            container.style.border = "1px solid rgba(95,99,104,0.55)";
-            container.style.borderRadius = "8px";
-            container.style.boxShadow = "0 2px 10px rgba(0,0,0,0.2)";
-            container.style.zIndex = "2147483647";
-
-            const input = ensureInput("cmux-ui-test-focus-input", "cmux-ui-focus-primary");
-            const secondaryInput = ensureInput("cmux-ui-test-focus-input-secondary", "cmux-ui-focus-secondary");
-            if (input.parentElement !== container) {
-              container.appendChild(input);
-            }
-            if (secondaryInput.parentElement !== container) {
-              container.appendChild(secondaryInput);
-            }
-
-            const updateTitle = () => {
-              document.title = "cmux-ui-focus-primary:" + String(input.value || "");
-            };
-            if (input.__cmuxUITestTitleListenerInstalled !== true) {
-              input.addEventListener("input", updateTitle, true);
-              input.__cmuxUITestTitleListenerInstalled = true;
-            }
-            updateTitle();
-
-            input.focus({ preventScroll: true });
-            if (typeof input.setSelectionRange === "function") {
-              const end = input.value.length;
-              input.setSelectionRange(end, end);
-            }
-
-            const secondaryRect = secondaryInput.getBoundingClientRect();
-            const viewportWidth = Math.max(Number(window.innerWidth) || 0, 1);
-            const viewportHeight = Math.max(Number(window.innerHeight) || 0, 1);
-            const secondaryCenterX = Math.min(
-              0.98,
-              Math.max(0.02, (secondaryRect.left + (secondaryRect.width / 2)) / viewportWidth)
-            );
-            const secondaryCenterY = Math.min(
-              0.98,
-              Math.max(0.02, (secondaryRect.top + (secondaryRect.height / 2)) / viewportHeight)
-            );
-            const active = document.activeElement;
-            return {
-              focused: active === input,
-              id: input.id || "",
-              secondaryId: secondaryInput.id || "",
-              secondaryCenterX,
-              secondaryCenterY,
-              activeId: active && typeof active.id === "string" ? active.id : "",
-              activeTag: active && active.tagName ? active.tagName.toLowerCase() : "",
-              readyState: String(document.readyState || "")
-            };
-          };
-          const ready = () => String(document.readyState || "") === "complete";
-
-          if (ready()) {
-            try {
-              return seed();
-            } catch (_) {
-              return snapshot();
-            }
-          }
-
-          return new Promise((resolve) => {
-            let finished = false;
-            let observer = null;
-            const cleanups = [];
-            const finish = (value) => {
-              if (finished) return;
-              finished = true;
-              if (observer) observer.disconnect();
-              for (const cleanup of cleanups) {
-                try { cleanup(); } catch (_) {}
-              }
-              resolve(value);
-            };
-            const maybeFinish = () => {
-              if (!ready()) return;
-              try {
-                finish(seed());
-              } catch (_) {
-                finish(snapshot());
-              }
-            };
-            const addListener = (target, eventName, options) => {
-              if (!target || typeof target.addEventListener !== "function") return;
-              const handler = () => maybeFinish();
-              target.addEventListener(eventName, handler, options);
-              cleanups.push(() => target.removeEventListener(eventName, handler, options));
-            };
-            try {
-              observer = new MutationObserver(() => maybeFinish());
-              observer.observe(document.documentElement || document, {
-                childList: true,
-                subtree: true,
-                attributes: true,
-                characterData: true
-              });
-            } catch (_) {}
-            addListener(document, "readystatechange", true);
-            addListener(window, "load", true);
-            const timeoutId = window.setTimeout(() => finish(snapshot()), 4000);
-            cleanups.push(() => window.clearTimeout(timeoutId));
-            maybeFinish();
-          });
-        })();
-        """
-
-        panel.webView.evaluateJavaScript(script) { [weak self] result, _ in
-            guard let self else { return }
-            let payload = result as? [String: Any]
-            let focused = (payload?["focused"] as? Bool) ?? false
-            let inputId = (payload?["id"] as? String) ?? ""
-            let secondaryInputId = (payload?["secondaryId"] as? String) ?? ""
-            let secondaryCenterX = (payload?["secondaryCenterX"] as? NSNumber)?.doubleValue ?? -1
-            let secondaryCenterY = (payload?["secondaryCenterY"] as? NSNumber)?.doubleValue ?? -1
-            let activeId = (payload?["activeId"] as? String) ?? ""
-            let readyState = (payload?["readyState"] as? String) ?? ""
-            var secondaryClickOffsetX = -1.0
-            var secondaryClickOffsetY = -1.0
-            if let window = panel.webView.window {
-                let webFrame = panel.webView.convert(panel.webView.bounds, to: nil)
-                let contentHeight = Double(window.contentView?.bounds.height ?? 0)
-                if webFrame.width > 1,
-                   webFrame.height > 1,
-                   contentHeight > 1,
-                   secondaryCenterX > 0,
-                   secondaryCenterX < 1,
-                   secondaryCenterY > 0,
-                   secondaryCenterY < 1 {
-                    let xInContent = Double(webFrame.minX) + (secondaryCenterX * Double(webFrame.width))
-                    let yFromTopInWeb = secondaryCenterY * Double(webFrame.height)
-                    let yInContent = Double(webFrame.maxY) - yFromTopInWeb
-                    let yFromTopInContent = contentHeight - yInContent
-                    let titlebarHeight = max(0, Double(window.frame.height) - contentHeight)
-                    secondaryClickOffsetX = xInContent
-                    secondaryClickOffsetY = titlebarHeight + yFromTopInContent
-                }
-            }
-            if focused,
-               !inputId.isEmpty,
-               !secondaryInputId.isEmpty,
-               inputId == activeId,
-               secondaryCenterX > 0,
-               secondaryCenterX < 1,
-               secondaryCenterY > 0,
-               secondaryCenterY < 1,
-               secondaryClickOffsetX > 0,
-               secondaryClickOffsetY > 0 {
-                self.writeGotoSplitTestData([
-                    "webInputFocusSeeded": "true",
-                    "webInputFocusElementId": inputId,
-                    "webInputFocusSecondaryElementId": secondaryInputId,
-                    "webInputFocusSecondaryCenterX": "\(secondaryCenterX)",
-                    "webInputFocusSecondaryCenterY": "\(secondaryCenterY)",
-                    "webInputFocusSecondaryClickOffsetX": "\(secondaryClickOffsetX)",
-                    "webInputFocusSecondaryClickOffsetY": "\(secondaryClickOffsetY)",
-                    "webInputFocusActiveElementId": activeId,
-                    "webInputFocusReadyState": readyState
-                ])
-                return
-            }
-            self.writeGotoSplitTestData([
-                "webInputFocusSeeded": "false",
-                "setupError": "Timed out focusing page input for omnibar restore test"
-            ])
-        }
-    }
-
-    private func recordGotoSplitUITestActiveElement(panelId: UUID, keyPrefix: String) {
-        guard let tabManager,
-              let tab = tabManager.selectedWorkspace,
-              let panel = tab.browserPanel(for: panelId) else {
-            return
-        }
-
-        let expectedInputId = keyPrefix == "addressBarExit" ? gotoSplitUITestExpectedInputId() : nil
-        let capture: @MainActor @Sendable () -> Void = { [weak self] in
-            guard let self else { return }
-            self.evaluateGotoSplitUITestActiveElement(
-                panel: panel,
-                awaitingInputId: expectedInputId
-            ) { snapshot in
-                self.writeGotoSplitTestData([
-                    "\(keyPrefix)PanelId": panelId.uuidString,
-                    "\(keyPrefix)ActiveElementId": snapshot["id"] ?? "",
-                    "\(keyPrefix)ActiveElementTag": snapshot["tag"] ?? "",
-                    "\(keyPrefix)ActiveElementType": snapshot["type"] ?? "",
-                    "\(keyPrefix)ActiveElementEditable": snapshot["editable"] ?? "false"
-                ])
-            }
-        }
-
-        if expectedInputId == nil {
-            DispatchQueue.main.async {
-                Task { @MainActor in capture() }
-            }
-        } else {
-            Task { @MainActor in capture() }
-        }
-    }
-
-    private func evaluateGotoSplitUITestActiveElement(
-        panel: BrowserPanel,
-        awaitingInputId: String? = nil,
-        completion: @escaping ([String: String]) -> Void
-    ) {
-        let expectedInputIdLiteral = cmuxJavaScriptStringLiteral(awaitingInputId) ?? "null"
-        let script = """
-        (() => {
-          const expectedInputId = \(expectedInputIdLiteral);
-          const snapshot = () => {
-            try {
-              const active = document.activeElement;
-              if (!active) {
-                return {
-                  id: "",
-                  tag: "",
-                  type: "",
-                  editable: "false"
-                };
-              }
-              const tag = (active.tagName || "").toLowerCase();
-              const type = (active.type || "").toLowerCase();
-              const editable =
-                !!active.isContentEditable ||
-                tag === "textarea" ||
-                (tag === "input" && type !== "hidden");
-              return {
-                id: typeof active.id === "string" ? active.id : "",
-                tag,
-                type,
-                editable: editable ? "true" : "false"
-              };
-            } catch (_) {
-              return {
-                id: "",
-                tag: "",
-                type: "",
-                editable: "false"
-              };
-            }
-          };
-          const matchesExpectation = (state) =>
-            !expectedInputId || (typeof expectedInputId === "string" && state.id === expectedInputId);
-
-          const initial = snapshot();
-          if (matchesExpectation(initial)) {
-            return initial;
-          }
-
-          return new Promise((resolve) => {
-            let finished = false;
-            let observer = null;
-            const cleanups = [];
-            const finish = (value) => {
-              if (finished) return;
-              finished = true;
-              if (observer) observer.disconnect();
-              for (const cleanup of cleanups) {
-                try { cleanup(); } catch (_) {}
-              }
-              resolve(value);
-            };
-            const maybeFinish = () => {
-              const state = snapshot();
-              if (matchesExpectation(state)) {
-                finish(state);
-              }
-            };
-            const addListener = (target, eventName, options) => {
-              if (!target || typeof target.addEventListener !== "function") return;
-              const handler = () => maybeFinish();
-              target.addEventListener(eventName, handler, options);
-              cleanups.push(() => target.removeEventListener(eventName, handler, options));
-            };
-            try {
-              observer = new MutationObserver(() => maybeFinish());
-              observer.observe(document.documentElement || document, {
-                childList: true,
-                subtree: true,
-                attributes: true,
-                characterData: true
-              });
-            } catch (_) {}
-            addListener(document, "focusin", true);
-            addListener(document, "focusout", true);
-            addListener(document, "selectionchange", true);
-            addListener(document, "readystatechange", true);
-            addListener(window, "load", true);
-            const timeoutId = window.setTimeout(() => finish(snapshot()), 1500);
-            cleanups.push(() => window.clearTimeout(timeoutId));
-            maybeFinish();
-          });
-        })();
-        """
-
-        panel.webView.evaluateJavaScript(script) { result, _ in
-            let payload = result as? [String: Any]
-            completion([
-                "id": (payload?["id"] as? String) ?? "",
-                "tag": (payload?["tag"] as? String) ?? "",
-                "type": (payload?["type"] as? String) ?? "",
-                "editable": (payload?["editable"] as? String) ?? "false"
-            ])
-        }
-    }
-
-    private func gotoSplitUITestExpectedInputId() -> String? {
-        let env = ProcessInfo.processInfo.environment
-        guard let path = env["CMUX_UI_TEST_GOTO_SPLIT_PATH"], !path.isEmpty else { return nil }
-        return loadGotoSplitTestData(at: path)["webInputFocusElementId"]
     }
 
     private func recordGotoSplitMoveIfNeeded(direction: NavigationDirection) {
