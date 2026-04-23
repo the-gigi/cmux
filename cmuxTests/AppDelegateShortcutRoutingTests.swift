@@ -2301,6 +2301,130 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
         XCTAssertNil(manager.focusedBrowserPanel?.searchState)
     }
 
+    func testCmdEFocusedBrowserKeepsWebContentFirstRouting() {
+        guard let appDelegate = AppDelegate.shared else {
+            XCTFail("Expected AppDelegate.shared")
+            return
+        }
+
+        let windowId = appDelegate.createMainWindow()
+        defer { closeWindow(withId: windowId) }
+
+        guard let window = window(withId: windowId),
+              let manager = appDelegate.tabManagerFor(windowId: windowId),
+              let workspace = manager.selectedWorkspace,
+              let terminalPanelId = workspace.focusedPanelId,
+              let terminalPanel = workspace.terminalPanel(for: terminalPanelId),
+              let browserPanel = workspace.splitBrowserPanel(
+                fromPanelId: terminalPanel.id,
+                orientation: .horizontal,
+                focus: true
+              ) else {
+            XCTFail("Expected visible terminal and browser panels")
+            return
+        }
+
+        window.makeKeyAndOrderFront(nil)
+        window.displayIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+
+        XCTAssertEqual(workspace.focusedPanelId, browserPanel.id, "Expected split browser pane to stay focused for Cmd+E")
+
+        guard let event = makeKeyDownEvent(
+            key: "e",
+            modifiers: [.command],
+            keyCode: 14,
+            windowNumber: window.windowNumber
+        ) else {
+            XCTFail("Failed to construct Cmd+E event")
+            return
+        }
+
+#if DEBUG
+        XCTAssertFalse(
+            appDelegate.debugHandleCustomShortcut(event: event),
+            "Cmd+E should fall through so browser web content gets first chance when a browser pane is focused"
+        )
+#else
+        XCTFail("debugHandleCustomShortcut is only available in DEBUG")
+#endif
+    }
+
+    func testCmdLFocusesFocusedBrowserAddressBar() {
+        guard let appDelegate = AppDelegate.shared else {
+            XCTFail("Expected AppDelegate.shared")
+            return
+        }
+
+        let windowId = appDelegate.createMainWindow()
+        defer { closeWindow(withId: windowId) }
+
+        guard let window = window(withId: windowId),
+              let manager = appDelegate.tabManagerFor(windowId: windowId),
+              let workspace = manager.selectedWorkspace,
+              let terminalPanelId = workspace.focusedPanelId,
+              let terminalPanel = workspace.terminalPanel(for: terminalPanelId),
+              let browserPanel = workspace.splitBrowserPanel(
+                fromPanelId: terminalPanel.id,
+                orientation: .horizontal,
+                focus: true
+              ) else {
+            XCTFail("Expected visible terminal and browser panels")
+            return
+        }
+
+        window.makeKeyAndOrderFront(nil)
+        window.displayIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+
+        XCTAssertEqual(workspace.focusedPanelId, browserPanel.id, "Expected split browser pane to stay focused for Cmd+L")
+
+        let addressBarExpectation = expectation(description: "browserFocusAddressBar notification")
+        var notifiedPanelId: UUID?
+        let notificationToken = NotificationCenter.default.addObserver(
+            forName: .browserFocusAddressBar,
+            object: nil,
+            queue: nil
+        ) { notification in
+            notifiedPanelId = notification.object as? UUID
+            addressBarExpectation.fulfill()
+        }
+        defer { NotificationCenter.default.removeObserver(notificationToken) }
+
+        guard let event = makeKeyDownEvent(
+            key: "l",
+            modifiers: [.command],
+            keyCode: 37,
+            windowNumber: window.windowNumber
+        ) else {
+            XCTFail("Failed to construct Cmd+L event")
+            return
+        }
+
+#if DEBUG
+        let handled = appDelegate.debugHandleCustomShortcut(event: event)
+        XCTAssertTrue(
+            handled,
+            "Cmd+L should be handled while the focused pane is a browser"
+        )
+        guard handled else { return }
+#else
+        XCTFail("debugHandleCustomShortcut is only available in DEBUG")
+#endif
+
+        wait(for: [addressBarExpectation], timeout: 0.2)
+        XCTAssertEqual(
+            notifiedPanelId,
+            browserPanel.id,
+            "Cmd+L should notify the currently focused browser pane"
+        )
+        XCTAssertEqual(
+            appDelegate.focusedBrowserAddressBarPanelId(),
+            browserPanel.id,
+            "Cmd+L should focus the currently focused browser pane"
+        )
+    }
+
     func testCmdPhysicalWWithDvorakCharactersDoesNotTriggerClosePanelShortcut() {
         guard let appDelegate = AppDelegate.shared else {
             XCTFail("Expected AppDelegate.shared")
