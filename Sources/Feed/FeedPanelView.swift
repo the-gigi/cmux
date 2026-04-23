@@ -276,13 +276,11 @@ private struct FeedListView: View {
                 snapshot: snapshot,
                 actions: actions,
                 isSelected: isSelected,
-                onSelect: {
-                    FeedInlineNativeTextView.blurActiveEditor()
-                    selectedItemId = snapshot.id
+                onPressSelect: {
+                    selectRow(snapshot.id)
                 },
                 onActivate: {
-                    FeedInlineNativeTextView.blurActiveEditor()
-                    selectedItemId = snapshot.id
+                    selectRow(snapshot.id)
                     actions.jump(snapshot.workstreamId)
                 }
             )
@@ -364,6 +362,12 @@ private struct FeedListView: View {
 
     private func prefersStableSurface(_ snapshot: FeedItemSnapshot) -> Bool {
         snapshot.status.isPending || snapshot.kind == .stop
+    }
+
+    private func selectRow(_ id: UUID) {
+        guard selectedItemId != id else { return }
+        FeedInlineNativeTextView.blurActiveEditor()
+        selectedItemId = id
     }
 
     private func rowBackgroundFill(
@@ -544,8 +548,10 @@ struct FeedItemRow: View {
     let snapshot: FeedItemSnapshot
     let actions: FeedRowActions
     let isSelected: Bool
-    let onSelect: () -> Void
+    let onPressSelect: () -> Void
     let onActivate: () -> Void
+
+    @State private var didHandlePressSelection = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -568,8 +574,16 @@ struct FeedItemRow: View {
         .contentShape(Rectangle())
         .help(helpText)
         .simultaneousGesture(
-            TapGesture()
-                .onEnded(onSelect)
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    if !didHandlePressSelection {
+                        didHandlePressSelection = true
+                        onPressSelect()
+                    }
+                }
+                .onEnded { _ in
+                    didHandlePressSelection = false
+                }
         )
         .onTapGesture(count: 2, perform: onActivate)
     }
@@ -768,6 +782,7 @@ struct FeedItemRow: View {
                 source: snapshot.source,
                 status: snapshot.status,
                 isRowSelected: isSelected,
+                onFocusRow: onPressSelect,
                 onApprove: { mode, feedback in
                     actions.approveExitPlan(snapshot.id, mode, feedback)
                 }
@@ -778,6 +793,7 @@ struct FeedItemRow: View {
                 source: snapshot.source,
                 status: snapshot.status,
                 isRowSelected: isSelected,
+                onFocusRow: onPressSelect,
                 context: displayContext,
                 onReply: { selections in
                     actions.replyQuestion(snapshot.id, selections)
@@ -787,6 +803,7 @@ struct FeedItemRow: View {
             StopActionArea(
                 workstreamId: snapshot.workstreamId,
                 isRowSelected: isSelected,
+                onFocusRow: onPressSelect,
                 onSend: { text in actions.sendText(snapshot.workstreamId, text) }
             )
         default:
@@ -1687,6 +1704,7 @@ private struct ExitPlanActionArea: View {
     let source: WorkstreamSource
     let status: WorkstreamStatus
     let isRowSelected: Bool
+    let onFocusRow: () -> Void
     let onApprove: (WorkstreamExitPlanMode, String?) -> Void
 
     @State private var feedback: String = ""
@@ -1738,6 +1756,11 @@ private struct ExitPlanActionArea: View {
                             lineWidth: 1
                         )
                 )
+                .onChange(of: feedbackFocused) { _, focused in
+                    if focused {
+                        onFocusRow()
+                    }
+                }
                 HStack(spacing: 6) {
                     FeedButton(
                         label: hasFeedback
@@ -1748,6 +1771,7 @@ private struct ExitPlanActionArea: View {
                         kind: hasFeedback ? .primary : .soft,
                         size: .medium, fullWidth: true
                     ) {
+                        onFocusRow()
                         // Feedback always wins over mode; hook translates
                         // non-empty feedback into block+reason.
                         onApprove(hasFeedback ? .manual : .ultraplan, hasFeedback ? trimmedFeedback : nil)
@@ -1759,6 +1783,7 @@ private struct ExitPlanActionArea: View {
                         size: .medium, fullWidth: true,
                         dimmed: hasFeedback
                     ) {
+                        onFocusRow()
                         onApprove(.manual, hasFeedback ? trimmedFeedback : nil)
                     }
                     FeedButton(
@@ -1768,6 +1793,7 @@ private struct ExitPlanActionArea: View {
                         size: .medium, fullWidth: true,
                         dimmed: hasFeedback
                     ) {
+                        onFocusRow()
                         onApprove(.autoAccept, hasFeedback ? trimmedFeedback : nil)
                     }
                 }
@@ -2082,6 +2108,7 @@ private struct QuestionActionArea: View {
     let source: WorkstreamSource
     let status: WorkstreamStatus
     let isRowSelected: Bool
+    let onFocusRow: () -> Void
     let context: WorkstreamContext?
     let onReply: ([String]) -> Void
 
@@ -2176,6 +2203,7 @@ private struct QuestionActionArea: View {
         let selected = selections[questionId]?.contains(option.id) == true
         return Button {
             guard status.isPending else { return }
+            onFocusRow()
             clearCustomAnswerFocus()
             var current = selections[questionId] ?? []
             if multi {
@@ -2253,6 +2281,7 @@ private struct QuestionActionArea: View {
                 isFocused: customAnswerFocusBinding(focusKey),
                 font: font,
                 onFocus: {
+                    onFocusRow()
                     selectCustomAnswer(questionId: questionId, multi: multi)
                 }
             )
@@ -2275,6 +2304,7 @@ private struct QuestionActionArea: View {
         .contentShape(Rectangle())
         .onTapGesture {
             guard status.isPending else { return }
+            onFocusRow()
             selectCustomAnswer(questionId: questionId, multi: multi)
             focusedCustomAnswerId = focusKey
         }
@@ -2343,6 +2373,7 @@ private struct QuestionActionArea: View {
             isFocused: customAnswerFocusBinding(focusKey),
             font: font,
             onFocus: {
+                onFocusRow()
                 selectCustomAnswer(questionId: questionId, multi: multi)
             }
         )
@@ -2360,6 +2391,7 @@ private struct QuestionActionArea: View {
         .feedIBeamCursorOnHover(enabled: status.isPending)
         .onTapGesture {
             guard status.isPending else { return }
+            onFocusRow()
             selectCustomAnswer(questionId: questionId, multi: multi)
             focusedCustomAnswerId = focusKey
         }
@@ -2455,6 +2487,7 @@ private struct QuestionActionArea: View {
             dimmed: !status.isPending
         ) {
             guard status.isPending else { return }
+            onFocusRow()
             clearCustomAnswerFocus()
             var current = selections[questionId] ?? []
             if multi {
@@ -2543,6 +2576,7 @@ private struct QuestionActionArea: View {
             fullWidth: true,
             dimmed: !enabled
         ) {
+            onFocusRow()
             // Selections carry human-readable answer strings (one per
             // answered question) so the hook can feed them straight
             // back to the agent as the user's reply.
@@ -2559,6 +2593,7 @@ private struct QuestionActionArea: View {
             size: .medium,
             fullWidth: true
         ) {
+            onFocusRow()
             onReply([Self.skipInterviewAndPlanAnswer])
         }
     }
@@ -3034,6 +3069,7 @@ private struct FlowLayout: Layout {
 private struct StopActionArea: View {
     let workstreamId: String
     let isRowSelected: Bool
+    let onFocusRow: () -> Void
     let onSend: (String) -> Void
 
     @State private var reply: String = ""
@@ -3062,6 +3098,11 @@ private struct StopActionArea: View {
             .textFieldStyle(.plain)
             .font(.system(size: 12))
             .focused($replyFocused)
+            .onChange(of: replyFocused) { _, focused in
+                if focused {
+                    onFocusRow()
+                }
+            }
             .lineLimit(1...5)
             .padding(10)
             .background(
@@ -3086,6 +3127,7 @@ private struct StopActionArea: View {
                 fullWidth: true,
                 dimmed: !canSend
             ) {
+                onFocusRow()
                 onSend(trimmed)
                 reply = ""
             }

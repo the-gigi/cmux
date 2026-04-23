@@ -127,7 +127,7 @@ private struct FeedPreviewCardHost: View {
             ),
             actions: FeedPreviewActions.make(),
             isSelected: false,
-            onSelect: {},
+            onPressSelect: {},
             onActivate: {}
         )
     }
