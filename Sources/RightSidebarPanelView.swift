@@ -94,8 +94,8 @@ enum RightSidebarFocusRequestCenter {
         return modeShortcut(for: event)
     }
 
-    private static func ownsKeyboardFocus(in window: NSWindow?) -> Bool {
-        guard let window, let responder = window.firstResponder else { return false }
+    static func isRightSidebarFocusResponder(_ responder: NSResponder, in window: NSWindow?) -> Bool {
+        guard let window else { return false }
         if RightSidebarKeyboardFocusView.isFocusHost(responder, in: window) {
             return true
         }
@@ -103,6 +103,11 @@ enum RightSidebarFocusRequestCenter {
             return true
         }
         return false
+    }
+
+    private static func ownsKeyboardFocus(in window: NSWindow?) -> Bool {
+        guard let window, let responder = window.firstResponder else { return false }
+        return isRightSidebarFocusResponder(responder, in: window)
     }
 }
 
@@ -175,10 +180,11 @@ struct RightSidebarPanelView: View {
         fileExplorerStore.rootPath.isEmpty ? nil : fileExplorerStore.rootPath
     }
 
-    private func handleFocusRequest(_ request: RightSidebarFocusRequest) {
+    @discardableResult
+    private func handleFocusRequest(_ request: RightSidebarFocusRequest) -> Bool {
         let targetMode = request.mode ?? fileExplorerState.mode
         selectMode(targetMode)
-        focusMode(targetMode, windowNumber: request.windowNumber)
+        return focusMode(targetMode, windowNumber: request.windowNumber)
     }
 
     private func selectMode(_ mode: RightSidebarMode) {
@@ -193,23 +199,29 @@ struct RightSidebarPanelView: View {
         }
     }
 
-    private func focusMode(_ mode: RightSidebarMode, windowNumber: Int?) {
+    @discardableResult
+    private func focusMode(_ mode: RightSidebarMode, windowNumber: Int?) -> Bool {
         let window = windowNumber.flatMap { NSApp.window(withWindowNumber: $0) }
             ?? NSApp.keyWindow
             ?? NSApp.mainWindow
         switch mode {
         case .files:
+            if FileExplorerContainerView.focus(in: window) {
+                return true
+            }
             FileExplorerFocusRequestCenter.requestFocus(in: window)
+            return false
         case .sessions:
-            _ = RightSidebarKeyboardFocusView.focusHost(in: window)
+            return RightSidebarKeyboardFocusView.focusHost(in: window)
         case .feed:
             FeedFocusRequestCenter.requestFirstItemFocus(in: window)
+            return FeedKeyboardFocusView.focusHost(in: window)
         }
     }
 }
 
 private struct RightSidebarKeyboardFocusBridge: NSViewRepresentable {
-    let onFocusRequest: (RightSidebarFocusRequest) -> Void
+    let onFocusRequest: (RightSidebarFocusRequest) -> Bool
 
     func makeNSView(context: Context) -> RightSidebarKeyboardFocusView {
         let view = RightSidebarKeyboardFocusView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
@@ -219,6 +231,7 @@ private struct RightSidebarKeyboardFocusBridge: NSViewRepresentable {
 
     func updateNSView(_ nsView: RightSidebarKeyboardFocusView, context: Context) {
         nsView.onFocusRequest = onFocusRequest
+        nsView.replayPendingFocusRequestIfNeeded()
     }
 }
 
@@ -228,7 +241,7 @@ private final class RightSidebarKeyboardFocusView: NSView {
         valueOptions: .weakMemory
     )
 
-    var onFocusRequest: ((RightSidebarFocusRequest) -> Void)?
+    var onFocusRequest: ((RightSidebarFocusRequest) -> Bool)?
     private var focusRequestObserver: NSObjectProtocol?
     private var handledFocusRequestGeneration = 0
 
@@ -266,6 +279,7 @@ private final class RightSidebarKeyboardFocusView: NSView {
 
     static func focusHost(in window: NSWindow?) -> Bool {
         guard let window, let host = hosts.object(forKey: window) else { return false }
+        guard host.cmuxCanAcceptRightSidebarKeyboardFocus else { return false }
         return window.makeFirstResponder(host)
     }
 
@@ -289,7 +303,7 @@ private final class RightSidebarKeyboardFocusView: NSView {
         }
     }
 
-    private func replayPendingFocusRequestIfNeeded() {
+    fileprivate func replayPendingFocusRequestIfNeeded() {
         guard let request = RightSidebarFocusRequestCenter.latestRequest(for: window),
               shouldHandleFocusRequest(request) else {
             return
@@ -302,8 +316,10 @@ private final class RightSidebarKeyboardFocusView: NSView {
 
     private func handleFocusRequest(_ request: RightSidebarFocusRequest) {
         guard handledFocusRequestGeneration != request.generation else { return }
-        handledFocusRequestGeneration = request.generation
-        onFocusRequest?(request)
+        guard cmuxCanAcceptRightSidebarKeyboardFocus else { return }
+        if onFocusRequest?(request) == true {
+            handledFocusRequestGeneration = request.generation
+        }
     }
 
     private func shouldHandleFocusRequest(_ request: RightSidebarFocusRequest) -> Bool {
@@ -311,6 +327,20 @@ private final class RightSidebarKeyboardFocusView: NSView {
             return window?.windowNumber == windowNumber
         }
         return window != nil
+    }
+}
+
+extension NSView {
+    var cmuxCanAcceptRightSidebarKeyboardFocus: Bool {
+        guard window != nil, !isHiddenOrHasHiddenAncestor else { return false }
+        var view: NSView? = self
+        while let current = view {
+            if current.bounds.width <= 0.5 || current.bounds.height <= 0.5 {
+                return false
+            }
+            view = current.superview
+        }
+        return true
     }
 }
 

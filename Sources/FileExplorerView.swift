@@ -69,6 +69,7 @@ struct FileExplorerPanelView: NSViewRepresentable {
         context.coordinator.state = state
         container.updateHeader(store: store)
         context.coordinator.reloadIfNeeded()
+        container.replayPendingFocusRequestIfNeeded()
     }
 
     // MARK: - Coordinator
@@ -478,6 +479,7 @@ final class FileExplorerContainerView: NSView {
     @discardableResult
     func focusOutline() -> Bool {
         guard let window else { return false }
+        guard cmuxCanAcceptRightSidebarKeyboardFocus else { return false }
         if outlineView.numberOfRows > 0, outlineView.selectedRow < 0 {
             outlineView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
             outlineView.scrollRowToVisible(0)
@@ -506,7 +508,7 @@ final class FileExplorerContainerView: NSView {
         }
     }
 
-    private func replayPendingFocusRequestIfNeeded() {
+    fileprivate func replayPendingFocusRequestIfNeeded() {
         guard let request = FileExplorerFocusRequestCenter.latestRequest(for: window),
               shouldHandleFocusRequest(request) else {
             return
@@ -519,8 +521,9 @@ final class FileExplorerContainerView: NSView {
 
     private func handleFocusRequest(_ request: FileExplorerFocusRequest) {
         guard handledFocusRequestGeneration != request.generation else { return }
-        handledFocusRequestGeneration = request.generation
-        focusOutline()
+        if focusOutline() {
+            handledFocusRequestGeneration = request.generation
+        }
     }
 
     private func shouldHandleFocusRequest(_ request: FileExplorerFocusRequest) -> Bool {

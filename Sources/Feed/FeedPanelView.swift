@@ -657,6 +657,7 @@ private struct FeedKeyboardFocusBridge: NSViewRepresentable {
         nsView.onActivateSelection = onActivateSelection
         nsView.onFocusFirstItemRequested = onFocusFirstItemRequested
         nsView.onFocusChanged = onFocusChanged
+        nsView.replayPendingFocusRequestIfNeeded()
     }
 }
 
@@ -708,7 +709,7 @@ final class FeedKeyboardFocusView: NSView {
         }
     }
 
-    private func replayPendingFocusRequestIfNeeded() {
+    fileprivate func replayPendingFocusRequestIfNeeded() {
         guard let request = FeedFocusRequestCenter.latestRequest(for: window),
               shouldHandleFocusRequest(request) else {
             return
@@ -830,6 +831,7 @@ final class FeedKeyboardFocusView: NSView {
 
     static func focusHost(in window: NSWindow?) -> Bool {
         guard let window, let host = hosts.object(forKey: window) else { return false }
+        guard host.cmuxCanAcceptRightSidebarKeyboardFocus else { return false }
         let before = feedDebugResponderSummary(window.firstResponder)
         let result = window.makeFirstResponder(host)
 #if DEBUG

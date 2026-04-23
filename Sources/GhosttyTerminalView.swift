@@ -11022,9 +11022,9 @@ final class GhosttySurfaceScrollView: NSView {
         // own GhosttyNSView for input, so NSText and the feed focus host are always foreign focus
         // owners that should survive deferred terminal visibility applies.
         if let firstResponder = window.firstResponder,
-           firstResponder is NSText || firstResponder is FeedKeyboardFocusView {
+           firstResponder is NSText || RightSidebarFocusRequestCenter.isRightSidebarFocusResponder(firstResponder, in: window) {
 #if DEBUG
-            let reason = firstResponder is FeedKeyboardFocusView ? "feedFocused" : "textEditorFocused"
+            let reason = firstResponder is NSText ? "textEditorFocused" : "rightSidebarFocused"
             dlog("find.applyFirstResponder SKIP surface=\(surfaceShort) reason=\(reason)")
 #endif
             return

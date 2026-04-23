@@ -4143,7 +4143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         hostedView: GhosttySurfaceScrollView
     ) -> Bool {
         guard let responder else { return true }
-        if responder is FeedKeyboardFocusView {
+        if RightSidebarFocusRequestCenter.isRightSidebarFocusResponder(responder, in: window) {
             return false
         }
         return focusedTerminalKeyRepairNeeded(
@@ -4166,7 +4166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // never re-route the keystroke to the terminal. Symmetric with
         // applyFirstResponderIfNeeded's foreign focus guard.
         if let firstResponder = window.firstResponder,
-           firstResponder is NSText || firstResponder is FeedKeyboardFocusView {
+           firstResponder is NSText || RightSidebarFocusRequestCenter.isRightSidebarFocusResponder(firstResponder, in: window) {
             return
         }
         guard let context = contextForMainWindow(window) ?? contextForMainTerminalWindow(window),
