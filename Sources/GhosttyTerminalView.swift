@@ -2113,6 +2113,24 @@ class GhosttyApp {
             logLabel: "shell integration override"
         )
 
+        // Apply the Settings-driven magnification last so it wins over any
+        // `font-size` declared in user configs. cmux's own Swift parser already
+        // applied the same scale to its parallel `GhosttyConfig.fontSize`, so
+        // reading it back here yields a size that's consistent with what the
+        // tab bar and chrome will render at. Per-surface zoom (cmd+=/-/0)
+        // keeps operating on top of whatever value Ghostty ends up with.
+        if !GlobalFontMagnification.isDefault {
+            let scaled = GhosttyConfig.load().fontSize
+            if scaled > 0 {
+                loadInlineGhosttyConfig(
+                    "font-size = \(scaled)",
+                    into: config,
+                    prefix: "cmux-global-font-magnification",
+                    logLabel: "global font magnification"
+                )
+            }
+        }
+
         ghostty_config_finalize(config)
     }
 

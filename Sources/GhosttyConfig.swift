@@ -257,8 +257,18 @@ struct GhosttyConfig {
 
         config.resolveSidebarBackground(preferredColorScheme: preferredColorScheme)
         config.applySidebarAppearanceToUserDefaults()
+        config.applyGlobalMagnificationIfNeeded()
 
         return config
+    }
+
+    /// Multiply the parsed terminal and tab-bar font sizes by the global
+    /// magnification so both scale in lockstep with SwiftUI chrome.
+    mutating func applyGlobalMagnificationIfNeeded() {
+        guard !GlobalFontMagnification.isDefault else { return }
+        let scale = GlobalFontMagnification.scale
+        fontSize = max(1, fontSize * scale)
+        surfaceTabBarFontSize = max(1, surfaceTabBarFontSize * scale)
     }
 
     mutating func applyCmuxDefaultAppearance(
@@ -757,5 +767,67 @@ extension NSColor {
             brightness: min(b * (1 - amount), 1),
             alpha: a
         )
+    }
+}
+
+/// App-wide magnification for cmux's chrome and terminals.
+///
+/// Stored as an integer percent (100 = default, 150 = 1.5x, 200 = 2x, ...).
+/// Every SwiftUI `.font(...)` call site is expected to go through the
+/// `cmuxFont(size:)` / `cmuxFont(_:)` view modifiers, which multiply the
+/// design-time size by `scale` and read via `@AppStorage` so they re-render
+/// when the user changes the value in Settings.
+///
+/// Ghostty's terminal font size is scaled by the same factor (`fontSize`
+/// in the parsed `GhosttyConfig` is multiplied on load, and the resulting
+/// value is injected into Ghostty's live config). Per-pane runtime zoom
+/// (cmd+=/-/0 while a terminal pane is focused, or the browser's own zoom)
+/// still acts on top of whatever magnification resolved to.
+enum GlobalFontMagnification {
+    static let percentKey = "globalFontMagnificationPercent"
+
+    static let defaultPercent: Int = 100
+    static let minimumPercent: Int = 50
+    static let maximumPercent: Int = 400
+    static let stepPercent: Int = 10
+
+    static let didChangeNotification = Notification.Name("cmux.globalFontMagnification.didChange")
+
+    /// Raw percent stored in UserDefaults. If the key is unset, treat as 100%.
+    static var storedPercent: Int {
+        let value = UserDefaults.standard.object(forKey: percentKey) as? Int
+        let resolved = value ?? defaultPercent
+        return clamp(resolved)
+    }
+
+    /// Multiplier (1.0 for 100%, 1.5 for 150%, ...). Always returns a finite
+    /// positive number so multiplying hardcoded sizes is always safe.
+    static var scale: CGFloat {
+        CGFloat(storedPercent) / CGFloat(defaultPercent)
+    }
+
+    /// `true` when the user has left magnification at the default 100%.
+    static var isDefault: Bool { storedPercent == defaultPercent }
+
+    /// Scale a design-time point size by the current magnification. Clamped
+    /// to at least 1pt to avoid zero-size fonts.
+    static func scaled(_ base: CGFloat) -> CGFloat {
+        max(1, base * scale)
+    }
+
+    static func clamp(_ percent: Int) -> Int {
+        Swift.max(minimumPercent, Swift.min(maximumPercent, percent))
+    }
+
+    static func setPercent(_ percent: Int) {
+        UserDefaults.standard.set(clamp(percent), forKey: percentKey)
+        GhosttyConfig.invalidateLoadCache()
+        NotificationCenter.default.post(name: didChangeNotification, object: nil)
+    }
+
+    static func resetToDefault() {
+        UserDefaults.standard.removeObject(forKey: percentKey)
+        GhosttyConfig.invalidateLoadCache()
+        NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }
 }

@@ -39,6 +39,7 @@ final class CmuxSettingsFileStore {
         "app.warnBeforeQuit",
         "app.renameSelectsExistingName",
         "app.commandPaletteSearchesAllSurfaces",
+        "app.globalFontMagnification",
         "terminal.showScrollBar",
         "notifications.dockBadge",
         "notifications.showInMenuBar",
@@ -432,6 +433,16 @@ final class CmuxSettingsFileStore {
         }
         if let value = jsonBool(section["commandPaletteSearchesAllSurfaces"]) {
             snapshot.managedUserDefaults[CommandPaletteSwitcherSearchSettings.searchAllSurfacesKey] = .bool(value)
+        }
+        if let raw = section["globalFontMagnification"] {
+            if raw is NSNull {
+                snapshot.managedUserDefaults[GlobalFontMagnification.percentKey] = .int(GlobalFontMagnification.defaultPercent)
+            } else if let value = jsonDouble(raw) {
+                let clamped = GlobalFontMagnification.clamp(Int(value.rounded()))
+                snapshot.managedUserDefaults[GlobalFontMagnification.percentKey] = .int(clamped)
+            } else {
+                logInvalid("app.globalFontMagnification", sourcePath: sourcePath)
+            }
         }
     }
 
@@ -1040,6 +1051,11 @@ final class CmuxSettingsFileStore {
 
         if defaultsKey == TerminalScrollBarSettings.showScrollBarKey, didMutateStoredValue {
             TerminalScrollBarSettings.notifyDidChange(notificationCenter: notificationCenter)
+        }
+
+        if defaultsKey == GlobalFontMagnification.percentKey, didMutateStoredValue {
+            GhosttyConfig.invalidateLoadCache()
+            notificationCenter.post(name: GlobalFontMagnification.didChangeNotification, object: nil)
         }
 
         switch defaultsKey {
