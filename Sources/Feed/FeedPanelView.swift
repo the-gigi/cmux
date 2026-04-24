@@ -86,6 +86,7 @@ struct FeedPanelView: View {
 
     private var controlBar: some View {
         Group {
+            #if compiler(>=6.2)
             if #available(macOS 26.0, *) {
                 GlassEffectContainer(spacing: 6) {
                     controlBarContent
@@ -93,6 +94,9 @@ struct FeedPanelView: View {
             } else {
                 controlBarContent
             }
+            #else
+            controlBarContent
+            #endif
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
@@ -1551,11 +1555,15 @@ struct FeedButton: View {
 
     var body: some View {
 #if DEBUG
+        #if compiler(>=6.2)
         if #available(macOS 26.0, *), usesSystemGlassButtonStyle {
             systemGlassButton
         } else {
             plainFeedButton
         }
+        #else
+        plainFeedButton
+        #endif
 #else
         plainFeedButton
 #endif
@@ -1648,66 +1656,68 @@ struct FeedButton: View {
         }
     }
 
-    @available(macOS 26.0, *)
-    @ViewBuilder
-    private var systemGlassButton: some View {
-        if FeedButtonDebugSettings.visualStyle == .standardGlass {
-            standardSystemGlassButtonBase
-                .buttonStyle(.glass)
-        } else if FeedButtonDebugSettings.visualStyle == .standardTintedGlass {
-            standardSystemGlassButtonBase
-                .buttonStyle(.glass)
-                .tint(systemGlassTint)
-        } else if FeedButtonDebugSettings.visualStyle == .nativeProminentGlass {
-            systemGlassButtonBase
-                .buttonStyle(.glassProminent)
-        } else {
-            systemGlassButtonBase
-                .buttonStyle(.glass)
+    #if compiler(>=6.2)
+        @available(macOS 26.0, *)
+        @ViewBuilder
+        private var systemGlassButton: some View {
+            if FeedButtonDebugSettings.visualStyle == .standardGlass {
+                standardSystemGlassButtonBase
+                    .buttonStyle(.glass)
+            } else if FeedButtonDebugSettings.visualStyle == .standardTintedGlass {
+                standardSystemGlassButtonBase
+                    .buttonStyle(.glass)
+                    .tint(systemGlassTint)
+            } else if FeedButtonDebugSettings.visualStyle == .nativeProminentGlass {
+                systemGlassButtonBase
+                    .buttonStyle(.glassProminent)
+            } else {
+                systemGlassButtonBase
+                    .buttonStyle(.glass)
+            }
         }
-    }
 
-    @available(macOS 26.0, *)
-    private var standardSystemGlassButtonBase: some View {
-        Button {
-            performAction()
-        } label: {
-            standardLabelContent
-                .frame(maxWidth: fullWidth ? .infinity : nil)
+        @available(macOS 26.0, *)
+        private var standardSystemGlassButtonBase: some View {
+            Button {
+                performAction()
+            } label: {
+                standardLabelContent
+                    .frame(maxWidth: fullWidth ? .infinity : nil)
+            }
+            .controlSize(size == .compact ? .small : .regular)
+            .disabled(dimmed)
+            .opacity(dimmed ? 0.55 : 1.0)
+            .onHover { hovering in
+                handleHover(hovering)
+            }
+            .help(label)
         }
-        .controlSize(size == .compact ? .small : .regular)
-        .disabled(dimmed)
-        .opacity(dimmed ? 0.55 : 1.0)
-        .onHover { hovering in
-            handleHover(hovering)
-        }
-        .help(label)
-    }
 
-    @available(macOS 26.0, *)
-    private var systemGlassButtonBase: some View {
-        Button {
-            performAction()
-        } label: {
-            labelContent
-                .foregroundStyle(systemGlassForeground)
-                .frame(maxWidth: fullWidth ? .infinity : nil)
-                .padding(.horizontal, max(CGFloat(0), horizontalPadding - 2))
-                .padding(.vertical, max(CGFloat(0), verticalPadding - 1))
-                .contentShape(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                )
+        @available(macOS 26.0, *)
+        private var systemGlassButtonBase: some View {
+            Button {
+                performAction()
+            } label: {
+                labelContent
+                    .foregroundStyle(systemGlassForeground)
+                    .frame(maxWidth: fullWidth ? .infinity : nil)
+                    .padding(.horizontal, max(CGFloat(0), horizontalPadding - 2))
+                    .padding(.vertical, max(CGFloat(0), verticalPadding - 1))
+                    .contentShape(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    )
+            }
+            .buttonBorderShape(.roundedRectangle(radius: cornerRadius))
+            .controlSize(size == .compact ? .small : .regular)
+            .tint(systemGlassTint)
+            .disabled(dimmed)
+            .opacity(dimmed ? 0.55 : 1.0)
+            .onHover { hovering in
+                handleHover(hovering)
+            }
+            .help(label)
         }
-        .buttonBorderShape(.roundedRectangle(radius: cornerRadius))
-        .controlSize(size == .compact ? .small : .regular)
-        .tint(systemGlassTint)
-        .disabled(dimmed)
-        .opacity(dimmed ? 0.55 : 1.0)
-        .onHover { hovering in
-            handleHover(hovering)
-        }
-        .help(label)
-    }
+    #endif
 
     private var systemGlassTint: Color {
         glassEffectTint.opacity(FeedButtonDebugSettings.glassTintOpacity)
@@ -1889,6 +1899,7 @@ struct FeedButton: View {
                     )
                 )
         case .nativeGlass:
+            #if compiler(>=6.2)
             if #available(macOS 26.0, *) {
                 shape
                     .fill(Color.clear)
@@ -1903,7 +1914,13 @@ struct FeedButton: View {
                     .fill(.ultraThinMaterial)
                     .overlay(shape.fill(backgroundFill.opacity(0.20)))
             }
+            #else
+            shape
+                .fill(.ultraThinMaterial)
+                .overlay(shape.fill(backgroundFill.opacity(0.20)))
+            #endif
         case .nativeProminentGlass:
+            #if compiler(>=6.2)
             if #available(macOS 26.0, *) {
                 shape
                     .fill(Color.clear)
@@ -1923,6 +1940,11 @@ struct FeedButton: View {
                     .fill(.regularMaterial)
                     .overlay(shape.fill(backgroundFill.opacity(0.26)))
             }
+            #else
+            shape
+                .fill(.regularMaterial)
+                .overlay(shape.fill(backgroundFill.opacity(0.26)))
+            #endif
         case .liquid:
             shape
                 .fill(.ultraThinMaterial)

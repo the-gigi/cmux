@@ -1071,6 +1071,7 @@ private struct FeedButtonStyleDebugView: View {
 
     private var previewRail: some View {
         Group {
+            #if compiler(>=6.2)
             if #available(macOS 26.0, *) {
                 GlassEffectContainer(spacing: 8) {
                     previewRailContent
@@ -1078,6 +1079,9 @@ private struct FeedButtonStyleDebugView: View {
             } else {
                 previewRailContent
             }
+            #else
+            previewRailContent
+            #endif
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
