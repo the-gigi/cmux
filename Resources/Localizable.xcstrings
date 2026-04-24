@@ -91472,115 +91472,115 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "[cmux] ローカルシェルにフォールバックしました。再接続するには: cmux vm shell <id>"
+            "value": "[cmux] ローカルシェルにフォールバックしました。元の cmux ssh または cmux vm attach コマンドで再接続してください。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "ko": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "de": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "es": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "it": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "da": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "pl": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "bs": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "ar": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "nb": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "th": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         },
         "uk": {
           "stringUnit": {
             "state": "new",
-            "value": "[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>"
+            "value": "[cmux] falling back to a local shell. Reconnect with the original cmux ssh or cmux vm attach command."
           }
         }
       }

@@ -5986,30 +5986,41 @@ struct CMUXCLI {
             configureParams["daemon_websocket_session_id"] = daemon.sessionId
             configureParams["daemon_websocket_expires_at_unix"] = daemon.expiresAtUnix
         }
-        let configuredPayload = try client.sendV2(method: "workspace.remote.configure", params: configureParams)
-        logVMTiming(
-            "workspace.remote.configure",
-            vmID: id,
-            transport: "websocket",
-            startedAt: configureStartedAt,
-            extra: "workspace=\(String(workspaceId.prefix(8)))"
-        )
+        let configuredPayload: [String: Any]
+        do {
+            configuredPayload = try client.sendV2(method: "workspace.remote.configure", params: configureParams)
+            logVMTiming(
+                "workspace.remote.configure",
+                vmID: id,
+                transport: "websocket",
+                startedAt: configureStartedAt,
+                extra: "workspace=\(String(workspaceId.prefix(8)))"
+            )
 
-        var selectParams: [String: Any] = ["workspace_id": workspaceId]
-        if let workspaceWindowId = (workspaceCreate["window_id"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !workspaceWindowId.isEmpty {
-            selectParams["window_id"] = workspaceWindowId
+            var selectParams: [String: Any] = ["workspace_id": workspaceId]
+            if let workspaceWindowId = (workspaceCreate["window_id"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !workspaceWindowId.isEmpty {
+                selectParams["window_id"] = workspaceWindowId
+            }
+            let selectStartedAt = Date()
+            _ = try client.sendV2(method: "workspace.select", params: selectParams)
+            logVMTiming(
+                "workspace.select",
+                vmID: id,
+                transport: "websocket",
+                startedAt: selectStartedAt,
+                extra: "workspace=\(String(workspaceId.prefix(8)))"
+            )
+        } catch {
+            do {
+                _ = try client.sendV2(method: "workspace.close", params: ["workspace_id": workspaceId])
+            } catch {
+                let warning = "Warning: failed to rollback workspace \(workspaceId): \(error)\n"
+                FileHandle.standardError.write(Data(warning.utf8))
+            }
+            throw error
         }
-        let selectStartedAt = Date()
-        _ = try client.sendV2(method: "workspace.select", params: selectParams)
-        logVMTiming(
-            "workspace.select",
-            vmID: id,
-            transport: "websocket",
-            startedAt: selectStartedAt,
-            extra: "workspace=\(String(workspaceId.prefix(8)))"
-        )
 
         var payload = configuredPayload
         payload["workspace_id"] = workspaceId

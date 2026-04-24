@@ -3,6 +3,7 @@ import { createClient, type Client } from "rivetkit/client";
 import { recordSpanError, withApiRouteSpan, type MaybeAttributes } from "../telemetry";
 import { unauthorized, verifyRequest, type AuthedUser } from "./auth";
 import { getProvider } from "./drivers";
+import { isProviderNotFoundError } from "./providerErrors";
 import type { UserVmEntry } from "./actors/userVms";
 import type { Registry } from "./registry";
 
@@ -295,33 +296,4 @@ export function isActorMissingError(err: unknown): boolean {
     message.includes("no actor") ||
     message.includes("actor is not available")
   );
-}
-
-export function isProviderNotFoundError(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const candidate = err as {
-    status?: number;
-    statusCode?: number;
-    response?: { status?: number };
-    message?: string;
-    cause?: unknown;
-  };
-  const status =
-    candidate.status ??
-    candidate.statusCode ??
-    candidate.response?.status ??
-    undefined;
-  if (status === 404) return true;
-  const message = (candidate.message ?? "").toLowerCase();
-  if (
-    message.includes("not found") ||
-    message.includes("does not exist") ||
-    message.includes("no such") ||
-    message.includes("already deleted") ||
-    message.includes("404")
-  ) {
-    return true;
-  }
-  if (candidate.cause) return isProviderNotFoundError(candidate.cause);
-  return false;
 }
