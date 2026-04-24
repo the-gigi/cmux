@@ -355,6 +355,9 @@ final class FileExplorerContainerView: NSView {
         outlineView.autoresizesOutlineColumn = true
         outlineView.floatsGroupRows = false
         outlineView.backgroundColor = .clear
+        outlineView.onQuickSearchChanged = { [weak self] query in
+            self?.headerView.updateQuickSearch(query: query)
+        }
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
         column.isEditable = false
@@ -486,6 +489,8 @@ final class FileExplorerContainerView: NSView {
 final class FileExplorerHeaderView: NSView {
     private let iconView = NSImageView()
     private let pathLabel = NSTextField(labelWithString: "")
+    private var displayPath = ""
+    private var quickSearchQuery: String?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -498,9 +503,6 @@ final class FileExplorerHeaderView: NSView {
 
     private func setupViews() {
         iconView.translatesAutoresizingMaskIntoConstraints = false
-        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
-        iconView.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: nil)?
-            .withSymbolConfiguration(config)
         iconView.contentTintColor = .secondaryLabelColor
 
         pathLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -525,10 +527,30 @@ final class FileExplorerHeaderView: NSView {
             pathLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             pathLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
         ])
+        applyHeaderState()
     }
 
     func update(displayPath: String) {
-        pathLabel.stringValue = displayPath
+        self.displayPath = displayPath
+        applyHeaderState()
+    }
+
+    func updateQuickSearch(query: String?) {
+        quickSearchQuery = query
+        applyHeaderState()
+    }
+
+    private func applyHeaderState() {
+        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+        if let quickSearchQuery {
+            iconView.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)?
+                .withSymbolConfiguration(config)
+            pathLabel.stringValue = "/" + quickSearchQuery
+        } else {
+            iconView.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: nil)?
+                .withSymbolConfiguration(config)
+            pathLabel.stringValue = displayPath
+        }
     }
 }
 
@@ -679,6 +701,9 @@ final class FileExplorerCellView: NSTableCellView {
 final class FileExplorerNSOutlineView: NSOutlineView {
     /// Leading margin applied to disclosure triangles and content.
     static let leadingMargin: CGFloat = 8
+    var onQuickSearchChanged: ((String?) -> Void)?
+    private var quickSearchActive = false
+    private var quickSearchQuery = ""
 
     override func keyDown(with event: NSEvent) {
         if let mode = RightSidebarMode.modeShortcut(for: event) {
@@ -689,7 +714,38 @@ final class FileExplorerNSOutlineView: NSOutlineView {
             )
             return
         }
+
+        if quickSearchActive, handleQuickSearchKey(event) {
+            return
+        }
+
+        if let delta = RightSidebarKeyboardNavigation.moveDelta(for: event) {
+            endQuickSearch()
+            moveSelection(by: delta)
+            return
+        }
+
+        if RightSidebarKeyboardNavigation.isPlainSlash(event) {
+            beginQuickSearch()
+            return
+        }
+
+        if RightSidebarKeyboardNavigation.isPlainPrintableText(event) {
+            return
+        }
         super.keyDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if quickSearchActive, handleQuickSearchKey(event) {
+            return true
+        }
+        if let delta = RightSidebarKeyboardNavigation.moveDelta(for: event) {
+            endQuickSearch()
+            moveSelection(by: delta)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -703,6 +759,7 @@ final class FileExplorerNSOutlineView: NSOutlineView {
     override func resignFirstResponder() -> Bool {
         let result = super.resignFirstResponder()
         if result {
+            endQuickSearch()
             redrawVisibleRows()
         }
         return result
@@ -744,6 +801,71 @@ final class FileExplorerNSOutlineView: NSOutlineView {
         guard visibleRows.location < upperBound else { return }
         for row in visibleRows.location..<upperBound {
             rowView(atRow: row, makeIfNecessary: false)?.needsDisplay = true
+        }
+    }
+
+    private func moveSelection(by delta: Int) {
+        guard numberOfRows > 0 else { return }
+        let currentRow = selectedRow >= 0 ? selectedRow : (delta >= 0 ? -1 : numberOfRows)
+        let targetRow = min(max(currentRow + delta, 0), numberOfRows - 1)
+        guard targetRow >= 0, targetRow < numberOfRows else { return }
+        selectRowIndexes(IndexSet(integer: targetRow), byExtendingSelection: false)
+        scrollRowToVisible(targetRow)
+    }
+
+    private func beginQuickSearch() {
+        quickSearchActive = true
+        quickSearchQuery = ""
+        onQuickSearchChanged?(quickSearchQuery)
+    }
+
+    private func endQuickSearch() {
+        guard quickSearchActive || !quickSearchQuery.isEmpty else { return }
+        quickSearchActive = false
+        quickSearchQuery = ""
+        onQuickSearchChanged?(nil)
+    }
+
+    private func handleQuickSearchKey(_ event: NSEvent) -> Bool {
+        if event.keyCode == 53 {
+            endQuickSearch()
+            return true
+        }
+        if event.keyCode == 36 || event.keyCode == 76 {
+            endQuickSearch()
+            return true
+        }
+        if event.keyCode == 51 {
+            if !quickSearchQuery.isEmpty {
+                quickSearchQuery.removeLast()
+                onQuickSearchChanged?(quickSearchQuery)
+                selectBestQuickSearchMatch()
+            }
+            return true
+        }
+        guard RightSidebarKeyboardNavigation.isPlainPrintableText(event) else {
+            return false
+        }
+        guard let text = event.charactersIgnoringModifiers, !text.isEmpty else {
+            return true
+        }
+        quickSearchQuery += text
+        onQuickSearchChanged?(quickSearchQuery)
+        selectBestQuickSearchMatch()
+        return true
+    }
+
+    private func selectBestQuickSearchMatch() {
+        let query = quickSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty, numberOfRows > 0 else { return }
+        let lowerQuery = query.lowercased()
+        for row in 0..<numberOfRows {
+            guard let node = item(atRow: row) as? FileExplorerNode else { continue }
+            if node.name.lowercased().contains(lowerQuery) {
+                selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                scrollRowToVisible(row)
+                return
+            }
         }
     }
 }

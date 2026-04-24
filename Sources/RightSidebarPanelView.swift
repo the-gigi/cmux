@@ -50,6 +50,53 @@ extension RightSidebarMode {
     }
 }
 
+enum RightSidebarKeyboardNavigation {
+    static func moveDelta(for event: NSEvent) -> Int? {
+        guard event.type == .keyDown else { return nil }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let hasCommandOrOption = !flags.intersection([.command, .option]).isEmpty
+        if flags.contains(.control), !hasCommandOrOption {
+            switch event.keyCode {
+            case 45: return 1   // Ctrl+N
+            case 35: return -1  // Ctrl+P
+            default: break
+            }
+        }
+
+        guard flags.intersection([.command, .control, .option]).isEmpty else {
+            return nil
+        }
+        switch event.keyCode {
+        case 38, 125: return 1   // J or Down
+        case 40, 126: return -1  // K or Up
+        default: return nil
+        }
+    }
+
+    static func isPlainSlash(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown else { return false }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags.intersection([.command, .control, .option]).isEmpty else {
+            return false
+        }
+        return event.keyCode == 44
+    }
+
+    static func isPlainPrintableText(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown else { return false }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags.intersection([.command, .control, .option]).isEmpty else {
+            return false
+        }
+        guard let text = event.charactersIgnoringModifiers, !text.isEmpty else {
+            return false
+        }
+        return text.unicodeScalars.allSatisfy {
+            !CharacterSet.controlCharacters.contains($0)
+        }
+    }
+}
+
 /// Right sidebar root view. Hosts a segmented mode picker plus the active panel.
 struct RightSidebarPanelView: View {
     @ObservedObject var fileExplorerStore: FileExplorerStore

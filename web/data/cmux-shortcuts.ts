@@ -70,6 +70,12 @@ export const shortcutCategories: ShortcutCategory[] = [
         description: { en: "Switch Files / Sessions / Feed", ja: "ファイル / セッション / フィードを切り替え" },
         note: { en: "when the right sidebar is focused", ja: "右サイドバーにフォーカス中" },
       },
+      {
+        id: "navigateRightSidebarRows",
+        combos: [["J / K"], ["⌃", "N / P"]],
+        description: { en: "Navigate focused sidebar rows", ja: "フォーカス中のサイドバー行を移動" },
+        note: { en: "Files search starts with /", ja: "ファイル検索は / で開始" },
+      },
       { id: "closeWorkspace", combos: [["⌘", "⇧", "W"]], description: { en: "Close workspace", ja: "ワークスペースを閉じる" } },
     ],
   },

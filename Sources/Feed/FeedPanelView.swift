@@ -723,6 +723,10 @@ final class FeedKeyboardFocusView: NSView {
             onEscape?()
             return true
         }
+        if let delta = RightSidebarKeyboardNavigation.moveDelta(for: event) {
+            onMoveSelection?(delta)
+            return true
+        }
         return super.performKeyEquivalent(with: event)
     }
 
@@ -743,6 +747,11 @@ final class FeedKeyboardFocusView: NSView {
             return
         }
 
+        if let delta = RightSidebarKeyboardNavigation.moveDelta(for: event) {
+            onMoveSelection?(delta)
+            return
+        }
+
         let normalizedFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let hasShortcutModifier = !normalizedFlags.intersection([.command, .control, .option]).isEmpty
         guard !hasShortcutModifier else {
@@ -751,12 +760,6 @@ final class FeedKeyboardFocusView: NSView {
         }
 
         switch event.keyCode {
-        case 38, 125:
-            onMoveSelection?(1)
-            return
-        case 40, 126:
-            onMoveSelection?(-1)
-            return
         case 36, 76:
             onActivateSelection?()
             return
@@ -765,16 +768,6 @@ final class FeedKeyboardFocusView: NSView {
             return
         default:
             break
-        }
-
-        let key = event.charactersIgnoringModifiers?.lowercased()
-        if key == "j" {
-            onMoveSelection?(1)
-            return
-        }
-        if key == "k" {
-            onMoveSelection?(-1)
-            return
         }
 
         if let characters = event.charactersIgnoringModifiers, !characters.isEmpty {
