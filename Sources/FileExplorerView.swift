@@ -3,50 +3,14 @@ import Bonsplit
 import Combine
 import SwiftUI
 
+#if DEBUG
+private func fileExplorerDebugResponder(_ responder: NSResponder?) -> String {
+    guard let responder else { return "nil" }
+    return String(describing: type(of: responder))
+}
+#endif
+
 // MARK: - File Explorer Panel (single NSViewRepresentable)
-
-struct FileExplorerFocusRequest: Equatable {
-    let generation: Int
-    let windowNumber: Int?
-}
-
-enum FileExplorerFocusRequestCenter {
-    static let notificationName = Notification.Name("cmux.fileExplorerFocusRequested")
-
-    private static var generation = 0
-    private static var latestRequest: FileExplorerFocusRequest?
-
-    static func requestFocus(in window: NSWindow?) {
-        generation &+= 1
-        let request = FileExplorerFocusRequest(
-            generation: generation,
-            windowNumber: window?.windowNumber
-        )
-        latestRequest = request
-
-        var userInfo: [AnyHashable: Any] = ["generation": request.generation]
-        if let windowNumber = request.windowNumber {
-            userInfo["windowNumber"] = windowNumber
-        }
-        NotificationCenter.default.post(name: notificationName, object: nil, userInfo: userInfo)
-    }
-
-    static func request(from notification: Notification) -> FileExplorerFocusRequest? {
-        guard let generation = notification.userInfo?["generation"] as? Int else { return nil }
-        return FileExplorerFocusRequest(
-            generation: generation,
-            windowNumber: notification.userInfo?["windowNumber"] as? Int
-        )
-    }
-
-    static func latestRequest(for window: NSWindow?) -> FileExplorerFocusRequest? {
-        guard let latestRequest else { return nil }
-        if let targetWindowNumber = latestRequest.windowNumber {
-            guard window?.windowNumber == targetWindowNumber else { return nil }
-        }
-        return latestRequest
-    }
-}
 
 /// The entire file explorer panel as one AppKit view hierarchy.
 /// Contains the header bar (path + controls) and NSOutlineView, with no SwiftUI intermediaries.
@@ -69,7 +33,7 @@ struct FileExplorerPanelView: NSViewRepresentable {
         context.coordinator.state = state
         container.updateHeader(store: store)
         context.coordinator.reloadIfNeeded()
-        container.replayPendingFocusRequestIfNeeded()
+        container.registerWithKeyboardFocusCoordinatorIfNeeded()
     }
 
     // MARK: - Coordinator
@@ -347,19 +311,11 @@ struct FileExplorerPanelView: NSViewRepresentable {
 
 /// Pure AppKit container holding the header bar and outline view.
 final class FileExplorerContainerView: NSView {
-    private static let hosts = NSMapTable<NSWindow, FileExplorerContainerView>(
-        keyOptions: .weakMemory,
-        valueOptions: .weakMemory
-    )
-
     private let headerView: FileExplorerHeaderView
     private let scrollView: NSScrollView
     private let outlineView: FileExplorerNSOutlineView
     private let emptyLabel: NSTextField
     private let loadingIndicator: NSProgressIndicator
-    private var focusRequestObserver: NSObjectProtocol?
-    private var handledFocusRequestGeneration = 0
-    private var pendingFocusReplayScheduled = false
 
     init(coordinator: FileExplorerPanelView.Coordinator) {
         headerView = FileExplorerHeaderView()
@@ -447,23 +403,27 @@ final class FileExplorerContainerView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    deinit {
-        if let focusRequestObserver {
-            NotificationCenter.default.removeObserver(focusRequestObserver)
-        }
-    }
-
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let window else { return }
-        Self.hosts.setObject(self, forKey: window)
-        installFocusRequestObserverIfNeeded()
-        replayPendingFocusRequestIfNeeded()
+        AppDelegate.shared?.keyboardFocusCoordinator(for: window)?.registerFileExplorerHost(self)
+#if DEBUG
+        dlog(
+            "file.focus.host.attach win=\(window.windowNumber) canAccept=\(cmuxCanAcceptRightSidebarKeyboardFocus ? 1 : 0) " +
+            "rows=\(outlineView.numberOfRows) hidden=\(isHiddenOrHasHiddenAncestor ? 1 : 0) " +
+            "fr=\(fileExplorerDebugResponder(window.firstResponder))"
+        )
+#endif
+    }
+
+    func registerWithKeyboardFocusCoordinatorIfNeeded() {
+        guard let window else { return }
+        AppDelegate.shared?.keyboardFocusCoordinator(for: window)?.registerFileExplorerHost(self)
     }
 
     override func layout() {
         super.layout()
-        replayPendingFocusRequestIfNeeded()
+        registerWithKeyboardFocusCoordinatorIfNeeded()
     }
 
     func updateHeader(store: FileExplorerStore) {
@@ -480,70 +440,43 @@ final class FileExplorerContainerView: NSView {
         } else {
             loadingIndicator.stopAnimation(nil)
         }
-        replayPendingFocusRequestIfNeeded()
     }
 
     @discardableResult
     func focusOutline() -> Bool {
-        guard let window else { return false }
-        guard cmuxCanAcceptRightSidebarKeyboardFocus else { return false }
+#if DEBUG
+        dlog(
+            "file.focus.outline.begin win=\(window?.windowNumber ?? -1) " +
+            "canAccept=\(cmuxCanAcceptRightSidebarKeyboardFocus ? 1 : 0) " +
+            "hostHidden=\(isHiddenOrHasHiddenAncestor ? 1 : 0) scrollHidden=\(scrollView.isHidden ? 1 : 0) " +
+            "outlineHidden=\(outlineView.isHiddenOrHasHiddenAncestor ? 1 : 0) " +
+            "rows=\(outlineView.numberOfRows) selected=\(outlineView.selectedRow) " +
+            "fr=\(fileExplorerDebugResponder(window?.firstResponder))"
+        )
+#endif
+        guard let window else {
+#if DEBUG
+            dlog("file.focus.outline.end result=0 reason=noWindow")
+#endif
+            return false
+        }
         if outlineView.numberOfRows > 0, outlineView.selectedRow < 0 {
             outlineView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
             outlineView.scrollRowToVisible(0)
         }
-        return window.makeFirstResponder(outlineView)
+        let result = window.makeFirstResponder(outlineView)
+#if DEBUG
+        dlog(
+            "file.focus.outline.end result=\(result ? 1 : 0) win=\(window.windowNumber) " +
+            "rows=\(outlineView.numberOfRows) selected=\(outlineView.selectedRow) " +
+            "fr=\(fileExplorerDebugResponder(window.firstResponder))"
+        )
+#endif
+        return result
     }
 
-    @discardableResult
-    static func focus(in window: NSWindow?) -> Bool {
-        guard let window, let host = hosts.object(forKey: window) else { return false }
-        return host.focusOutline()
-    }
-
-    private func installFocusRequestObserverIfNeeded() {
-        guard focusRequestObserver == nil else { return }
-        focusRequestObserver = NotificationCenter.default.addObserver(
-            forName: FileExplorerFocusRequestCenter.notificationName,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let self,
-                  let request = FileExplorerFocusRequestCenter.request(from: notification),
-                  self.shouldHandleFocusRequest(request)
-            else { return }
-            self.handleFocusRequest(request)
-        }
-    }
-
-    fileprivate func replayPendingFocusRequestIfNeeded() {
-        guard let request = FileExplorerFocusRequestCenter.latestRequest(for: window),
-              handledFocusRequestGeneration != request.generation,
-              shouldHandleFocusRequest(request) else {
-            return
-        }
-        guard !pendingFocusReplayScheduled else { return }
-        pendingFocusReplayScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.pendingFocusReplayScheduled = false
-            guard self.handledFocusRequestGeneration != request.generation,
-                  self.shouldHandleFocusRequest(request) else { return }
-            self.handleFocusRequest(request)
-        }
-    }
-
-    private func handleFocusRequest(_ request: FileExplorerFocusRequest) {
-        guard handledFocusRequestGeneration != request.generation else { return }
-        if focusOutline() {
-            handledFocusRequestGeneration = request.generation
-        }
-    }
-
-    private func shouldHandleFocusRequest(_ request: FileExplorerFocusRequest) -> Bool {
-        if let windowNumber = request.windowNumber {
-            return window?.windowNumber == windowNumber
-        }
-        return window != nil
+    func ownsKeyboardFocus(_ responder: NSResponder) -> Bool {
+        responder === outlineView
     }
 }
 
@@ -748,11 +681,31 @@ final class FileExplorerNSOutlineView: NSOutlineView {
     static let leadingMargin: CGFloat = 8
 
     override func keyDown(with event: NSEvent) {
-        if let mode = RightSidebarFocusRequestCenter.modeShortcut(for: event) {
-            RightSidebarFocusRequestCenter.requestFocus(mode: mode, in: window)
+        if let mode = RightSidebarMode.modeShortcut(for: event) {
+            _ = AppDelegate.shared?.focusRightSidebarInActiveMainWindow(
+                mode: mode,
+                focusFirstItem: true,
+                preferredWindow: window
+            )
             return
         }
         super.keyDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            redrawVisibleRows()
+        }
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        if result {
+            redrawVisibleRows()
+        }
+        return result
     }
 
     override func expandItem(_ item: Any?, expandChildren: Bool) {
@@ -782,6 +735,17 @@ final class FileExplorerNSOutlineView: NSOutlineView {
         frame.size.width -= cellShift
         return frame
     }
+
+    private func redrawVisibleRows() {
+        setNeedsDisplay(bounds)
+        let visibleRows = rows(in: visibleRect)
+        guard visibleRows.location != NSNotFound else { return }
+        let upperBound = min(visibleRows.location + visibleRows.length, numberOfRows)
+        guard visibleRows.location < upperBound else { return }
+        for row in visibleRows.location..<upperBound {
+            rowView(atRow: row, makeIfNecessary: false)?.needsDisplay = true
+        }
+    }
 }
 
 // MARK: - Row View
@@ -790,21 +754,43 @@ final class FileExplorerRowView: NSTableRowView {
     override func drawSelection(in dirtyRect: NSRect) {
         guard isSelected else { return }
         let style = FileExplorerStyle.current
+        let focused = isKeyboardFocusActive
+        let inset = style.selectionInset
+        let insetRect = bounds.insetBy(dx: inset, dy: inset > 0 ? 1 : 0)
+        let path = NSBezierPath(
+            roundedRect: insetRect,
+            xRadius: style.selectionRadius,
+            yRadius: style.selectionRadius
+        )
 
-        if style.usesBorderSelection {
-            let borderRect = NSRect(x: 0, y: 1, width: 2, height: bounds.height - 2)
-            style.selectionColor.setFill()
-            borderRect.fill()
-        } else {
-            let inset = style.selectionInset
-            let insetRect = bounds.insetBy(dx: inset, dy: inset > 0 ? 1 : 0)
-            let path = NSBezierPath(roundedRect: insetRect, xRadius: style.selectionRadius, yRadius: style.selectionRadius)
-            style.selectionColor.setFill()
-            path.fill()
+        selectionFillColor(isFocused: focused).setFill()
+        path.fill()
+    }
+
+    private var isKeyboardFocusActive: Bool {
+        guard let outlineView = enclosingOutlineView else { return false }
+        return window?.isKeyWindow == true && window?.firstResponder === outlineView
+    }
+
+    private var enclosingOutlineView: NSOutlineView? {
+        var view = superview
+        while let candidate = view {
+            if let outlineView = candidate as? NSOutlineView {
+                return outlineView
+            }
+            view = candidate.superview
         }
+        return nil
+    }
+
+    private func selectionFillColor(isFocused: Bool) -> NSColor {
+        if isFocused {
+            return .controlAccentColor.withAlphaComponent(0.20)
+        }
+        return .labelColor.withAlphaComponent(0.08)
     }
 
     override var interiorBackgroundStyle: NSView.BackgroundStyle {
-        isSelected ? .emphasized : .normal
+        isSelected && isKeyboardFocusActive ? .emphasized : .normal
     }
 }

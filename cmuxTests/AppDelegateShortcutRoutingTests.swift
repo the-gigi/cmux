@@ -923,6 +923,7 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
         let orphanManager = TabManager()
         let orphanSidebarState = SidebarState()
         let orphanSidebarSelectionState = SidebarSelectionState()
+        let orphanFileExplorerState = FileExplorerState()
 
         autoreleasepool {
             var orphanWindow: NSWindow? = NSWindow(
@@ -937,7 +938,8 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
                 windowId: orphanWindowId,
                 tabManager: orphanManager,
                 sidebarState: orphanSidebarState,
-                sidebarSelectionState: orphanSidebarSelectionState
+                sidebarSelectionState: orphanSidebarSelectionState,
+                fileExplorerState: orphanFileExplorerState
             )
             orphanWindow = nil
         }
@@ -966,6 +968,7 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
         let orphanManager = TabManager()
         let orphanSidebarState = SidebarState()
         let orphanSidebarSelectionState = SidebarSelectionState()
+        let orphanFileExplorerState = FileExplorerState()
 
         autoreleasepool {
             var orphanWindow: NSWindow? = NSWindow(
@@ -980,7 +983,8 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
                 windowId: orphanWindowId,
                 tabManager: orphanManager,
                 sidebarState: orphanSidebarState,
-                sidebarSelectionState: orphanSidebarSelectionState
+                sidebarSelectionState: orphanSidebarSelectionState,
+                fileExplorerState: orphanFileExplorerState
             )
             orphanWindow = nil
         }
@@ -4559,6 +4563,53 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
 #if DEBUG
         XCTAssertGreaterThan(forwardedKeyDownCount, 0, "Typing repair should forward the keyDown into Ghostty")
 #endif
+    }
+
+    func testTerminalFirstResponderGuardBlocksMoveFocusWhenRightSidebarOwnsKeyboardFocus() {
+        guard let appDelegate = AppDelegate.shared else {
+            XCTFail("Expected AppDelegate.shared")
+            return
+        }
+
+        let windowId = appDelegate.createMainWindow()
+        defer { closeWindow(withId: windowId) }
+
+        guard let window = window(withId: windowId),
+              let contentView = window.contentView,
+              let manager = appDelegate.tabManagerFor(windowId: windowId),
+              let workspace = manager.selectedWorkspace,
+              let panelId = workspace.focusedPanelId,
+              let terminalPanel = workspace.terminalPanel(for: panelId),
+              let terminalView = surfaceView(in: terminalPanel.hostedView) else {
+            XCTFail("Expected focused terminal surface")
+            return
+        }
+
+        let strayView = FocusableTestView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        contentView.addSubview(strayView)
+        defer { strayView.removeFromSuperview() }
+
+        window.makeKeyAndOrderFront(nil)
+        window.displayIfNeeded()
+        terminalPanel.hostedView.setVisibleInUI(true)
+        terminalPanel.hostedView.setActive(true)
+
+        XCTAssertTrue(window.makeFirstResponder(strayView), "Expected a foreign responder before blocking terminal focus")
+        appDelegate.noteRightSidebarKeyboardFocusIntent(mode: .feed, in: window)
+
+        XCTAssertFalse(
+            window.makeFirstResponder(terminalView),
+            "Coordinator-owned sidebar focus should block direct terminal first-responder requests"
+        )
+
+        terminalPanel.hostedView.moveFocus()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+
+        XCTAssertTrue(window.firstResponder === strayView, "Blocked terminal moveFocus should keep the existing responder intact")
+        XCTAssertFalse(
+            terminalPanel.hostedView.isSurfaceViewFirstResponder(),
+            "Blocked terminal moveFocus must not leave the Ghostty surface as first responder"
+        )
     }
 
     func testWindowSendEventRepairsFocusedTerminalSearchTypingAfterResponderDrift() {

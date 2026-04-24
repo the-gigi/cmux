@@ -155,45 +155,6 @@ final class FeedPanelViewModel: ObservableObject {
     }
 }
 
-struct FeedFocusRequest: Equatable {
-    let generation: Int
-    let windowNumber: Int?
-}
-
-enum FeedFocusRequestCenter {
-    static let notificationName = Notification.Name("cmux.feedFocusFirstItemRequested")
-
-    private static var generation = 0
-    private static var latestRequest: FeedFocusRequest?
-
-    static func requestFirstItemFocus(in window: NSWindow?) {
-        generation &+= 1
-        let request = FeedFocusRequest(generation: generation, windowNumber: window?.windowNumber)
-        latestRequest = request
-        var userInfo: [AnyHashable: Any] = ["generation": request.generation]
-        if let windowNumber = request.windowNumber {
-            userInfo["windowNumber"] = windowNumber
-        }
-        NotificationCenter.default.post(name: notificationName, object: nil, userInfo: userInfo)
-    }
-
-    static func request(from notification: Notification) -> FeedFocusRequest? {
-        guard let generation = notification.userInfo?["generation"] as? Int else { return nil }
-        return FeedFocusRequest(
-            generation: generation,
-            windowNumber: notification.userInfo?["windowNumber"] as? Int
-        )
-    }
-
-    static func latestRequest(for window: NSWindow?) -> FeedFocusRequest? {
-        guard let latestRequest else { return nil }
-        if let targetWindowNumber = latestRequest.windowNumber {
-            guard window?.windowNumber == targetWindowNumber else { return nil }
-        }
-        return latestRequest
-    }
-}
-
 /// Feed content surface. Isolated so the outer panel's `@State`
 /// changes don't invalidate rows unnecessarily. Receives items as a
 /// plain value so its body never touches the live store, the parent
@@ -202,11 +163,9 @@ private struct FeedListView: View {
     let filter: FeedPanelView.Filter
     let items: [WorkstreamItem]
 
-    @State private var selectedItemId: UUID?
-    @State private var feedFocusActive = false
+    @State private var focusSnapshot = FeedFocusSnapshot()
     @State private var scrollRequest: FeedScrollRequest?
     @State private var scrollRequestSequence = 0
-    @State private var handledFocusRequestGeneration = 0
 
     var body: some View {
         let snapshots = visibleSnapshots(items)
@@ -229,8 +188,11 @@ private struct FeedListView: View {
             .background(
                 FeedKeyboardFocusBridge(
                     onEscape: {
-                        feedFocusActive = false
-                        NSApp.keyWindow?.makeFirstResponder(nil)
+                        let window = activeFeedWindow()
+                        if AppDelegate.shared?.keyboardFocusCoordinator(for: window)?.focusTerminal() != true {
+                            window?.makeFirstResponder(nil)
+                        }
+                        syncFeedFocusSnapshot(window: window)
                     },
                     onMoveSelection: { delta in
                         moveSelection(in: snapshots, delta: delta)
@@ -238,11 +200,18 @@ private struct FeedListView: View {
                     onActivateSelection: {
                         activateSelection(in: snapshots, actions: rowActions)
                     },
-                    onFocusFirstItemRequested: { generation in
-                        handleFocusFirstItemRequest(generation, snapshots: snapshots)
+                    onFocusFirstItemRequested: {
+                        focusFirstVisibleItem(in: snapshots, focusHost: false)
                     },
                     onFocusChanged: { focused in
-                        feedFocusActive = focused
+                        let window = activeFeedWindow()
+                        if !focused {
+                            AppDelegate.shared?.syncKeyboardFocusAfterFirstResponderChange(in: window)
+                        }
+                        syncFeedFocusSnapshot(window: window)
+                    },
+                    onFocusSnapshotChanged: { snapshot in
+                        focusSnapshot = snapshot
                     }
                 )
                 .frame(width: 1, height: 1)
@@ -357,7 +326,8 @@ private struct FeedListView: View {
         FeedRowSurface(
             snapshot: snapshot,
             actions: actions,
-            isSelected: feedFocusActive && selectedItemId == snapshot.id,
+            isSelected: focusSnapshot.selectedItemId == snapshot.id,
+            isFocusActive: focusSnapshot.isKeyboardActive && focusSnapshot.selectedItemId == snapshot.id,
             showsDivider: showsDivider,
             onPressSelect: {
                 selectRow(snapshot.id, focusFeed: true)
@@ -366,9 +336,7 @@ private struct FeedListView: View {
                 selectRow(snapshot.id, focusFeed: false)
             },
             onControlBlur: {
-                if selectedItemId == snapshot.id {
-                    feedFocusActive = false
-                }
+                syncFeedFocusSnapshot()
             },
             onActivate: {
                 selectRow(snapshot.id, focusFeed: true)
@@ -434,9 +402,9 @@ private struct FeedListView: View {
     }
 
     private func selectRow(_ id: UUID, focusFeed: Bool) {
-        let selectionChanged = selectedItemId != id
+        let selectionChanged = focusSnapshot.selectedItemId != id
+        let window = activeFeedWindow()
 #if DEBUG
-        let window = NSApp.keyWindow ?? NSApp.mainWindow
         dlog(
             "feed.focus.select begin id=\(id.uuidString.prefix(5)) " +
             "focusFeed=\(focusFeed ? 1 : 0) selectionChanged=\(selectionChanged ? 1 : 0) " +
@@ -446,54 +414,84 @@ private struct FeedListView: View {
         if focusFeed || selectionChanged {
             FeedInlineNativeTextView.blurActiveEditor()
         }
-        if selectionChanged || selectedItemId == nil {
-            selectedItemId = id
+        let optimisticSnapshot = FeedFocusSnapshot(selectedItemId: id, isKeyboardActive: true)
+        focusSnapshot = optimisticSnapshot
+        if let controller = AppDelegate.shared?.keyboardFocusCoordinator(for: window) {
+            _ = controller.selectFeedItem(id, focusFeed: focusFeed)
+            focusSnapshot = controller.feedFocusSnapshot()
+        } else {
+            focusSnapshot = optimisticSnapshot
         }
-        var focusedFeed = false
-        if focusFeed {
-            focusedFeed = FeedKeyboardFocusView.focusHostInActiveWindow()
-        }
-        feedFocusActive = focusFeed ? focusedFeed : true
 #if DEBUG
-        let afterWindow = NSApp.keyWindow ?? NSApp.mainWindow
+        let afterWindow = activeFeedWindow()
         dlog(
             "feed.focus.select end id=\(id.uuidString.prefix(5)) " +
-            "focusFeed=\(focusFeed ? 1 : 0) focusedFeed=\(focusedFeed ? 1 : 0) " +
-            "selected=\(selectedItemId == id ? 1 : 0) " +
+            "focusFeed=\(focusFeed ? 1 : 0) selected=\(focusSnapshot.selectedItemId == id ? 1 : 0) " +
+            "active=\(focusSnapshot.isKeyboardActive ? 1 : 0) " +
             "frAfter=\(feedDebugResponderSummary(afterWindow?.firstResponder))"
         )
 #endif
     }
 
-    private func handleFocusFirstItemRequest(_ generation: Int, snapshots: [FeedItemSnapshot]) {
-        guard handledFocusRequestGeneration != generation else { return }
-        handledFocusRequestGeneration = generation
-        focusFirstVisibleItem(in: snapshots)
-    }
-
-    private func focusFirstVisibleItem(in snapshots: [FeedItemSnapshot]) {
-        guard let first = snapshots.first else {
-            feedFocusActive = FeedKeyboardFocusView.focusHostInActiveWindow()
+    private func focusFirstVisibleItem(in snapshots: [FeedItemSnapshot], focusHost: Bool = true) {
+        guard let targetId = preferredFocusItemId(in: snapshots) else {
+            let window = activeFeedWindow()
+            if focusHost {
+                _ = AppDelegate.shared?.focusRightSidebarInActiveMainWindow(
+                    mode: .feed,
+                    focusFirstItem: false,
+                    preferredWindow: window
+                )
+            } else {
+                AppDelegate.shared?.noteRightSidebarKeyboardFocusIntent(
+                    mode: .feed,
+                    in: window
+                )
+            }
+            syncFeedFocusSnapshot(window: window)
             return
         }
-        selectRow(first.id, focusFeed: true)
+        selectRow(targetId, focusFeed: focusHost)
         scrollRequestSequence &+= 1
-        scrollRequest = FeedScrollRequest(id: first.id, sequence: scrollRequestSequence)
+        scrollRequest = FeedScrollRequest(id: targetId, sequence: scrollRequestSequence)
+    }
+
+    private func preferredFocusItemId(in snapshots: [FeedItemSnapshot]) -> UUID? {
+        let ids = snapshots.map(\.id)
+        let window = activeFeedWindow()
+        if let controllerSelectedId = AppDelegate.shared?
+            .keyboardFocusCoordinator(for: window)?
+            .feedFocusSnapshot()
+            .selectedItemId,
+            ids.contains(controllerSelectedId)
+        {
+            return controllerSelectedId
+        }
+        if let selectedItemId = focusSnapshot.selectedItemId,
+           ids.contains(selectedItemId) {
+            return selectedItemId
+        }
+        return ids.first
     }
 
     private func moveSelection(in snapshots: [FeedItemSnapshot], delta: Int) {
         guard !snapshots.isEmpty else { return }
         let ids = snapshots.map(\.id)
         let targetIndex: Int
-        if let selectedItemId,
+        if let selectedItemId = focusSnapshot.selectedItemId,
            let currentIndex = ids.firstIndex(of: selectedItemId) {
             targetIndex = min(max(currentIndex + delta, 0), ids.count - 1)
         } else {
             targetIndex = delta >= 0 ? 0 : ids.count - 1
         }
         let targetId = ids[targetIndex]
-        selectedItemId = targetId
-        feedFocusActive = true
+        let window = activeFeedWindow()
+        if let controller = AppDelegate.shared?.keyboardFocusCoordinator(for: window) {
+            _ = controller.selectFeedItem(targetId, focusFeed: false)
+            focusSnapshot = controller.feedFocusSnapshot()
+        } else {
+            focusSnapshot = FeedFocusSnapshot(selectedItemId: targetId, isKeyboardActive: true)
+        }
         scrollRequestSequence &+= 1
         scrollRequest = FeedScrollRequest(id: targetId, sequence: scrollRequestSequence)
 #if DEBUG
@@ -510,7 +508,7 @@ private struct FeedListView: View {
     ) {
         guard !snapshots.isEmpty else { return }
         let snapshot: FeedItemSnapshot
-        if let selectedItemId,
+        if let selectedItemId = focusSnapshot.selectedItemId,
            let matched = snapshots.first(where: { $0.id == selectedItemId }) {
             snapshot = matched
         } else {
@@ -518,6 +516,18 @@ private struct FeedListView: View {
         }
         selectRow(snapshot.id, focusFeed: true)
         actions.jump(snapshot.workstreamId)
+    }
+
+    private func activeFeedWindow() -> NSWindow? {
+        NSApp.keyWindow ?? NSApp.mainWindow
+    }
+
+    private func syncFeedFocusSnapshot(window: NSWindow? = nil) {
+        let targetWindow = window ?? activeFeedWindow()
+        guard let controller = AppDelegate.shared?.keyboardFocusCoordinator(for: targetWindow) else {
+            return
+        }
+        focusSnapshot = controller.feedFocusSnapshot()
     }
 
     private var rowSeparator: some View {
@@ -559,6 +569,7 @@ private struct FeedRowSurface: View {
     let snapshot: FeedItemSnapshot
     let actions: FeedRowActions
     let isSelected: Bool
+    let isFocusActive: Bool
     let showsDivider: Bool
     let onPressSelect: () -> Void
     let onControlFocus: () -> Void
@@ -572,7 +583,7 @@ private struct FeedRowSurface: View {
             FeedItemRow(
                 snapshot: snapshot,
                 actions: actions,
-                isSelected: isSelected,
+                isSelected: isFocusActive,
                 onPressSelect: onPressSelect,
                 onControlFocus: onControlFocus,
                 onControlBlur: onControlBlur,
@@ -599,6 +610,9 @@ private struct FeedRowSurface: View {
 
     private var rowBackgroundFill: Color {
         if isSelected {
+            guard isFocusActive else {
+                return Color.primary.opacity(0.07)
+            }
             if snapshot.status.isPending {
                 return tint.opacity(0.14)
             }
@@ -638,8 +652,9 @@ private struct FeedKeyboardFocusBridge: NSViewRepresentable {
     let onEscape: () -> Void
     let onMoveSelection: (Int) -> Void
     let onActivateSelection: () -> Void
-    let onFocusFirstItemRequested: (Int) -> Void
+    let onFocusFirstItemRequested: () -> Void
     let onFocusChanged: (Bool) -> Void
+    let onFocusSnapshotChanged: (FeedFocusSnapshot) -> Void
 
     func makeNSView(context: Context) -> FeedKeyboardFocusView {
         let view = FeedKeyboardFocusView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
@@ -648,6 +663,7 @@ private struct FeedKeyboardFocusBridge: NSViewRepresentable {
         view.onActivateSelection = onActivateSelection
         view.onFocusFirstItemRequested = onFocusFirstItemRequested
         view.onFocusChanged = onFocusChanged
+        view.onFocusSnapshotChanged = onFocusSnapshotChanged
         return view
     }
 
@@ -657,74 +673,39 @@ private struct FeedKeyboardFocusBridge: NSViewRepresentable {
         nsView.onActivateSelection = onActivateSelection
         nsView.onFocusFirstItemRequested = onFocusFirstItemRequested
         nsView.onFocusChanged = onFocusChanged
-        nsView.replayPendingFocusRequestIfNeeded()
+        nsView.onFocusSnapshotChanged = onFocusSnapshotChanged
+        nsView.registerWithKeyboardFocusCoordinatorIfNeeded()
     }
 }
 
 final class FeedKeyboardFocusView: NSView {
-    private static let hosts = NSMapTable<NSWindow, FeedKeyboardFocusView>(
-        keyOptions: .weakMemory,
-        valueOptions: .weakMemory
-    )
-
     var onEscape: (() -> Void)?
     var onMoveSelection: ((Int) -> Void)?
     var onActivateSelection: (() -> Void)?
-    var onFocusFirstItemRequested: ((Int) -> Void)?
+    var onFocusFirstItemRequested: (() -> Void)?
     var onFocusChanged: ((Bool) -> Void)?
-    private var focusRequestObserver: NSObjectProtocol?
+    var onFocusSnapshotChanged: ((FeedFocusSnapshot) -> Void)?
 
     override var acceptsFirstResponder: Bool { true }
     override var canBecomeKeyView: Bool { true }
 
-    deinit {
-        if let focusRequestObserver {
-            NotificationCenter.default.removeObserver(focusRequestObserver)
-        }
-    }
-
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let window else { return }
-        Self.hosts.setObject(self, forKey: window)
-        installFocusRequestObserverIfNeeded()
-        replayPendingFocusRequestIfNeeded()
+        AppDelegate.shared?.keyboardFocusCoordinator(for: window)?.registerFeedHost(self)
 #if DEBUG
         dlog("feed.focus.host attach window=\(ObjectIdentifier(window))")
 #endif
     }
 
-    private func installFocusRequestObserverIfNeeded() {
-        guard focusRequestObserver == nil else { return }
-        focusRequestObserver = NotificationCenter.default.addObserver(
-            forName: FeedFocusRequestCenter.notificationName,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let self,
-                  let request = FeedFocusRequestCenter.request(from: notification),
-                  self.shouldHandleFocusRequest(request)
-            else { return }
-            self.onFocusFirstItemRequested?(request.generation)
-        }
+    func registerWithKeyboardFocusCoordinatorIfNeeded() {
+        guard let window else { return }
+        AppDelegate.shared?.keyboardFocusCoordinator(for: window)?.registerFeedHost(self)
     }
 
-    fileprivate func replayPendingFocusRequestIfNeeded() {
-        guard let request = FeedFocusRequestCenter.latestRequest(for: window),
-              shouldHandleFocusRequest(request) else {
-            return
-        }
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.shouldHandleFocusRequest(request) else { return }
-            self.onFocusFirstItemRequested?(request.generation)
-        }
-    }
-
-    private func shouldHandleFocusRequest(_ request: FeedFocusRequest) -> Bool {
-        if let windowNumber = request.windowNumber {
-            return window?.windowNumber == windowNumber
-        }
-        return window != nil
+    override func layout() {
+        super.layout()
+        registerWithKeyboardFocusCoordinatorIfNeeded()
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -749,8 +730,12 @@ final class FeedKeyboardFocusView: NSView {
             "fr=\(feedDebugResponderSummary(window?.firstResponder))"
         )
 #endif
-        if let mode = RightSidebarFocusRequestCenter.modeShortcut(for: event) {
-            RightSidebarFocusRequestCenter.requestFocus(mode: mode, in: window)
+        if let mode = RightSidebarMode.modeShortcut(for: event) {
+            _ = AppDelegate.shared?.focusRightSidebarInActiveMainWindow(
+                mode: mode,
+                focusFirstItem: true,
+                preferredWindow: window
+            )
             return
         }
 
@@ -824,16 +809,14 @@ final class FeedKeyboardFocusView: NSView {
         return result
     }
 
-    static func focusHostInActiveWindow() -> Bool {
-        let targetWindow = NSApp.keyWindow ?? NSApp.mainWindow
-        return focusHost(in: targetWindow)
+    func focusFirstItemFromCoordinator() {
+        onFocusFirstItemRequested?()
     }
 
-    static func focusHost(in window: NSWindow?) -> Bool {
-        guard let window, let host = hosts.object(forKey: window) else { return false }
-        guard host.cmuxCanAcceptRightSidebarKeyboardFocus else { return false }
+    func focusHostFromCoordinator() -> Bool {
+        guard let window else { return false }
         let before = feedDebugResponderSummary(window.firstResponder)
-        let result = window.makeFirstResponder(host)
+        let result = window.makeFirstResponder(self)
 #if DEBUG
         dlog(
             "feed.focus.host request result=\(result ? 1 : 0) " +
@@ -842,6 +825,14 @@ final class FeedKeyboardFocusView: NSView {
         )
 #endif
         return result
+    }
+
+    func applyFocusSnapshotFromController(_ snapshot: FeedFocusSnapshot) {
+        onFocusSnapshotChanged?(snapshot)
+    }
+
+    func ownsKeyboardFocus(_ responder: NSResponder) -> Bool {
+        responder === self || responder is FeedKeyboardFocusResponder
     }
 }
 
@@ -3026,7 +3017,7 @@ private final class FeedInlinePassthroughLabel: NSTextField {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-private final class FeedInlineNativeTextView: NSTextView {
+private final class FeedInlineNativeTextView: NSTextView, FeedKeyboardFocusResponder {
     private static weak var activeEditor: FeedInlineNativeTextView?
 
     var onActivate: (() -> Void)?
@@ -3303,8 +3294,14 @@ private struct FeedInlineTextField: NSViewRepresentable {
 #if DEBUG
             dlog("feed.editor.blurField frBefore=\(feedDebugResponderSummary(window.firstResponder))")
 #endif
-            if !FeedKeyboardFocusView.focusHost(in: window) {
-                window.makeFirstResponder(nil)
+            Task { @MainActor in
+                if AppDelegate.shared?.focusRightSidebarInActiveMainWindow(
+                    mode: .feed,
+                    focusFirstItem: false,
+                    preferredWindow: window
+                ) != true {
+                    window.makeFirstResponder(nil)
+                }
             }
         }
 
@@ -3388,12 +3385,18 @@ private struct FeedInlineTextField: NSViewRepresentable {
             }
         } else if (!isFocused || !isEnabled), isFirstResponder, context.coordinator.pendingFocusRequest != false {
             context.coordinator.pendingFocusRequest = false
-            DispatchQueue.main.async { [weak nsView, weak coordinator = context.coordinator] in
+            Task { @MainActor [weak nsView, weak coordinator = context.coordinator] in
                 coordinator?.pendingFocusRequest = nil
                 guard let nsView, let window = nsView.window else { return }
                 let stillFocused = window.firstResponder === nsView.textView
                 guard stillFocused else { return }
-                window.makeFirstResponder(nil)
+                if AppDelegate.shared?.focusRightSidebarInActiveMainWindow(
+                    mode: .feed,
+                    focusFirstItem: false,
+                    preferredWindow: window
+                ) != true {
+                    window.makeFirstResponder(nil)
+                }
             }
         }
     }

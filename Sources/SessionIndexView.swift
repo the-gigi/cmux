@@ -3,49 +3,6 @@ import Bonsplit
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct SessionIndexFocusRequest: Equatable {
-    let generation: Int
-    let windowNumber: Int?
-}
-
-enum SessionIndexFocusRequestCenter {
-    static let notificationName = Notification.Name("cmux.sessionIndexFocusRequested")
-
-    private static var generation = 0
-    private static var latestRequest: SessionIndexFocusRequest?
-
-    static func requestFocus(in window: NSWindow?) {
-        generation &+= 1
-        let request = SessionIndexFocusRequest(
-            generation: generation,
-            windowNumber: window?.windowNumber
-        )
-        latestRequest = request
-
-        var userInfo: [AnyHashable: Any] = ["generation": request.generation]
-        if let windowNumber = request.windowNumber {
-            userInfo["windowNumber"] = windowNumber
-        }
-        NotificationCenter.default.post(name: notificationName, object: nil, userInfo: userInfo)
-    }
-
-    static func request(from notification: Notification) -> SessionIndexFocusRequest? {
-        guard let generation = notification.userInfo?["generation"] as? Int else { return nil }
-        return SessionIndexFocusRequest(
-            generation: generation,
-            windowNumber: notification.userInfo?["windowNumber"] as? Int
-        )
-    }
-
-    static func latestRequest(for window: NSWindow?) -> SessionIndexFocusRequest? {
-        guard let latestRequest else { return nil }
-        if let targetWindowNumber = latestRequest.windowNumber {
-            guard window?.windowNumber == targetWindowNumber else { return nil }
-        }
-        return latestRequest
-    }
-}
-
 private struct SessionIndexScrollRequest: Equatable {
     let id: SessionEntry.ID
     let sequence: Int
@@ -65,7 +22,6 @@ struct SessionIndexView: View {
     @State private var sessionFocusActive = false
     @State private var scrollRequest: SessionIndexScrollRequest?
     @State private var scrollRequestSequence = 0
-    @State private var handledFocusRequestGeneration = 0
     let onResume: ((SessionEntry) -> Void)?
 
     /// Rows shown per section before "Show more" is tapped.
@@ -109,7 +65,9 @@ struct SessionIndexView: View {
             SessionIndexKeyboardFocusBridge(
                 onEscape: {
                     sessionFocusActive = false
-                    NSApp.keyWindow?.makeFirstResponder(nil)
+                    if AppDelegate.shared?.keyboardFocusCoordinator(for: NSApp.keyWindow ?? NSApp.mainWindow)?.focusTerminal() != true {
+                        NSApp.keyWindow?.makeFirstResponder(nil)
+                    }
                 },
                 onMoveSelection: { delta in
                     moveSelection(in: focusEntries, delta: delta)
@@ -117,8 +75,8 @@ struct SessionIndexView: View {
                 onActivateSelection: {
                     activateSelection(in: focusEntries)
                 },
-                onFocusFirstItemRequested: { generation in
-                    handleFocusRequest(generation, entries: focusEntries)
+                onFocusFirstItemRequested: {
+                    focusFirstVisibleEntry(in: focusEntries, focusHost: false)
                 },
                 onFocusChanged: { focused in
                     sessionFocusActive = focused
@@ -302,7 +260,11 @@ struct SessionIndexView: View {
             sessionFocusActive = true
             return
         }
-        sessionFocusActive = SessionIndexKeyboardFocusView.focusHost(in: NSApp.keyWindow ?? NSApp.mainWindow)
+        sessionFocusActive = AppDelegate.shared?.focusRightSidebarInActiveMainWindow(
+            mode: .sessions,
+            focusFirstItem: false,
+            preferredWindow: NSApp.keyWindow ?? NSApp.mainWindow
+        ) == true
     }
 
     private func reconcileFocusedSelection(with ids: [SessionEntry.ID]) {
@@ -319,20 +281,31 @@ struct SessionIndexView: View {
         scrollRequest = SessionIndexScrollRequest(id: firstId, sequence: scrollRequestSequence)
     }
 
-    private func handleFocusRequest(_ generation: Int, entries: [SessionEntry]) {
-        guard handledFocusRequestGeneration != generation else { return }
-        handledFocusRequestGeneration = generation
-        focusFirstVisibleEntry(in: entries)
-    }
-
-    private func focusFirstVisibleEntry(in entries: [SessionEntry]) {
-        guard let first = entries.first else {
-            sessionFocusActive = SessionIndexKeyboardFocusView.focusHost(in: NSApp.keyWindow ?? NSApp.mainWindow)
+    private func focusFirstVisibleEntry(in entries: [SessionEntry], focusHost: Bool = true) {
+        guard let targetId = preferredFocusEntryId(in: entries) else {
+            sessionFocusActive = focusHost
+                ? AppDelegate.shared?.focusRightSidebarInActiveMainWindow(
+                    mode: .sessions,
+                    focusFirstItem: false,
+                    preferredWindow: NSApp.keyWindow ?? NSApp.mainWindow
+                ) == true
+                : true
             return
         }
-        selectEntry(first.id, focusSessions: true)
+        selectEntry(targetId, focusSessions: focusHost)
+        if !focusHost {
+            sessionFocusActive = true
+        }
         scrollRequestSequence &+= 1
-        scrollRequest = SessionIndexScrollRequest(id: first.id, sequence: scrollRequestSequence)
+        scrollRequest = SessionIndexScrollRequest(id: targetId, sequence: scrollRequestSequence)
+    }
+
+    private func preferredFocusEntryId(in entries: [SessionEntry]) -> SessionEntry.ID? {
+        if let selectedEntryId,
+           entries.contains(where: { $0.id == selectedEntryId }) {
+            return selectedEntryId
+        }
+        return entries.first?.id
     }
 
     private func moveSelection(in entries: [SessionEntry], delta: Int) {
@@ -725,9 +698,9 @@ private struct SessionRow: View, Equatable {
 
     private var selectionColor: Color {
         if isFocusActive {
-            return Color.accentColor.opacity(0.22)
+            return Color.accentColor.opacity(0.18)
         }
-        return Color.primary.opacity(0.08)
+        return Color.primary.opacity(0.07)
     }
 
     private var helpText: String {
@@ -752,7 +725,7 @@ private struct SessionIndexKeyboardFocusBridge: NSViewRepresentable {
     let onEscape: () -> Void
     let onMoveSelection: (Int) -> Void
     let onActivateSelection: () -> Void
-    let onFocusFirstItemRequested: (Int) -> Void
+    let onFocusFirstItemRequested: () -> Void
     let onFocusChanged: (Bool) -> Void
 
     func makeNSView(context: Context) -> SessionIndexKeyboardFocusView {
@@ -771,38 +744,34 @@ private struct SessionIndexKeyboardFocusBridge: NSViewRepresentable {
         nsView.onActivateSelection = onActivateSelection
         nsView.onFocusFirstItemRequested = onFocusFirstItemRequested
         nsView.onFocusChanged = onFocusChanged
-        nsView.replayPendingFocusRequestIfNeeded()
+        nsView.registerWithKeyboardFocusCoordinatorIfNeeded()
     }
 }
 
 final class SessionIndexKeyboardFocusView: NSView {
-    private static let hosts = NSMapTable<NSWindow, SessionIndexKeyboardFocusView>(
-        keyOptions: .weakMemory,
-        valueOptions: .weakMemory
-    )
-
     var onEscape: (() -> Void)?
     var onMoveSelection: ((Int) -> Void)?
     var onActivateSelection: (() -> Void)?
-    var onFocusFirstItemRequested: ((Int) -> Void)?
+    var onFocusFirstItemRequested: (() -> Void)?
     var onFocusChanged: ((Bool) -> Void)?
-    private var focusRequestObserver: NSObjectProtocol?
 
     override var acceptsFirstResponder: Bool { true }
     override var canBecomeKeyView: Bool { true }
 
-    deinit {
-        if let focusRequestObserver {
-            NotificationCenter.default.removeObserver(focusRequestObserver)
-        }
-    }
-
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let window else { return }
-        Self.hosts.setObject(self, forKey: window)
-        installFocusRequestObserverIfNeeded()
-        replayPendingFocusRequestIfNeeded()
+        AppDelegate.shared?.keyboardFocusCoordinator(for: window)?.registerSessionHost(self)
+    }
+
+    func registerWithKeyboardFocusCoordinatorIfNeeded() {
+        guard let window else { return }
+        AppDelegate.shared?.keyboardFocusCoordinator(for: window)?.registerSessionHost(self)
+    }
+
+    override func layout() {
+        super.layout()
+        registerWithKeyboardFocusCoordinatorIfNeeded()
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -814,8 +783,12 @@ final class SessionIndexKeyboardFocusView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if let mode = RightSidebarFocusRequestCenter.modeShortcut(for: event) {
-            RightSidebarFocusRequestCenter.requestFocus(mode: mode, in: window)
+        if let mode = RightSidebarMode.modeShortcut(for: event) {
+            _ = AppDelegate.shared?.focusRightSidebarInActiveMainWindow(
+                mode: mode,
+                focusFirstItem: true,
+                preferredWindow: window
+            )
             return
         }
 
@@ -875,43 +848,17 @@ final class SessionIndexKeyboardFocusView: NSView {
         return result
     }
 
-    static func focusHost(in window: NSWindow?) -> Bool {
-        guard let window, let host = hosts.object(forKey: window) else { return false }
-        guard host.cmuxCanAcceptRightSidebarKeyboardFocus else { return false }
-        return window.makeFirstResponder(host)
+    func focusFirstItemFromCoordinator() {
+        onFocusFirstItemRequested?()
     }
 
-    private func installFocusRequestObserverIfNeeded() {
-        guard focusRequestObserver == nil else { return }
-        focusRequestObserver = NotificationCenter.default.addObserver(
-            forName: SessionIndexFocusRequestCenter.notificationName,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let self,
-                  let request = SessionIndexFocusRequestCenter.request(from: notification),
-                  self.shouldHandleFocusRequest(request)
-            else { return }
-            self.onFocusFirstItemRequested?(request.generation)
-        }
+    func focusHostFromCoordinator() -> Bool {
+        guard let window else { return false }
+        return window.makeFirstResponder(self)
     }
 
-    fileprivate func replayPendingFocusRequestIfNeeded() {
-        guard let request = SessionIndexFocusRequestCenter.latestRequest(for: window),
-              shouldHandleFocusRequest(request) else {
-            return
-        }
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.shouldHandleFocusRequest(request) else { return }
-            self.onFocusFirstItemRequested?(request.generation)
-        }
-    }
-
-    private func shouldHandleFocusRequest(_ request: SessionIndexFocusRequest) -> Bool {
-        if let windowNumber = request.windowNumber {
-            return window?.windowNumber == windowNumber
-        }
-        return window != nil
+    func ownsKeyboardFocus(_ responder: NSResponder) -> Bool {
+        responder === self
     }
 }
 
