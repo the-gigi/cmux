@@ -74,6 +74,15 @@ async function testE2B(template: string, keep: boolean): Promise<Record<string, 
     const rpcToken = await installLeaseE2B(sandbox, rpcLeasePath, "rpc-e2b", "sess-rpc-e2b", false);
     const rpcHello = await websocketRPCHello(rpcURL, headers, rpcToken, "sess-rpc-e2b");
     const rpcHelloReplay = await websocketRPCHello(rpcURL, headers, rpcToken, "sess-rpc-e2b");
+    const rpcProxyHealthz = await websocketRPCProxyHTTPRoundTrip(
+      rpcURL,
+      headers,
+      rpcToken,
+      "sess-rpc-e2b",
+      "127.0.0.1",
+      7777,
+      "/healthz",
+    );
 
     return {
       provider: "e2b",
@@ -86,6 +95,7 @@ async function testE2B(template: string, keep: boolean): Promise<Record<string, 
       replay,
       rpcHello,
       rpcHelloReplay,
+      rpcProxyHealthz,
       kept: keep,
     };
   } finally {
@@ -131,6 +141,15 @@ async function testFreestyle(snapshotId: string, keep: boolean): Promise<Record<
     const rpcToken = await installLeaseFreestyle(vm, rpcLeasePath, "rpc-freestyle", "sess-rpc-fs", false);
     const rpcHello = await websocketRPCHello(rpcURL, {}, rpcToken, "sess-rpc-fs");
     const rpcHelloReplay = await websocketRPCHello(rpcURL, {}, rpcToken, "sess-rpc-fs");
+    const rpcProxyHealthz = await websocketRPCProxyHTTPRoundTrip(
+      rpcURL,
+      {},
+      rpcToken,
+      "sess-rpc-fs",
+      "127.0.0.1",
+      7777,
+      "/healthz",
+    );
 
     return {
       provider: "freestyle",
@@ -142,6 +161,7 @@ async function testFreestyle(snapshotId: string, keep: boolean): Promise<Record<
       replay,
       rpcHello,
       rpcHelloReplay,
+      rpcProxyHealthz,
       kept: keep,
     };
   } finally {
@@ -256,6 +276,146 @@ async function websocketRPCHello(
   const response = await waitForMessage(ws, (data, isBinary) => !isBinary && data.toString().includes('"id":1'));
   ws.close();
   return JSON.parse(response.toString());
+}
+
+async function websocketRPCProxyHTTPRoundTrip(
+  url: string,
+  headers: Record<string, string>,
+  token: string,
+  sessionId: string,
+  host: string,
+  port: number,
+  path: string,
+): Promise<{ streamId: string; response: string }> {
+  const ws = await openWebSocket(url, headers);
+  const frames = new WebSocketTextFrameQueue(ws);
+  try {
+    ws.send(JSON.stringify({ type: "auth", token, session_id: sessionId }));
+    const ready = JSON.parse(await frames.nextMatching((frame) => frame.type === "ready"));
+    if (ready.type !== "ready") {
+      throw new Error(`expected rpc ready frame, got ${JSON.stringify(ready)}`);
+    }
+
+    ws.send(JSON.stringify({ id: 1, method: "proxy.open", params: { host, port } }));
+    const open = JSON.parse(await frames.nextMatching((frame) => frame.id === 1));
+    const streamId = open?.result?.stream_id;
+    if (typeof streamId !== "string" || streamId.length === 0) {
+      throw new Error(`proxy.open missing stream_id: ${JSON.stringify(open)}`);
+    }
+
+    ws.send(JSON.stringify({ id: 2, method: "proxy.stream.subscribe", params: { stream_id: streamId } }));
+    const subscribe = JSON.parse(await frames.nextMatching((frame) => frame.id === 2));
+    if (subscribe.ok !== true) {
+      throw new Error(`proxy.stream.subscribe failed: ${JSON.stringify(subscribe)}`);
+    }
+
+    const request = `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`;
+    ws.send(JSON.stringify({
+      id: 3,
+      method: "proxy.write",
+      params: {
+        stream_id: streamId,
+        data_base64: Buffer.from(request).toString("base64"),
+      },
+    }));
+
+    let sawWriteOK = false;
+    const chunks: string[] = [];
+    while (true) {
+      const frame = JSON.parse(await frames.nextMatching(() => true));
+      if (frame.id === 3) {
+        if (frame.ok !== true) {
+          throw new Error(`proxy.write failed: ${JSON.stringify(frame)}`);
+        }
+        sawWriteOK = true;
+        continue;
+      }
+      if (frame.event === "proxy.stream.data" || frame.event === "proxy.stream.eof") {
+        const chunk = Buffer.from(frame.data_base64 ?? "", "base64").toString();
+        chunks.push(chunk);
+        if (frame.event === "proxy.stream.eof") {
+          const response = chunks.join("");
+          if (!sawWriteOK) {
+            throw new Error(`proxy.write response missing before eof: ${response}`);
+          }
+          if (!response.includes("\"ok\":true")) {
+            throw new Error(`unexpected proxied healthz response: ${response}`);
+          }
+          return { streamId, response };
+        }
+        continue;
+      }
+      if (frame.event === "proxy.stream.error") {
+        throw new Error(`proxy.stream.error: ${JSON.stringify(frame)}`);
+      }
+    }
+  } finally {
+    ws.close();
+  }
+}
+
+class WebSocketTextFrameQueue {
+  private readonly pending: string[] = [];
+  private readonly waiters: Array<(frame: string) => void> = [];
+  private readonly errors: Error[] = [];
+
+  constructor(ws: WebSocket) {
+    ws.on("message", (data, isBinary) => {
+      if (isBinary) return;
+      const frame = Buffer.isBuffer(data) ? data.toString() : Buffer.from(data as ArrayBuffer).toString();
+      const waiter = this.waiters.shift();
+      if (waiter) {
+        waiter(frame);
+        return;
+      }
+      this.pending.push(frame);
+    });
+    ws.on("error", (error) => {
+      this.errors.push(error);
+      while (this.waiters.length > 0) {
+        const waiter = this.waiters.shift();
+        waiter?.("__CMUX_QUEUE_ERROR__");
+      }
+    });
+    ws.on("close", (code, reason) => {
+      this.errors.push(new Error(`websocket closed: ${code} ${reason.toString()}`));
+      while (this.waiters.length > 0) {
+        const waiter = this.waiters.shift();
+        waiter?.("__CMUX_QUEUE_ERROR__");
+      }
+    });
+  }
+
+  async nextMatching(predicate: (frame: Record<string, any>) => boolean): Promise<string> {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const next = await this.nextTextFrame(deadline - Date.now());
+      const parsed = JSON.parse(next) as Record<string, any>;
+      if (predicate(parsed)) return next;
+    }
+    throw new Error("timeout waiting for matching websocket text frame");
+  }
+
+  private nextTextFrame(timeoutMs: number): Promise<string> {
+    const queued = this.pending.shift();
+    if (queued !== undefined) {
+      return Promise.resolve(queued);
+    }
+    if (this.errors.length > 0) {
+      return Promise.reject(this.errors[0]);
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("timeout waiting for websocket text frame")), timeoutMs);
+      this.waiters.push((frame) => {
+        clearTimeout(timer);
+        if (frame === "__CMUX_QUEUE_ERROR__") {
+          reject(this.errors[0] ?? new Error("websocket failed"));
+          return;
+        }
+        resolve(frame);
+      });
+    });
+  }
 }
 
 function openWebSocket(url: string, headers: Record<string, string>): Promise<WebSocket> {

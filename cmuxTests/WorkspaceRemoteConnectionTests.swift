@@ -363,6 +363,61 @@ final class WorkspaceRemoteConnectionTests: XCTestCase {
         XCTAssertNotEqual(vmWebSocket.proxyBrokerTransportKey, vmWebSocketRefreshed.proxyBrokerTransportKey)
     }
 
+    @MainActor
+    func testWebSocketVMWithoutDaemonEndpointSkipsProxyStartup() {
+        let workspace = Workspace()
+        let config = WorkspaceRemoteConfiguration(
+            transport: .websocket,
+            destination: "vm:test-no-daemon",
+            port: nil,
+            identityFile: nil,
+            sshOptions: [],
+            localProxyPort: nil,
+            relayPort: nil,
+            relayID: nil,
+            relayToken: nil,
+            localSocketPath: nil,
+            terminalStartupCommand: "cmux vm-pty-attach --id test-no-daemon",
+            skipDaemonBootstrap: true
+        )
+
+        workspace.configureRemoteConnection(config, autoConnect: true)
+
+        XCTAssertEqual(workspace.remoteConnectionState, .connected)
+        XCTAssertNil(workspace.remoteProxyEndpoint)
+    }
+
+    @MainActor
+    func testWebSocketVMWithDaemonEndpointStartsProxyCapableConnection() {
+        let workspace = Workspace()
+        let config = WorkspaceRemoteConfiguration(
+            transport: .websocket,
+            destination: "vm:test-with-daemon",
+            port: nil,
+            identityFile: nil,
+            sshOptions: [],
+            localProxyPort: nil,
+            relayPort: nil,
+            relayID: nil,
+            relayToken: nil,
+            localSocketPath: nil,
+            terminalStartupCommand: "cmux vm-pty-attach --id test-with-daemon",
+            daemonWebSocketEndpoint: WorkspaceRemoteWebSocketDaemonEndpoint(
+                url: "ws://127.0.0.1:65534/rpc",
+                headers: [:],
+                token: "token-a",
+                sessionId: "sess-a",
+                expiresAtUnix: 1_800_000_000
+            ),
+            skipDaemonBootstrap: true
+        )
+
+        workspace.configureRemoteConnection(config, autoConnect: true)
+
+        XCTAssertEqual(workspace.remoteConnectionState, .connecting)
+        workspace.disconnectRemoteConnection(clearConfiguration: true)
+    }
+
     func testReverseRelayStartupFailureDetailCapturesImmediateForwardingFailure() throws {
         let process = Process()
         let stderrPipe = Pipe()

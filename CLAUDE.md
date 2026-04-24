@@ -109,6 +109,24 @@ This creates an isolated app with its own name, bundle ID, socket, and derived d
 
 Before launching a new tagged run, clean up any older tags you started in this session (quit old tagged app + remove its `/tmp` socket/derived data).
 
+## Cloud VM secrets
+
+Cloud VM build and test scripts use local secrets from `~/.secrets/cmux.env`.
+
+- `E2B_API_KEY`
+- `FREESTYLE_API_KEY`
+- R2 upload vars used by `web/scripts/build-cloud-vm-images.ts` when creating Freestyle snapshots
+
+Load them with:
+
+```bash
+set -a
+source ~/.secrets/cmux.env
+set +a
+```
+
+`~/.secrets/cmuxterm.env` is for Stack/web env and does not contain the provider build keys.
+
 ## Debug event log
 
 All debug events (keys, mouse, focus, splits, tabs) go to a unified log in DEBUG builds:

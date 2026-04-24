@@ -118,18 +118,6 @@ async function buildFreestyleSnapshot(tag: string, daemonPath: string, skipCache
         dockerfileContent: freestyleBaseDockerfileContent(daemonURL),
       },
       ports: [{ port: 443, targetPort: 7777 }],
-      systemd: {
-        services: [{
-          name: "cmuxd-ws",
-          mode: "service",
-          exec: [
-            "/usr/local/bin/cmuxd-remote serve --ws --listen 0.0.0.0:7777 --auth-lease-file /tmp/cmux/attach-pty-lease.json --rpc-auth-lease-file /tmp/cmux/attach-rpc-lease.json --shell /bin/bash",
-          ],
-          user: "root",
-          enable: true,
-          restartPolicy: { policy: "always", restartSec: 1 },
-        }],
-      },
       discriminator: `cmuxd-ws-${tag}`,
       skipCache,
     },
@@ -158,6 +146,9 @@ function freestyleBaseDockerfileContent(daemonURL: string): string {
     `RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${CLOUD_SHELL_PACKAGES.join(" ")} && rm -rf /var/lib/apt/lists/*`,
     `RUN curl -fsSL ${shellQuote(daemonURL)} -o /usr/local/bin/cmuxd-remote && chmod 0755 /usr/local/bin/cmuxd-remote`,
     ...cloudRootSetupCommands().map((command) => `RUN ${command}`),
+    "RUN mkdir -p /etc/systemd/system/multi-user.target.wants",
+    "RUN cat <<'EOF' >/etc/systemd/system/cmuxd-ws.service\n[Unit]\nDescription=cmuxd websocket daemon\nAfter=network.target\n\n[Service]\nType=simple\nUser=root\nExecStart=/usr/local/bin/cmuxd-remote serve --ws --listen 0.0.0.0:7777 --auth-lease-file /tmp/cmux/attach-pty-lease.json --rpc-auth-lease-file /tmp/cmux/attach-rpc-lease.json --shell /bin/bash\nRestart=always\nRestartSec=1\n\n[Install]\nWantedBy=multi-user.target\nEOF",
+    "RUN ln -sf /etc/systemd/system/cmuxd-ws.service /etc/systemd/system/multi-user.target.wants/cmuxd-ws.service",
   ].join("\n");
 }
 
