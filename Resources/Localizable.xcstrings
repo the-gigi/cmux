@@ -25900,6 +25900,35 @@
         }
       }
     },
+    "commandPalette.kind.filePreview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File Preview"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルプレビュー"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перегляд файлу"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "파일 미리보기"
+          }
+        }
+      }
+    },
     "commandPalette.kind.terminal": {
       "extractionState": "manual",
       "localizations": {
@@ -49556,25 +49585,25 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cmd+P also matches terminal, browser, and markdown surfaces across workspaces."
+            "value": "Cmd+P also matches panel surfaces across workspaces."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cmd+Pでワークスペースをまたいだターミナル、ブラウザ、Markdownのサーフェスも検索できます。"
+            "value": "Cmd+Pでワークスペースをまたいだパネルサーフェスも検索できます。"
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cmd+P також шукає термінали, браузери та markdown-поверхні у всіх робочих областях."
+            "value": "Cmd+P також шукає панельні поверхні у всіх робочих областях."
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cmd+P가 모든 워크스페이스의 터미널, 브라우저, 마크다운 서피스도 검색합니다."
+            "value": "Cmd+P가 모든 워크스페이스의 패널 서피스도 검색합니다."
           }
         }
       }
@@ -86421,6 +86450,35 @@
         }
       }
     },
+    "filePreview.fileUnavailable.message": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file may have been moved or deleted."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルが移動または削除された可能性があります。"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Можливо, файл було переміщено або видалено."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "파일이 이동되었거나 삭제되었을 수 있습니다."
+          }
+        }
+      }
+    },
     "markdown.fileUnavailable.title": {
       "extractionState": "manual",
       "localizations": {
@@ -86446,6 +86504,93 @@
           "stringUnit": {
             "state": "translated",
             "value": "파일을 사용할 수 없음"
+          }
+        }
+      }
+    },
+    "filePreview.fileUnavailable.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File unavailable"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルを利用できません"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Файл недоступний"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "파일을 사용할 수 없음"
+          }
+        }
+      }
+    },
+    "filePreview.revert": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revert"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "元に戻す"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Відновити"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "되돌리기"
+          }
+        }
+      }
+    },
+    "filePreview.save": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зберегти"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "저장"
           }
         }
       }

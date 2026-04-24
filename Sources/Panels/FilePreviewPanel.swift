@@ -1,0 +1,647 @@
+import AppKit
+import Bonsplit
+import Combine
+import Foundation
+import Quartz
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct FilePreviewDragEntry {
+    let filePath: String
+    let displayTitle: String
+}
+
+final class FilePreviewDragRegistry {
+    static let shared = FilePreviewDragRegistry()
+
+    private let lock = NSLock()
+    private var pending: [UUID: FilePreviewDragEntry] = [:]
+
+    func register(_ entry: FilePreviewDragEntry) -> UUID {
+        let id = UUID()
+        lock.lock()
+        pending[id] = entry
+        lock.unlock()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 60) { [weak self] in
+            self?.lock.lock()
+            self?.pending.removeValue(forKey: id)
+            self?.lock.unlock()
+        }
+        return id
+    }
+
+    func consume(id: UUID) -> FilePreviewDragEntry? {
+        lock.lock()
+        defer { lock.unlock() }
+        return pending.removeValue(forKey: id)
+    }
+}
+
+final class FilePreviewDragPasteboardWriter: NSObject, NSPasteboardWriting {
+    private struct MirrorTabItem: Codable {
+        let id: UUID
+        let title: String
+        let hasCustomTitle: Bool
+        let icon: String?
+        let iconImageData: Data?
+        let kind: String?
+        let isDirty: Bool
+        let showsNotificationBadge: Bool
+        let isLoading: Bool
+        let isPinned: Bool
+    }
+
+    private struct MirrorTabTransferData: Codable {
+        let tab: MirrorTabItem
+        let sourcePaneId: UUID
+        let sourceProcessId: Int32
+    }
+
+    static let bonsplitTransferType = NSPasteboard.PasteboardType("com.splittabbar.tabtransfer")
+
+    private let fileURL: URL
+    private let transferData: Data
+
+    init(filePath: String, displayTitle: String) {
+        self.fileURL = URL(fileURLWithPath: filePath)
+        let dragId = FilePreviewDragRegistry.shared.register(
+            FilePreviewDragEntry(filePath: filePath, displayTitle: displayTitle)
+        )
+        let transfer = MirrorTabTransferData(
+            tab: MirrorTabItem(
+                id: dragId,
+                title: displayTitle,
+                hasCustomTitle: false,
+                icon: FilePreviewKindResolver.tabIconName(for: URL(fileURLWithPath: filePath)),
+                iconImageData: nil,
+                kind: "filePreview",
+                isDirty: false,
+                showsNotificationBadge: false,
+                isLoading: false,
+                isPinned: false
+            ),
+            sourcePaneId: UUID(),
+            sourceProcessId: Int32(ProcessInfo.processInfo.processIdentifier)
+        )
+        self.transferData = (try? JSONEncoder().encode(transfer)) ?? Data()
+        super.init()
+        mirrorTransferDataToDragPasteboard()
+    }
+
+    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        [Self.bonsplitTransferType, .fileURL]
+    }
+
+    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        if type == Self.bonsplitTransferType {
+            mirrorTransferDataToDragPasteboard()
+            return transferData
+        }
+        if type == .fileURL {
+            return fileURL.absoluteString
+        }
+        return nil
+    }
+
+    private func mirrorTransferDataToDragPasteboard() {
+        let write = { [transferData] in
+            let pasteboard = NSPasteboard(name: .drag)
+            pasteboard.addTypes([Self.bonsplitTransferType], owner: nil)
+            pasteboard.setData(transferData, forType: Self.bonsplitTransferType)
+        }
+        if Thread.isMainThread {
+            write()
+        } else {
+            DispatchQueue.main.async(execute: write)
+        }
+    }
+}
+
+enum FilePreviewMode: Equatable {
+    case text
+    case quickLook
+}
+
+enum FilePreviewKindResolver {
+    private static let textFilenames: Set<String> = [
+        ".env",
+        ".gitignore",
+        ".gitattributes",
+        ".npmrc",
+        ".zshrc",
+        "dockerfile",
+        "makefile",
+        "gemfile",
+        "podfile"
+    ]
+
+    private static let textExtensions: Set<String> = [
+        "bash", "c", "cc", "cfg", "conf", "cpp", "cs", "css", "csv", "env",
+        "fish", "go", "h", "hpp", "htm", "html", "ini", "java", "js", "json",
+        "jsx", "kt", "log", "m", "markdown", "md", "mdx", "mm", "plist", "py",
+        "rb", "rs", "sh", "sql", "swift", "toml", "ts", "tsx", "tsv", "txt",
+        "xml", "yaml", "yml", "zsh"
+    ]
+
+    static func mode(for url: URL) -> FilePreviewMode {
+        if isTextFile(url: url) {
+            return .text
+        }
+        return .quickLook
+    }
+
+    static func tabIconName(for url: URL) -> String {
+        if isTextFile(url: url) {
+            return "doc.text"
+        }
+        if let type = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType {
+            if type.conforms(to: .pdf) {
+                return "doc.richtext"
+            }
+            if type.conforms(to: .image) {
+                return "photo"
+            }
+            if type.conforms(to: .movie) || type.conforms(to: .audiovisualContent) {
+                return "play.rectangle"
+            }
+            if type.conforms(to: .audio) {
+                return "waveform"
+            }
+        }
+        return "doc.viewfinder"
+    }
+
+    private static func isTextFile(url: URL) -> Bool {
+        let filename = url.lastPathComponent.lowercased()
+        if textFilenames.contains(filename) {
+            return true
+        }
+        let ext = url.pathExtension.lowercased()
+        if textExtensions.contains(ext) {
+            return true
+        }
+        if let type = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType,
+           type.conforms(to: .text) || type.conforms(to: .sourceCode) {
+            return true
+        }
+        if let type = UTType(filenameExtension: ext),
+           type.conforms(to: .text) || type.conforms(to: .sourceCode) {
+            return true
+        }
+        return sniffLooksLikeText(url: url)
+    }
+
+    private static func sniffLooksLikeText(url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        let data = (try? handle.read(upToCount: 4096)) ?? Data()
+        guard !data.isEmpty else { return true }
+        if data.contains(0) {
+            return false
+        }
+        if String(data: data, encoding: .utf8) != nil {
+            return true
+        }
+        if String(data: data, encoding: .utf16) != nil {
+            return true
+        }
+        return false
+    }
+}
+
+@MainActor
+final class FilePreviewPanel: Panel, ObservableObject {
+    let id: UUID
+    let panelType: PanelType = .filePreview
+    let filePath: String
+    private(set) var workspaceId: UUID
+
+    @Published private(set) var displayTitle: String
+    @Published private(set) var isFileUnavailable = false
+    @Published private(set) var textContent = ""
+    @Published private(set) var isDirty = false
+    @Published private(set) var focusFlashToken = 0
+
+    let previewMode: FilePreviewMode
+    private var originalTextContent = ""
+    private weak var textView: NSTextView?
+
+    var fileURL: URL {
+        URL(fileURLWithPath: filePath)
+    }
+
+    var displayIcon: String? {
+        FilePreviewKindResolver.tabIconName(for: fileURL)
+    }
+
+    init(workspaceId: UUID, filePath: String) {
+        self.id = UUID()
+        self.workspaceId = workspaceId
+        self.filePath = filePath
+        self.displayTitle = URL(fileURLWithPath: filePath).lastPathComponent
+        self.previewMode = FilePreviewKindResolver.mode(for: URL(fileURLWithPath: filePath))
+
+        if previewMode == .text {
+            loadTextContent()
+        } else {
+            isFileUnavailable = !FileManager.default.fileExists(atPath: filePath)
+        }
+    }
+
+    func focus() {
+        guard let textView else { return }
+        textView.window?.makeFirstResponder(textView)
+    }
+
+    func unfocus() {
+        // No-op. AppKit resigns the text view when another panel becomes first responder.
+    }
+
+    func close() {
+        textView = nil
+    }
+
+    func triggerFlash(reason: WorkspaceAttentionFlashReason) {
+        _ = reason
+        guard NotificationPaneFlashSettings.isEnabled() else { return }
+        focusFlashToken += 1
+    }
+
+    func attachTextView(_ textView: NSTextView) {
+        self.textView = textView
+    }
+
+    func updateTextContent(_ nextContent: String) {
+        guard textContent != nextContent else { return }
+        textContent = nextContent
+        isDirty = nextContent != originalTextContent
+    }
+
+    func loadTextContent() {
+        guard FileManager.default.fileExists(atPath: filePath) else {
+            isFileUnavailable = true
+            return
+        }
+
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let decoded = Self.decodeText(data)
+            guard let decoded else {
+                isFileUnavailable = true
+                return
+            }
+            textContent = decoded
+            originalTextContent = decoded
+            isDirty = false
+            isFileUnavailable = false
+        } catch {
+            isFileUnavailable = true
+        }
+    }
+
+    func saveTextContent() {
+        guard previewMode == .text else { return }
+        do {
+            try textContent.write(to: fileURL, atomically: true, encoding: .utf8)
+            originalTextContent = textContent
+            isDirty = false
+            isFileUnavailable = false
+        } catch {
+            isFileUnavailable = true
+        }
+    }
+
+    private static func decodeText(_ data: Data) -> String? {
+        if let decoded = String(data: data, encoding: .utf8) {
+            return decoded
+        }
+        if let decoded = String(data: data, encoding: .utf16) {
+            return decoded
+        }
+        return String(data: data, encoding: .isoLatin1)
+    }
+}
+
+struct FilePreviewPanelView: View {
+    @ObservedObject var panel: FilePreviewPanel
+    let isFocused: Bool
+    let isVisibleInUI: Bool
+    let portalPriority: Int
+    let onRequestPanelFocus: () -> Void
+
+    @State private var focusFlashOpacity = 0.0
+    @State private var focusFlashAnimationGeneration = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            content
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .textBackgroundColor))
+        .overlay {
+            RoundedRectangle(cornerRadius: FocusFlashPattern.ringCornerRadius)
+                .stroke(cmuxAccentColor().opacity(focusFlashOpacity), lineWidth: 3)
+                .shadow(color: cmuxAccentColor().opacity(focusFlashOpacity * 0.35), radius: 10)
+                .padding(FocusFlashPattern.ringInset)
+                .allowsHitTesting(false)
+        }
+        .overlay {
+            if isVisibleInUI {
+                FilePreviewPointerObserver(onPointerDown: onRequestPanelFocus)
+            }
+        }
+        .onChange(of: panel.focusFlashToken) { _ in
+            triggerFocusFlashAnimation()
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: panel.displayIcon ?? "doc.viewfinder")
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+            Text(panel.filePath)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+            Spacer(minLength: 8)
+            if panel.previewMode == .text {
+                Button {
+                    panel.loadTextContent()
+                } label: {
+                    Image(systemName: "arrow.counterclockwise")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!panel.isDirty)
+                .help(String(localized: "filePreview.revert", defaultValue: "Revert"))
+                .accessibilityLabel(String(localized: "filePreview.revert", defaultValue: "Revert"))
+
+                Button {
+                    panel.saveTextContent()
+                } label: {
+                    Image(systemName: "square.and.arrow.down")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!panel.isDirty)
+                .keyboardShortcut("s", modifiers: .command)
+                .help(String(localized: "filePreview.save", defaultValue: "Save"))
+                .accessibilityLabel(String(localized: "filePreview.save", defaultValue: "Save"))
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 30)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if panel.isFileUnavailable {
+            fileUnavailableView
+        } else {
+            switch panel.previewMode {
+            case .text:
+                FilePreviewTextEditor(panel: panel)
+            case .quickLook:
+                QuickLookPreviewView(url: panel.fileURL, title: panel.displayTitle)
+            }
+        }
+    }
+
+    private var fileUnavailableView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "doc.questionmark")
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+            Text(String(localized: "filePreview.fileUnavailable.title", defaultValue: "File unavailable"))
+                .font(.headline)
+            Text(panel.filePath)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 24)
+            Text(String(localized: "filePreview.fileUnavailable.message", defaultValue: "The file may have been moved or deleted."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func triggerFocusFlashAnimation() {
+        focusFlashAnimationGeneration &+= 1
+        let generation = focusFlashAnimationGeneration
+        focusFlashOpacity = FocusFlashPattern.values.first ?? 0
+
+        for segment in FocusFlashPattern.segments {
+            DispatchQueue.main.asyncAfter(deadline: .now() + segment.delay) {
+                guard focusFlashAnimationGeneration == generation else { return }
+                withAnimation(focusFlashAnimation(for: segment.curve, duration: segment.duration)) {
+                    focusFlashOpacity = segment.targetOpacity
+                }
+            }
+        }
+    }
+
+    private func focusFlashAnimation(for curve: FocusFlashCurve, duration: TimeInterval) -> Animation {
+        switch curve {
+        case .easeIn:
+            return .easeIn(duration: duration)
+        case .easeOut:
+            return .easeOut(duration: duration)
+        }
+    }
+}
+
+private struct FilePreviewTextEditor: NSViewRepresentable {
+    @ObservedObject var panel: FilePreviewPanel
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(panel: panel)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+
+        let textView = SavingTextView()
+        textView.panel = panel
+        textView.delegate = context.coordinator
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.allowsUndo = true
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.usesFindPanel = true
+        textView.usesFontPanel = false
+        textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        textView.textColor = .labelColor
+        textView.backgroundColor = .textBackgroundColor
+        textView.insertionPointColor = .labelColor
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.textContainer?.widthTracksTextView = false
+        textView.string = panel.textContent
+        panel.attachTextView(textView)
+
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.panel = panel
+        guard let textView = scrollView.documentView as? SavingTextView else { return }
+        textView.panel = panel
+        panel.attachTextView(textView)
+        guard textView.string != panel.textContent else { return }
+        context.coordinator.isApplyingPanelUpdate = true
+        textView.string = panel.textContent
+        context.coordinator.isApplyingPanelUpdate = false
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var panel: FilePreviewPanel
+        var isApplyingPanelUpdate = false
+
+        init(panel: FilePreviewPanel) {
+            self.panel = panel
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard !isApplyingPanelUpdate,
+                  let textView = notification.object as? NSTextView else { return }
+            panel.updateTextContent(textView.string)
+        }
+    }
+}
+
+private final class SavingTextView: NSTextView {
+    weak var panel: FilePreviewPanel?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "s" {
+            panel?.saveTextContent()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
+private struct QuickLookPreviewView: NSViewRepresentable {
+    let url: URL
+    let title: String
+
+    func makeNSView(context: Context) -> NSView {
+        guard let previewView = QLPreviewView(frame: .zero, style: .normal) else {
+            return NSView()
+        }
+        previewView.autostarts = true
+        previewView.previewItem = context.coordinator.item(for: url, title: title)
+        return previewView
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let previewView = nsView as? QLPreviewView else { return }
+        previewView.previewItem = context.coordinator.item(for: url, title: title)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator {
+        private var item: FilePreviewQLItem?
+
+        func item(for url: URL, title: String) -> FilePreviewQLItem {
+            if let item, item.url == url, item.title == title {
+                return item
+            }
+            let next = FilePreviewQLItem(url: url, title: title)
+            item = next
+            return next
+        }
+    }
+}
+
+private final class FilePreviewQLItem: NSObject, QLPreviewItem {
+    let url: URL
+    let title: String
+
+    init(url: URL, title: String) {
+        self.url = url
+        self.title = title
+    }
+
+    var previewItemURL: URL? {
+        url
+    }
+
+    var previewItemTitle: String? {
+        title
+    }
+}
+
+private struct FilePreviewPointerObserver: NSViewRepresentable {
+    let onPointerDown: () -> Void
+
+    func makeNSView(context: Context) -> FilePreviewPointerObserverView {
+        let view = FilePreviewPointerObserverView()
+        view.onPointerDown = onPointerDown
+        return view
+    }
+
+    func updateNSView(_ nsView: FilePreviewPointerObserverView, context: Context) {
+        nsView.onPointerDown = onPointerDown
+    }
+}
+
+private final class FilePreviewPointerObserverView: NSView {
+    var onPointerDown: (() -> Void)?
+    private var eventMonitor: Any?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+            guard let self,
+                  event.window === self.window,
+                  !self.isHiddenOrHasHiddenAncestor else { return event }
+            let point = self.convert(event.locationInWindow, from: nil)
+            if self.bounds.contains(point) {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onPointerDown?()
+                }
+            }
+            return event
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+}

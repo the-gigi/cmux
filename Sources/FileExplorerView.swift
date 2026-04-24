@@ -205,12 +205,12 @@ struct FileExplorerPanelView: NSViewRepresentable {
             FileExplorerStyle.current.rowHeight
         }
 
-        // MARK: - Drag-to-Terminal
+        // MARK: - Drag-to-Preview
 
         func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> (any NSPasteboardWriting)? {
             guard let node = item as? FileExplorerNode, !node.isDirectory else { return nil }
             guard store.provider is LocalFileExplorerProvider else { return nil }
-            return NSURL(fileURLWithPath: node.path)
+            return FilePreviewDragPasteboardWriter(filePath: node.path, displayTitle: node.name)
         }
 
         // MARK: - Context Menu (NSMenuDelegate)
@@ -665,6 +665,4 @@ final class FileExplorerRowView: NSTableRowView {
         isSelected ? .emphasized : .normal
     }
 }
-
-
 
