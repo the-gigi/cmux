@@ -2506,6 +2506,8 @@ struct CMUXCLI {
             try runSSHSessionEnd(commandArgs: commandArgs, client: client)
         case "vm-pty-attach":
             try runVMPtyAttach(commandArgs: commandArgs, client: client)
+        case "vm-ssh-attach":
+            try runVMSSHAttach(commandArgs: commandArgs, client: client)
 
         case "new-workspace":
             let (commandOpt, rem0) = parseOption(commandArgs, name: "--command")
@@ -4658,7 +4660,8 @@ struct CMUXCLI {
         relayToken: String,
         client: SocketClient,
         jsonOutput: Bool,
-        idFormat: CLIIDFormat
+        idFormat: CLIIDFormat,
+        vmIDForSplitAttach: String? = nil
     ) throws {
         let sshStartedAt = Date()
         func logSSHTiming(_ stage: String, extra: String = "") {
@@ -4756,6 +4759,19 @@ struct CMUXCLI {
                 remoteRelayPort: sshOptions.remoteRelayPort
             )
         }
+        let reusableTerminalStartupCommand: String
+        if let vmIDForSplitAttach,
+           sshOptions.skipDaemonBootstrap {
+            let executablePath = resolvedExecutableURL()?.path ?? (args.first ?? "cmux")
+            let splitAttachCommand = "\(shellQuote(executablePath)) vm-ssh-attach --id \(shellQuote(vmIDForSplitAttach))"
+            reusableTerminalStartupCommand = buildReusableSSHStartupCommand(
+                sshCommand: splitAttachCommand,
+                shellFeatures: shellFeaturesValue,
+                remoteRelayPort: 0
+            )
+        } else {
+            reusableTerminalStartupCommand = remoteTerminalSSHStartupCommand
+        }
         cliDebugLog(
             "cli.ssh.start target=\(sshOptions.displayDestination) port=\(sshOptions.port.map(String.init) ?? "nil") " +
             "relayPort=\(sshOptions.remoteRelayPort) localSocket=\(sshOptions.localSocketPath) " +
@@ -4816,7 +4832,7 @@ struct CMUXCLI {
                 configureParams["relay_token"] = relayToken
                 configureParams["local_socket_path"] = sshOptions.localSocketPath
             }
-            configureParams["terminal_startup_command"] = remoteTerminalSSHStartupCommand
+            configureParams["terminal_startup_command"] = reusableTerminalStartupCommand
             if sshOptions.skipDaemonBootstrap {
                 configureParams["skip_daemon_bootstrap"] = true
             }
@@ -4872,12 +4888,14 @@ struct CMUXCLI {
         if redactsDestination {
             payload["ssh_command"] = "<redacted>"
             payload["ssh_terminal_command"] = "<redacted>"
+            payload["ssh_startup_command"] = "<redacted>"
+            payload["ssh_terminal_startup_command"] = "<redacted>"
         } else {
             payload["ssh_command"] = initialSSHCommand
             payload["ssh_terminal_command"] = remoteTerminalSSHCommand
+            payload["ssh_startup_command"] = initialSSHStartupCommand
+            payload["ssh_terminal_startup_command"] = reusableTerminalStartupCommand
         }
-        payload["ssh_startup_command"] = initialSSHStartupCommand
-        payload["ssh_terminal_startup_command"] = remoteTerminalSSHStartupCommand
         payload["ssh_env_overrides"] = [
             "GHOSTTY_SHELL_FEATURES": shellFeaturesValue,
         ]
@@ -4988,6 +5006,20 @@ struct CMUXCLI {
         remoteBootstrapScript: String? = nil,
         localCommand: String? = nil
     ) -> String {
+        buildSSHCommandArguments(
+            options,
+            remoteBootstrapScript: remoteBootstrapScript,
+            localCommand: localCommand
+        )
+        .map(shellQuote)
+        .joined(separator: " ")
+    }
+
+    private func buildSSHCommandArguments(
+        _ options: SSHCommandOptions,
+        remoteBootstrapScript: String? = nil,
+        localCommand: String? = nil
+    ) -> [String] {
         var parts = baseSSHArguments(options, localCommand: localCommand)
         let trimmedRemoteBootstrap = remoteBootstrapScript?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5010,7 +5042,7 @@ struct CMUXCLI {
             parts.append(options.destination)
             parts.append(contentsOf: options.extraArguments)
         }
-        return parts.map(shellQuote).joined(separator: " ")
+        return parts
     }
 
     func buildBootstrapSSHStartupCommand(
@@ -5745,76 +5777,117 @@ struct CMUXCLI {
             )
             return
         }
-        guard transport == "ssh",
+        let options = try vmSSHOptions(
+            fromAttachInfo: response,
+            workspaceName: workspaceName,
+            client: client,
+            remoteRelayPort: generateRemoteRelayPort()
+        )
+        let relayID = UUID().uuidString.lowercased()
+        let relayToken = try randomHex(byteCount: 32)
+        try runSSHWithOptions(
+            options,
+            relayID: relayID,
+            relayToken: relayToken,
+            client: client,
+            jsonOutput: jsonOutput,
+            idFormat: idFormat,
+            vmIDForSplitAttach: id
+        )
+    }
+
+    private func vmSSHOptions(
+        fromAttachInfo response: [String: Any],
+        workspaceName: String?,
+        client: SocketClient,
+        remoteRelayPort: Int
+    ) throws -> SSHCommandOptions {
+        guard (response["transport"] as? String) == "ssh",
               let host = response["host"] as? String,
-              let port = (response["port"] as? Int),
+              let port = response["port"] as? Int,
               let username = response["username"] as? String,
               let cred = response["credential"] as? [String: Any],
               let kind = cred["kind"] as? String
         else {
-            throw CLIError(message: "vm.attach_info returned malformed payload: \(response)")
+            throw CLIError(message: "vm.attach_info returned malformed SSH payload: \(response)")
         }
-        switch kind {
-        case "password":
-            guard let token = cred["value"] as? String else {
-                throw CLIError(message: "vm.attach_info password credential missing `value`")
+        guard kind == "password" else {
+            if kind == "authorizedKey" {
+                throw CLIError(
+                    message: "authorizedKey credentials aren't supported by `cmux vm shell` yet; received from server."
+                )
             }
-            // Freestyle gateway has a fresh host key per session and we re-mint per attach,
-            // so skip the StrictHostKeyChecking y/n prompt and known_hosts caching.
-            //
-            // IdentitiesOnly=yes + IdentityFile=/dev/null is load-bearing: the gateway
-            // authenticates via the SSH "none" method (token embedded in the username). If
-            // OpenSSH offers any of the user's local pubkeys first, the gateway accepts the
-            // offer but rejects the signed challenge and closes the connection before "none"
-            // can be tried. With no identities offered, ssh falls through to "none" and
-            // succeeds.
-            //
-            // Each VM pane needs an independent gateway session. Reusing OpenSSH control
-            // sockets can make a new split disturb the original shell, which collapses the
-            // split as soon as the original child exits.
-            let sshOptionStrings = [
-                "StrictHostKeyChecking=no",
-                "UserKnownHostsFile=/dev/null",
-                "LogLevel=ERROR",
-                "IdentitiesOnly=yes",
-                "IdentityFile=/dev/null",
-                "PreferredAuthentications=none,password",
-                "ControlMaster=no",
-            ]
-            let localSocketPath = client.socketPath
-            let remoteRelayPort = generateRemoteRelayPort()
-            let relayID = UUID().uuidString.lowercased()
-            let relayToken = try randomHex(byteCount: 32)
-            let options = SSHCommandOptions(
-                destination: "\(username):\(token)@\(host)",
-                displayDestination: "\(username)@\(host)",
-                port: port,
-                identityFile: nil,
-                workspaceName: workspaceName,
-                noFocus: false,
-                sshOptions: sshOptionStrings,
-                extraArguments: [],
-                localSocketPath: localSocketPath,
-                remoteRelayPort: remoteRelayPort,
-                skipDaemonBootstrap: true
-            )
-            try runSSHWithOptions(
-                options,
-                relayID: relayID,
-                relayToken: relayToken,
-                client: client,
-                jsonOutput: jsonOutput,
-                idFormat: idFormat
-            )
-        case "authorizedKey":
-            // Keep this branch for when we switch to pubkey auth (requires a Freestyle-gateway
-            // side change).
-            throw CLIError(
-                message: "authorizedKey credentials aren't supported by `cmux vm shell` yet; received from server."
-            )
-        default:
             throw CLIError(message: "vm.attach_info returned unknown credential kind: \(kind)")
         }
+        guard let token = cred["value"] as? String,
+              !token.isEmpty else {
+            throw CLIError(message: "vm.attach_info password credential missing `value`")
+        }
+
+        // Freestyle gateway has a fresh host key per session and we re-mint per attach,
+        // so skip the StrictHostKeyChecking prompt and known_hosts caching.
+        //
+        // IdentitiesOnly=yes + IdentityFile=/dev/null is load-bearing: the gateway
+        // authenticates via the SSH "none" method with the token embedded in the username.
+        // If OpenSSH offers local pubkeys first, the gateway rejects before "none" can run.
+        //
+        // Each VM pane needs an independent gateway session. Reusing OpenSSH control sockets
+        // can make a new split disturb the original shell.
+        let sshOptionStrings = [
+            "StrictHostKeyChecking=no",
+            "UserKnownHostsFile=/dev/null",
+            "LogLevel=ERROR",
+            "IdentitiesOnly=yes",
+            "IdentityFile=/dev/null",
+            "PreferredAuthentications=none,password",
+            "ControlMaster=no",
+        ]
+        return SSHCommandOptions(
+            destination: "\(username):\(token)@\(host)",
+            displayDestination: "\(username)@\(host)",
+            port: port,
+            identityFile: nil,
+            workspaceName: workspaceName,
+            noFocus: false,
+            sshOptions: sshOptionStrings,
+            extraArguments: [],
+            localSocketPath: client.socketPath,
+            remoteRelayPort: remoteRelayPort,
+            skipDaemonBootstrap: true
+        )
+    }
+
+    private func runVMSSHAttach(commandArgs: [String], client: SocketClient) throws {
+        let (vmIDOpt, remaining) = parseOption(commandArgs, name: "--id")
+        if let unknown = remaining.first(where: { $0.hasPrefix("--") }) {
+            throw CLIError(message: "vm-ssh-attach: unknown flag '\(unknown)'")
+        }
+        guard remaining.isEmpty else {
+            throw CLIError(message: "Usage: cmux vm-ssh-attach --id <vm-id>")
+        }
+        guard let vmID = vmIDOpt?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !vmID.isEmpty else {
+            throw CLIError(message: "Usage: cmux vm-ssh-attach --id <vm-id>")
+        }
+
+        let attachInfoStartedAt = Date()
+        let response = try client.sendV2(method: "vm.attach_info", params: ["id": vmID], responseTimeout: 60)
+        logVMTiming("attach_info", vmID: vmID, transport: "ssh", startedAt: attachInfoStartedAt)
+        let options = try vmSSHOptions(
+            fromAttachInfo: response,
+            workspaceName: nil,
+            client: client,
+            remoteRelayPort: 0
+        )
+        let sshArguments = buildSSHCommandArguments(options)
+        guard let launchPath = sshArguments.first else {
+            throw CLIError(message: "vm-ssh-attach: failed to construct ssh command")
+        }
+        client.close()
+        try execInteractiveProgram(
+            launchPath: launchPath,
+            arguments: Array(sshArguments.dropFirst())
+        )
     }
 
     private func parseVMPtyWebSocketEndpoint(_ response: [String: Any]) throws -> VMPtyWebSocketEndpoint {
@@ -6604,6 +6677,27 @@ struct CMUXCLI {
             return value
         }
         return "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    private func execInteractiveProgram(
+        launchPath: String,
+        arguments: [String]
+    ) throws -> Never {
+        var argv = ([launchPath] + arguments).map { strdup($0) }
+        defer {
+            for item in argv {
+                free(item)
+            }
+        }
+        argv.append(nil)
+
+        if launchPath.contains("/") {
+            execv(launchPath, &argv)
+        } else {
+            execvp(launchPath, &argv)
+        }
+        let code = errno
+        throw CLIError(message: "Failed to launch \(launchPath): \(String(cString: strerror(code)))")
     }
 
     private func sshOptionValue(named key: String, in options: [String]) -> String? {
