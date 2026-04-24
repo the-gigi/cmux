@@ -725,6 +725,12 @@ final class FileExplorerNSOutlineView: NSOutlineView {
             return
         }
 
+        if let action = RightSidebarKeyboardNavigation.disclosureAction(for: event) {
+            endQuickSearch()
+            performDisclosureAction(action)
+            return
+        }
+
         if RightSidebarKeyboardNavigation.isPlainSlash(event) {
             beginQuickSearch()
             return
@@ -743,6 +749,11 @@ final class FileExplorerNSOutlineView: NSOutlineView {
         if let delta = RightSidebarKeyboardNavigation.moveDelta(for: event) {
             endQuickSearch()
             moveSelection(by: delta)
+            return true
+        }
+        if let action = RightSidebarKeyboardNavigation.disclosureAction(for: event) {
+            endQuickSearch()
+            performDisclosureAction(action)
             return true
         }
         return super.performKeyEquivalent(with: event)
@@ -811,6 +822,78 @@ final class FileExplorerNSOutlineView: NSOutlineView {
         guard targetRow >= 0, targetRow < numberOfRows else { return }
         selectRowIndexes(IndexSet(integer: targetRow), byExtendingSelection: false)
         scrollRowToVisible(targetRow)
+    }
+
+    private func performDisclosureAction(_ action: RightSidebarKeyboardNavigation.DisclosureAction) {
+        switch action {
+        case .collapse:
+            collapseSelectedItemOrMoveToParent()
+        case .expand:
+            expandSelectedItemOrMoveToChild()
+        }
+    }
+
+    private func expandSelectedItemOrMoveToChild() {
+        guard selectedRow >= 0,
+              selectedRow < numberOfRows,
+              let node = item(atRow: selectedRow) as? FileExplorerNode,
+              node.isDirectory else {
+            return
+        }
+
+        if !isItemExpanded(node) {
+            expandItem(node)
+            let row = row(forItem: node)
+            if row >= 0 {
+                scrollRowToVisible(row)
+            }
+            return
+        }
+
+        selectFirstChild(of: node)
+    }
+
+    private func collapseSelectedItemOrMoveToParent() {
+        guard selectedRow >= 0,
+              selectedRow < numberOfRows,
+              let node = item(atRow: selectedRow) as? FileExplorerNode else {
+            return
+        }
+
+        if node.isDirectory, isItemExpanded(node) {
+            collapseItem(node)
+            let row = row(forItem: node)
+            if row >= 0 {
+                selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                scrollRowToVisible(row)
+            }
+            return
+        }
+
+        selectParent(of: node)
+    }
+
+    private func selectFirstChild(of node: FileExplorerNode) {
+        let parentRow = row(forItem: node)
+        let childRow = parentRow + 1
+        guard parentRow >= 0,
+              childRow < numberOfRows,
+              let child = item(atRow: childRow) as? FileExplorerNode,
+              (parent(forItem: child) as? FileExplorerNode) === node else {
+            return
+        }
+        selectRowIndexes(IndexSet(integer: childRow), byExtendingSelection: false)
+        scrollRowToVisible(childRow)
+    }
+
+    private func selectParent(of node: FileExplorerNode) {
+        guard let parentNode = parent(forItem: node) as? FileExplorerNode else {
+            return
+        }
+        let parentRow = row(forItem: parentNode)
+        guard parentRow >= 0 else { return }
+        selectRowIndexes(IndexSet(integer: parentRow), byExtendingSelection: false)
+        scrollRowToVisible(parentRow)
     }
 
     private func beginQuickSearch() {

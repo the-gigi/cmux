@@ -51,6 +51,11 @@ extension RightSidebarMode {
 }
 
 enum RightSidebarKeyboardNavigation {
+    enum DisclosureAction {
+        case collapse
+        case expand
+    }
+
     static func moveDelta(for event: NSEvent) -> Int? {
         guard event.type == .keyDown else { return nil }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -69,6 +74,21 @@ enum RightSidebarKeyboardNavigation {
         switch event.keyCode {
         case 38, 125: return 1   // J or Down
         case 40, 126: return -1  // K or Up
+        default: return nil
+        }
+    }
+
+    static func disclosureAction(for event: NSEvent) -> DisclosureAction? {
+        guard event.type == .keyDown else { return nil }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags.intersection([.command, .control, .option]).isEmpty else {
+            return nil
+        }
+        switch event.keyCode {
+        case 4: return .collapse  // H
+        case 37: return .expand   // L
+        case 123: return .collapse  // Left
+        case 124: return .expand   // Right
         default: return nil
         }
     }
