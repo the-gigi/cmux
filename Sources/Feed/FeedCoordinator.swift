@@ -147,6 +147,13 @@ final class FeedCoordinator: @unchecked Sendable {
     /// Called by the `feed.*.reply` handlers. Marks the corresponding
     /// item resolved on the main-actor store and wakes any waiter.
     func deliverReply(requestId: String, decision: WorkstreamDecision) {
+        waiterLock.lock()
+        if let waiter = waiters[requestId] {
+            waiter.decision = decision
+            waiter.semaphore.signal()
+        }
+        waiterLock.unlock()
+
         let resolve: @Sendable () -> Void = { [requestId, decision] in
             MainActor.assumeIsolated {
                 let store = FeedCoordinator.shared.store
@@ -157,19 +164,10 @@ final class FeedCoordinator: @unchecked Sendable {
             }
         }
         if Thread.isMainThread {
-            // Avoid DispatchQueue.main.sync → main deadlock when called
-            // from the UI layer.
             resolve()
         } else {
-            DispatchQueue.main.sync(execute: resolve)
+            DispatchQueue.main.async(execute: resolve)
         }
-
-        waiterLock.lock()
-        if let waiter = waiters[requestId] {
-            waiter.decision = decision
-            waiter.semaphore.signal()
-        }
-        waiterLock.unlock()
     }
 
     private static func findItemId(

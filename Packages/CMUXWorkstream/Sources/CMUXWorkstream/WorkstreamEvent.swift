@@ -18,6 +18,7 @@ public struct WorkstreamEvent: Codable, Sendable, Equatable {
     public let requestId: String?
     public let ppid: Int?
     public let receivedAt: Date
+    public let extraFieldsJSON: String?
 
     public init(
         sessionId: String,
@@ -29,7 +30,8 @@ public struct WorkstreamEvent: Codable, Sendable, Equatable {
         context: WorkstreamContext? = nil,
         requestId: String? = nil,
         ppid: Int? = nil,
-        receivedAt: Date = Date()
+        receivedAt: Date = Date(),
+        extraFieldsJSON: String? = nil
     ) {
         self.sessionId = sessionId
         self.hookEventName = hookEventName
@@ -41,6 +43,7 @@ public struct WorkstreamEvent: Codable, Sendable, Equatable {
         self.requestId = requestId
         self.ppid = ppid
         self.receivedAt = receivedAt
+        self.extraFieldsJSON = extraFieldsJSON
     }
 
     /// Hook event discriminator. Values match the strings Vibe Island and
@@ -61,7 +64,7 @@ public struct WorkstreamEvent: Codable, Sendable, Equatable {
         case notification = "Notification"
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case sessionId = "session_id"
         case hookEventName = "hook_event_name"
         case source = "_source"
@@ -85,6 +88,13 @@ public struct WorkstreamEvent: Codable, Sendable, Equatable {
         self.requestId = try c.decodeIfPresent(String.self, forKey: .requestId)
         self.ppid = try c.decodeIfPresent(Int.self, forKey: .ppid)
         self.receivedAt = try c.decodeIfPresent(Date.self, forKey: .receivedAt) ?? Date()
+        let knownKeys = Set(CodingKeys.allCases.map(\.stringValue))
+        let dynamic = try decoder.container(keyedBy: JSONDynamicKey.self)
+        var extra: [String: AnyJSON] = [:]
+        for key in dynamic.allKeys where !knownKeys.contains(key.stringValue) {
+            extra[key.stringValue] = try dynamic.decode(AnyJSON.self, forKey: key)
+        }
+        self.extraFieldsJSON = extra.isEmpty ? nil : AnyJSON.object(extra).asJSONString
         // tool_input can be any JSON shape (object, array, scalar, string).
         // We normalize to a string: incoming objects/arrays are re-serialized
         // via JSONSerialization; incoming strings are stored verbatim so
@@ -107,11 +117,27 @@ public struct WorkstreamEvent: Codable, Sendable, Equatable {
         try c.encodeIfPresent(requestId, forKey: .requestId)
         try c.encodeIfPresent(ppid, forKey: .ppid)
         try c.encode(receivedAt, forKey: .receivedAt)
+        if let extraFieldsJSON,
+           case .object(let extra) = AnyJSON(jsonString: extraFieldsJSON) {
+            let knownKeys = Set(CodingKeys.allCases.map(\.stringValue))
+            var dynamic = encoder.container(keyedBy: JSONDynamicKey.self)
+            for (key, value) in extra where !knownKeys.contains(key) {
+                guard let codingKey = JSONDynamicKey(stringValue: key) else { continue }
+                try dynamic.encode(value, forKey: codingKey)
+            }
+        }
         if let toolInputJSON {
             let raw = AnyJSON(jsonString: toolInputJSON) ?? .string(toolInputJSON)
             try c.encode(raw, forKey: .toolInputJSON)
         }
     }
+}
+
+private struct JSONDynamicKey: CodingKey {
+    let stringValue: String
+    init?(stringValue: String) { self.stringValue = stringValue }
+    var intValue: Int? { nil }
+    init?(intValue: Int) { self.stringValue = String(intValue) }
 }
 
 /// Recursive AST of opaque JSON values. Used to pass arbitrary
@@ -184,7 +210,7 @@ private indirect enum AnyJSON: Codable, Sendable, Equatable {
     }
 
     init(from decoder: Decoder) throws {
-        if let keyed = try? decoder.container(keyedBy: DynamicKey.self) {
+        if let keyed = try? decoder.container(keyedBy: JSONDynamicKey.self) {
             var out: [String: AnyJSON] = [:]
             for key in keyed.allKeys {
                 out[key.stringValue] = try keyed.decode(AnyJSON.self, forKey: key)
@@ -235,18 +261,11 @@ private indirect enum AnyJSON: Codable, Sendable, Equatable {
             var c = encoder.unkeyedContainer()
             for v in arr { try c.encode(v) }
         case .object(let dict):
-            var c = encoder.container(keyedBy: DynamicKey.self)
+            var c = encoder.container(keyedBy: JSONDynamicKey.self)
             for (k, v) in dict {
-                guard let key = DynamicKey(stringValue: k) else { continue }
+                guard let key = JSONDynamicKey(stringValue: k) else { continue }
                 try c.encode(v, forKey: key)
             }
         }
-    }
-
-    private struct DynamicKey: CodingKey {
-        let stringValue: String
-        init?(stringValue: String) { self.stringValue = stringValue }
-        var intValue: Int? { nil }
-        init?(intValue: Int) { self.stringValue = String(intValue) }
     }
 }

@@ -52,6 +52,40 @@ struct WorkstreamPersistenceTests {
         #expect(loaded.last?.workstreamId == "s4")
     }
 
+    @Test("append redacts sensitive tool input before writing JSONL")
+    func appendRedactsSensitiveToolInput() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-workstream-redact-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let persistence = WorkstreamPersistence(fileURL: tmp)
+        let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+        try await persistence.append(WorkstreamItem(
+            workstreamId: "s",
+            source: .claude,
+            kind: .permissionRequest,
+            payload: .permissionRequest(
+                requestId: "r",
+                toolName: "Bash",
+                toolInputJSON: #"{"command":"OPENAI_API_KEY=sk-test node \#(homePath)/app.js","env":{"SECRET":"value"}}"#,
+                pattern: nil
+            )
+        ))
+
+        let loaded = try await persistence.loadRecent(limit: 1)
+        guard case .permissionRequest(_, _, let toolInputJSON, _) = loaded[0].payload else {
+            Issue.record("expected permission payload")
+            return
+        }
+        #expect(!toolInputJSON.contains("sk-test"))
+        #expect(!toolInputJSON.contains(#""value""#))
+        #expect(toolInputJSON.contains("<redacted>"))
+        let data = try #require(toolInputJSON.data(using: .utf8))
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        #expect((object["command"] as? String)?.contains("~/app.js") == true)
+    }
+
     @Test("Missing file returns empty")
     func missingFileEmpty() async throws {
         let tmp = FileManager.default.temporaryDirectory

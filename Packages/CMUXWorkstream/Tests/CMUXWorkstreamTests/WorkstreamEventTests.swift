@@ -88,6 +88,34 @@ struct WorkstreamEventTests {
         #expect(event.ppid == nil)
     }
 
+    @Test("Unknown event fields round-trip for forward compatibility")
+    func unknownFieldsRoundTrip() throws {
+        let json = """
+        {
+          "session_id": "s",
+          "hook_event_name": "SessionStart",
+          "_source": "claude",
+          "future_field": {"enabled": true, "count": 2}
+        }
+        """.data(using: .utf8)!
+        let event = try JSONDecoder().decode(WorkstreamEvent.self, from: json)
+        let extraData = try #require(event.extraFieldsJSON?.data(using: .utf8))
+        let extra = try #require(
+            try JSONSerialization.jsonObject(with: extraData) as? [String: Any]
+        )
+        let future = try #require(extra["future_field"] as? [String: Any])
+        #expect(future["enabled"] as? Bool == true)
+        #expect(future["count"] as? Int == 2)
+
+        let encoded = try JSONEncoder().encode(event)
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        let encodedFuture = try #require(object["future_field"] as? [String: Any])
+        #expect(encodedFuture["enabled"] as? Bool == true)
+        #expect(encodedFuture["count"] as? Int == 2)
+    }
+
     @Test("Non-JSON tool input re-encodes as a string")
     func encodesRawToolInputString() throws {
         let event = WorkstreamEvent(

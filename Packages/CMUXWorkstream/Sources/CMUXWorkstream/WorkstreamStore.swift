@@ -16,9 +16,6 @@ public let WorkstreamDefaultRingCapacity = 2_000
 /// the store's observation boundary and keeps SwiftUI view updates
 /// deterministic.
 ///
-/// Reply-id correlation is owned here so blocking hooks that wait on a
-/// socket response (see plan §3a) get their decision routed back through
-/// the same store that issued the pending item.
 @MainActor
 @Observable
 public final class WorkstreamStore {
@@ -36,16 +33,6 @@ public final class WorkstreamStore {
     private let persistence: WorkstreamPersistence?
     private let ringCapacity: Int
     private let clock: @Sendable () -> Date
-
-    /// Maps a wire-frame `_opencode_request_id` (or agent request id) to
-    /// the generated `WorkstreamItem.id`. Populated on ingest, consulted
-    /// when a reply action arrives so we know which item to mark resolved.
-    private var requestIdToItemId: [String: UUID] = [:]
-
-    /// Reverse map used when a socket reply arrives with the item id; we
-    /// need the original wire request id to route the reply back to the
-    /// correct blocking hook.
-    private var itemIdToRequestId: [UUID: String] = [:]
 
     /// Last known conversational context for each workstream. Tool hooks
     /// usually arrive without the surrounding user prompt, so the store
@@ -71,7 +58,6 @@ public final class WorkstreamStore {
         if let persistence {
             if let recent = try? await persistence.loadRecent(limit: ringCapacity) {
                 items = recent
-                rebuildRequestIdIndex()
                 rebuildContextIndex()
             }
         }
@@ -96,10 +82,6 @@ public final class WorkstreamStore {
     public func ingest(_ event: WorkstreamEvent) {
         let item = makeItem(from: event)
         insert(item)
-        if let requestId = event.requestId {
-            requestIdToItemId[requestId] = item.id
-            itemIdToRequestId[item.id] = requestId
-        }
         updateContextIndex(with: item)
         if let persistence {
             Task { [persistence, item] in
@@ -156,12 +138,6 @@ public final class WorkstreamStore {
         items.append(item)
         if items.count > ringCapacity {
             let overflow = items.count - ringCapacity
-            let dropped = items.prefix(overflow)
-            for d in dropped {
-                if let rid = itemIdToRequestId.removeValue(forKey: d.id) {
-                    requestIdToItemId.removeValue(forKey: rid)
-                }
-            }
             items.removeFirst(overflow)
         }
     }
@@ -177,23 +153,6 @@ public final class WorkstreamStore {
         case .jumpToSession:
             // Jump is a navigation action; the item (if any) is unchanged.
             break
-        }
-    }
-
-    private func rebuildRequestIdIndex() {
-        requestIdToItemId.removeAll(keepingCapacity: true)
-        itemIdToRequestId.removeAll(keepingCapacity: true)
-        for item in items {
-            if case .permissionRequest(let rid, _, _, _) = item.payload {
-                requestIdToItemId[rid] = item.id
-                itemIdToRequestId[item.id] = rid
-            } else if case .exitPlan(let rid, _, _) = item.payload {
-                requestIdToItemId[rid] = item.id
-                itemIdToRequestId[item.id] = rid
-            } else if case .question(let rid, _) = item.payload {
-                requestIdToItemId[rid] = item.id
-                itemIdToRequestId[item.id] = rid
-            }
         }
     }
 
