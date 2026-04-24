@@ -10,9 +10,10 @@ import SwiftUI
 struct FileExplorerPanelView: NSViewRepresentable {
     @ObservedObject var store: FileExplorerStore
     @ObservedObject var state: FileExplorerState
+    let onOpenFilePreview: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(store: store, state: state)
+        Coordinator(store: store, state: state, onOpenFilePreview: onOpenFilePreview)
     }
 
     func makeNSView(context: Context) -> FileExplorerContainerView {
@@ -24,6 +25,7 @@ struct FileExplorerPanelView: NSViewRepresentable {
     func updateNSView(_ container: FileExplorerContainerView, context: Context) {
         context.coordinator.store = store
         context.coordinator.state = state
+        context.coordinator.onOpenFilePreview = onOpenFilePreview
         container.updateHeader(store: store)
         context.coordinator.reloadIfNeeded()
     }
@@ -33,15 +35,21 @@ struct FileExplorerPanelView: NSViewRepresentable {
     final class Coordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
         var store: FileExplorerStore
         var state: FileExplorerState
+        var onOpenFilePreview: (String) -> Void
         weak var containerView: FileExplorerContainerView?
         weak var outlineView: NSOutlineView?
         private var lastRootNodeCount: Int = -1
         private var observationCancellable: AnyCancellable?
         private var styleObserver: Any?
 
-        init(store: FileExplorerStore, state: FileExplorerState) {
+        init(
+            store: FileExplorerStore,
+            state: FileExplorerState,
+            onOpenFilePreview: @escaping (String) -> Void
+        ) {
             self.store = store
             self.state = state
+            self.onOpenFilePreview = onOpenFilePreview
             super.init()
             observeStore()
             styleObserver = NotificationCenter.default.addObserver(
@@ -213,6 +221,33 @@ struct FileExplorerPanelView: NSViewRepresentable {
             return FilePreviewDragPasteboardWriter(filePath: node.path, displayTitle: node.name)
         }
 
+        func outlineView(
+            _ outlineView: NSOutlineView,
+            draggingSession session: NSDraggingSession,
+            endedAt screenPoint: NSPoint,
+            operation: NSDragOperation
+        ) {
+            FilePreviewDragRegistry.shared.discardAll()
+        }
+
+        @objc func handleDoubleClick(_ sender: NSOutlineView) {
+            let row = sender.clickedRow >= 0 ? sender.clickedRow : sender.selectedRow
+            guard row >= 0,
+                  let node = sender.item(atRow: row) as? FileExplorerNode else { return }
+
+            if node.isDirectory {
+                if sender.isItemExpanded(node) {
+                    sender.collapseItem(node)
+                } else if sender.isExpandable(node) {
+                    sender.expandItem(node)
+                }
+                return
+            }
+
+            guard store.provider is LocalFileExplorerProvider else { return }
+            onOpenFilePreview(node.path)
+        }
+
         // MARK: - Context Menu (NSMenuDelegate)
 
         func menuNeedsUpdate(_ menu: NSMenu) {
@@ -356,6 +391,9 @@ final class FileExplorerContainerView: NSView {
 
         outlineView.dataSource = coordinator
         outlineView.delegate = coordinator
+        outlineView.target = coordinator
+        outlineView.doubleAction = #selector(FileExplorerPanelView.Coordinator.handleDoubleClick(_:))
+        outlineView.setDraggingSourceOperationMask(.move, forLocal: true)
         coordinator.outlineView = outlineView
 
         // Context menu
@@ -665,4 +703,3 @@ final class FileExplorerRowView: NSTableRowView {
         isSelected ? .emphasized : .normal
     }
 }
-

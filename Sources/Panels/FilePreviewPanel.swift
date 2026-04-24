@@ -22,11 +22,6 @@ final class FilePreviewDragRegistry {
         lock.lock()
         pending[id] = entry
         lock.unlock()
-        DispatchQueue.global().asyncAfter(deadline: .now() + 60) { [weak self] in
-            self?.lock.lock()
-            self?.pending.removeValue(forKey: id)
-            self?.lock.unlock()
-        }
         return id
     }
 
@@ -34,6 +29,12 @@ final class FilePreviewDragRegistry {
         lock.lock()
         defer { lock.unlock() }
         return pending.removeValue(forKey: id)
+    }
+
+    func discardAll() {
+        lock.lock()
+        pending.removeAll()
+        lock.unlock()
     }
 }
 
@@ -59,11 +60,9 @@ final class FilePreviewDragPasteboardWriter: NSObject, NSPasteboardWriting {
 
     static let bonsplitTransferType = NSPasteboard.PasteboardType("com.splittabbar.tabtransfer")
 
-    private let fileURL: URL
     private let transferData: Data
 
     init(filePath: String, displayTitle: String) {
-        self.fileURL = URL(fileURLWithPath: filePath)
         let dragId = FilePreviewDragRegistry.shared.register(
             FilePreviewDragEntry(filePath: filePath, displayTitle: displayTitle)
         )
@@ -89,16 +88,13 @@ final class FilePreviewDragPasteboardWriter: NSObject, NSPasteboardWriting {
     }
 
     func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-        [Self.bonsplitTransferType, .fileURL]
+        [Self.bonsplitTransferType]
     }
 
     func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
         if type == Self.bonsplitTransferType {
             mirrorTransferDataToDragPasteboard()
             return transferData
-        }
-        if type == .fileURL {
-            return fileURL.absoluteString
         }
         return nil
     }

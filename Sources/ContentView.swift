@@ -2541,6 +2541,9 @@ struct ContentView: View {
             sessionIndexStore: sessionIndexStore,
             onResumeSession: { entry in
                 resumeSession(entry: entry)
+            },
+            onOpenFilePreview: { filePath in
+                openFilePreviewFromSidebar(filePath: filePath)
             }
         )
         .frame(width: rightSidebarWidth)
@@ -2771,6 +2774,16 @@ struct ContentView: View {
             workingDirectory: targetCwd,
             initialTerminalInput: inputWithReturn
         )
+    }
+
+    private func openFilePreviewFromSidebar(filePath: String) {
+        guard let workspace = tabManager.selectedWorkspace else { return }
+        guard let paneId = workspace.bonsplitController.focusedPaneId ?? workspace.bonsplitController.allPaneIds.first else {
+            return
+        }
+
+        sidebarSelectionState.selection = .tabs
+        _ = workspace.openOrFocusFilePreviewSurface(inPane: paneId, filePath: filePath)
     }
 
     private func syncFileExplorerDirectory() {
