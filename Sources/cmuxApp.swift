@@ -4827,9 +4827,8 @@ struct SettingsView: View {
 
     private func applyGlobalFontMagnificationChange() {
         guard !isResettingSettings else { return }
-        // AppDelegate's `installGlobalFontSizeObserver` listens for this and
-        // triggers the Ghostty config reload; don't reload here too.
-        GhosttyConfig.invalidateLoadCache()
+        // AppDelegate's `installGlobalFontSizeObserver` owns cache invalidation
+        // and the Ghostty config reload — Settings just signals intent.
         NotificationCenter.default.post(name: GlobalFontMagnification.didChangeNotification, object: nil)
     }
 
@@ -6897,6 +6896,12 @@ struct SettingsView: View {
         showTerminalScrollBar = TerminalScrollBarSettings.defaultShowScrollBar
         if previousShowTerminalScrollBar != showTerminalScrollBar {
             TerminalScrollBarSettings.notifyDidChange()
+        }
+        let previousGlobalFontMagnificationPercent = globalFontMagnificationPercent
+        globalFontMagnificationPercent = GlobalFontMagnification.defaultPercent
+        if previousGlobalFontMagnificationPercent != globalFontMagnificationPercent {
+            // AppDelegate's `installGlobalFontSizeObserver` owns cache + reload.
+            NotificationCenter.default.post(name: GlobalFontMagnification.didChangeNotification, object: nil)
         }
         workspaceAutoReorder = WorkspaceAutoReorderSettings.defaultValue
         sidebarHideAllDetails = SidebarWorkspaceDetailSettings.defaultHideAllDetails

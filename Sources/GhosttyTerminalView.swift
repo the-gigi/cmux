@@ -1927,6 +1927,7 @@ class GhosttyApp {
                 logLabel: "shell integration override (fallback)"
             )
             usesHostLayerBackground = true
+            applyGlobalFontMagnificationOverride(to: fallbackConfig)
             ghostty_config_finalize(fallbackConfig)
             updateDefaultBackground(from: fallbackConfig, source: "initialize.fallbackConfig")
 
@@ -2113,25 +2114,33 @@ class GhosttyApp {
             logLabel: "shell integration override"
         )
 
-        // Apply the Settings-driven magnification last so it wins over any
-        // `font-size` declared in user configs. cmux's own Swift parser already
-        // applied the same scale to its parallel `GhosttyConfig.fontSize`, so
-        // reading it back here yields a size that's consistent with what the
-        // tab bar and chrome will render at. Per-surface zoom (cmd+=/-/0)
-        // keeps operating on top of whatever value Ghostty ends up with.
-        if !GlobalFontMagnification.isDefault {
-            let scaled = GhosttyConfig.load().fontSize
-            if scaled > 0 {
-                loadInlineGhosttyConfig(
-                    "font-size = \(scaled)",
-                    into: config,
-                    prefix: "cmux-global-font-magnification",
-                    logLabel: "global font magnification"
-                )
-            }
-        }
+        applyGlobalFontMagnificationOverride(to: config)
 
         ghostty_config_finalize(config)
+    }
+
+    /// Multiply Ghostty's currently-parsed `font-size` by the global
+    /// magnification and re-inject the result. Reads the base size from the
+    /// `ghostty_config_t` being finalized (not from cmux's parallel Swift
+    /// parser) so the override stays consistent with whatever this config
+    /// pass actually loaded — including DEBUG startup-preview profiles where
+    /// the live config is synthetic. Per-surface zoom (cmd+=/-/0) keeps
+    /// operating on top of whatever value Ghostty ends up with.
+    private func applyGlobalFontMagnificationOverride(to config: ghostty_config_t) {
+        guard !GlobalFontMagnification.isDefault else { return }
+        var baseFontSize: Float = 0
+        let key = "font-size"
+        let success = key.withCString { cKey in
+            ghostty_config_get(config, &baseFontSize, cKey, UInt(key.lengthOfBytes(using: .utf8)))
+        }
+        guard success, baseFontSize > 0 else { return }
+        let scaled = max(1.0, baseFontSize * Float(GlobalFontMagnification.scale))
+        loadInlineGhosttyConfig(
+            "font-size = \(scaled)",
+            into: config,
+            prefix: "cmux-global-font-magnification",
+            logLabel: "global font magnification"
+        )
     }
 
     /// When the user has not configured `font-codepoint-map` for CJK ranges

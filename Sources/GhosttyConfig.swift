@@ -821,13 +821,18 @@ enum GlobalFontMagnification {
 
     static func setPercent(_ percent: Int) {
         UserDefaults.standard.set(clamp(percent), forKey: percentKey)
-        GhosttyConfig.invalidateLoadCache()
+        // AppDelegate's `installGlobalFontSizeObserver` owns cache + reload.
         NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }
 
+    /// Restores the default magnification. Writes `defaultPercent` explicitly
+    /// (rather than `removeObject`) so storage stays symmetric with the UI
+    /// reset path — both leave the key present at 100. Callers in the file
+    /// store rely on stored-value equality to decide whether to fire change
+    /// notifications, and the asymmetry would silently skip reloads after a
+    /// UI-driven reset.
     static func resetToDefault() {
-        UserDefaults.standard.removeObject(forKey: percentKey)
-        GhosttyConfig.invalidateLoadCache()
+        UserDefaults.standard.set(defaultPercent, forKey: percentKey)
         NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }
 }

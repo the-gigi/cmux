@@ -1054,7 +1054,7 @@ final class CmuxSettingsFileStore {
         }
 
         if defaultsKey == GlobalFontMagnification.percentKey, didMutateStoredValue {
-            GhosttyConfig.invalidateLoadCache()
+            // AppDelegate's `installGlobalFontSizeObserver` owns cache + reload.
             notificationCenter.post(name: GlobalFontMagnification.didChangeNotification, object: nil)
         }
 
@@ -1102,6 +1102,11 @@ final class CmuxSettingsFileStore {
 
         if defaultsKey == TerminalScrollBarSettings.showScrollBarKey {
             TerminalScrollBarSettings.notifyDidChange(notificationCenter: notificationCenter)
+        }
+
+        if defaultsKey == GlobalFontMagnification.percentKey {
+            // AppDelegate's `installGlobalFontSizeObserver` owns cache + reload.
+            notificationCenter.post(name: GlobalFontMagnification.didChangeNotification, object: nil)
         }
 
         switch defaultsKey {
