@@ -788,7 +788,11 @@ enum GlobalFontMagnification {
 
     static let defaultPercent: Int = 100
     static let minimumPercent: Int = 50
-    static let maximumPercent: Int = 400
+    /// Capped at 200% so cmux's fixed-size chrome (titlebar height, command
+    /// palette rows, badge frames, browser panel button hit areas) doesn't
+    /// clip or overflow. Users who need larger magnification should reach for
+    /// macOS Accessibility → Zoom for system-wide scaling instead.
+    static let maximumPercent: Int = 200
     static let stepPercent: Int = 10
 
     static let didChangeNotification = Notification.Name("cmux.globalFontMagnification.didChange")
