@@ -2711,8 +2711,7 @@ private struct AboutPanelView: View {
             VStack(alignment: .center, spacing: 32) {
                 VStack(alignment: .center, spacing: 8) {
                     Text(String(localized: "about.appName", defaultValue: "cmux"))
-                        .bold()
-                        .cmuxFont(.title)
+                        .cmuxFont(.title, weight: .bold)
                     Text(String(localized: "about.description", defaultValue: "A Ghostty-based terminal with vertical tabs\nand a notification panel for macOS."))
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
@@ -7188,6 +7187,13 @@ private struct GlobalFontMagnificationControl: View {
                 step: step
             )
             .labelsHidden()
+            .accessibilityLabel(
+                String(
+                    localized: "settings.app.globalFontMagnification",
+                    defaultValue: "Global Font Magnification"
+                )
+            )
+            .accessibilityValue(Text("\(GlobalFontMagnification.clamp(percent))%"))
             .accessibilityIdentifier("SettingsGlobalFontMagnificationStepper")
 
             Button(String(localized: "settings.app.globalFontMagnification.reset", defaultValue: "Reset")) {

@@ -798,9 +798,19 @@ enum GlobalFontMagnification {
     static let didChangeNotification = Notification.Name("cmux.globalFontMagnification.didChange")
 
     /// Raw percent stored in UserDefaults. If the key is unset, treat as 100%.
+    /// Accepts any numeric storage (Int / Double NSNumber) and string-encoded
+    /// integers so values written by `defaults write -float`/`-string` from a
+    /// terminal still resolve cleanly instead of falling back to default.
     static var storedPercent: Int {
-        let value = UserDefaults.standard.object(forKey: percentKey) as? Int
-        let resolved = value ?? defaultPercent
+        let raw = UserDefaults.standard.object(forKey: percentKey)
+        let resolved: Int
+        if let number = raw as? NSNumber {
+            resolved = number.intValue
+        } else if let string = raw as? String, let parsed = Int(string) {
+            resolved = parsed
+        } else {
+            resolved = defaultPercent
+        }
         return clamp(resolved)
     }
 
